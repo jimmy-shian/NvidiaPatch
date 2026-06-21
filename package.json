@@ -1,0 +1,73 @@
+{
+  "name": "nvidia-gateway-app",
+  "version": "1.0.0",
+  "description": "Unified NVIDIA NIM LLM Gateway with GUI & Tray support",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node start-dev.js",
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "lucide-react": "^0.475.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^34.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.nvidia.gateway.app",
+    "productName": "NvidiaGateway",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "database.js",
+      "gateway.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NVIDIA NIM Gateway"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "dmg": {
+      "background": null,
+      "backgroundColor": "#0b0f17",
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    }
+  }
+}
