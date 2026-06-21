@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initDatabase } = require('./database');
@@ -9,15 +9,10 @@ let tray = null;
 let server = null;
 let isQuitting = false;
 
-// 1. 生成 16x16 綠色小圖示的 PNG 檔案 (Base64)，防止 Tray 圖示遺失
-const iconBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMklEQVR42mNk+M9QDwMkwMTIQCxgGFVAMoDYgGgDsQHxBjAsGgCjCkgGkBtwqMOhDgAALbUZw5156B8AAAAASUVORK5CYII=';
-const iconPath = path.join(app.getPath('userData'), 'tray_icon.png');
-try {
-  fs.writeFileSync(iconPath, Buffer.from(iconBase64, 'base64'));
-  console.log(`Generated tray icon at: ${iconPath}`);
-} catch (err) {
-  console.error('Failed to generate tray icon:', err.message);
-}
+// 1. 生成 16x16 綠色小圖示的 NativeImage，防止 Tray 圖示遺失
+const iconBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhElEQVR4nJ2S0Q2AMAhEhXQAXUq30uhWupTdQFMTkoZSjnhfDeX1rgQaDI3n/lj1vGykaxyFe3cUAb007DXd8wof4j/uNUM9WNyn68AJeiow+gZbxQIhZ1GqIaS6RwySLiDpvhQBvIGytZ5RFZblEEmi4S9BxMmbT+OMtlKnbRJ437HuXoAvOsGOPrPFAAAAAElFTkSuQmCC';
+const trayIcon = nativeImage.createFromBuffer(Buffer.from(iconBase64, 'base64'));
+
 
 // 2. 初始化資料庫 (存放在 AppData/Roaming 目錄下)
 const dbPath = path.join(app.getPath('userData'), 'gateway.db');
@@ -86,7 +81,7 @@ function createMainWindow() {
 
 function createTray() {
   // 建立系統匣圖示
-  tray = new Tray(iconPath);
+  tray = new Tray(trayIcon);
   
   const contextMenu = Menu.buildFromTemplate([
     { 
