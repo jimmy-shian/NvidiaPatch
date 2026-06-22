@@ -4,6 +4,7 @@ import {
   RotateCw, ShieldAlert, CheckCircle, AlertTriangle, ArrowUp, 
   ArrowDown, RefreshCw, X, Play, CopyCheck
 } from 'lucide-react';
+import packageJson from '../../package.json';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -436,7 +437,7 @@ export default function App() {
           </div>
           <div>
             <h1 style={{ fontSize: '17px', fontWeight: '800', fontFamily: 'Outfit', letterSpacing: '0.5px' }}>NVIDIA GATEWAY</h1>
-            <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '700' }}>v1.0.0 Stable</span>
+            <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '700' }}>v{packageJson.version} Stable</span>
           </div>
         </div>
 
@@ -558,7 +559,7 @@ export default function App() {
 
             {/* 編輯器自訂提供商整合設定引導 */}
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <span style={{ fontSize: '16px', fontWeight: '700', color: '#10b981' }}>⚙️ 編輯器整合設定指引 (相容 OpenAI 接口之軟體如 Cline / Cursor / Double / Roo Code)</span>
+              <span style={{ fontSize: '16px', fontWeight: '700', color: '#10b981' }}>⚙️ 相容OpenAI，如Cline等軟體</span>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
                 <div 
                   style={{ 
@@ -658,7 +659,7 @@ export default function App() {
                 </div>
               </div>
               <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                💡 註：在編輯器的自訂提供商（OpenAI 相容）設定中填入上方數值即可。對外模型 ID 可任意填寫，Gateway 將在轉發時自動重寫為您在「模型排序」中配置的第一順位 NVIDIA NIM 模型。
+                💡 註：於編輯器自訂提供商填入上方數值。模型 ID 可任意填寫，Gateway 將自動重寫為排序第一順位之 NVIDIA NIM 模型。
               </span>
             </div>
 
@@ -676,22 +677,42 @@ export default function App() {
                 ) : (
                   stats.hourly.map((h, i) => {
                     const maxRequests = Math.max(...stats.hourly.map(x => x.request_count), 1);
-                    const heightPercent = `${Math.max((h.request_count / maxRequests) * 100, 5)}%`;
+                    const heightPercent = `${Math.max((h.request_count / maxRequests) * 100, 5)}`;
+                    const errorPercent = heightPercent > 0 ? `${Math.max((h.error_count / maxRequests) * 100, 5)}` : '0';
                     const hourText = h.hour.split(' ')[1]; // 取出 HH:00
                     return (
-                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', height: '100%' }}>
-                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end' }}>
+                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', height: '100%', minWidth: '28px' }}>
+                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', position: 'relative' }}>
                           <div 
                             style={{ 
                               width: '100%', 
-                              height: heightPercent, 
+                              height: `${heightPercent}%`, 
                               background: 'linear-gradient(to top, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.8) 100%)', 
                               borderRadius: '4px 4px 0 0',
                               transition: 'height 0.3s ease',
-                              position: 'relative'
+                              position: 'relative',
+                              overflow: 'hidden'
                             }}
                             title={`時間: ${h.hour}\n總請求: ${h.request_count}\n成功: ${h.success_count}\n失敗: ${h.error_count}`}
-                          ></div>
+                          >
+                            {/* 錯誤疊圖 */}
+                            <div 
+                              style={{ 
+                                position: 'absolute', 
+                                bottom: 0, 
+                                left: 0, 
+                                width: '100%', 
+                                height: `${Math.min((h.error_count / h.request_count) * 100, 100)}%`, 
+                                background: 'rgba(239, 68, 68, 0.6)', 
+                                minHeight: h.error_count > 0 ? '2px' : '0' 
+                              }}
+                            />
+                          </div>
+                        </div>
+                        {/* 數值顯示 */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                          <span style={{ fontSize: '10px', fontWeight: '700', color: '#10b981' }}>{h.request_count}</span>
+                          {h.error_count > 0 && <span style={{ fontSize: '9px', color: '#f87171' }}>+{h.error_count}</span>}
                         </div>
                         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{hourText}</span>
                       </div>
@@ -957,7 +978,7 @@ export default function App() {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {['ALL', 'Llama', 'Mistral', 'Gemma', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Other'].map(cat => (
+                    {['ALL', 'Llama', 'Mistral', 'Gemma', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Nvidia', 'Other'].map(cat => (
                       <button 
                         key={cat}
                         className={`btn ${selectedCategory === cat ? 'btn-primary' : 'btn-secondary'}`}

@@ -230,8 +230,20 @@ function createGatewayApp() {
 
     addLog('info', `New request received (stream=${stream}). Initializing dispatch...`);
 
+    // 每個請求獨立的最大重試次數上限
+    const MAX_REQUEST_RETRIES = 10;
+
     // 執行轉發與 Fallback 機制
-    async function attemptRequest(modelIndex, keyIndexOffset = 0) {
+    async function attemptRequest(modelIndex, keyIndexOffset = 0, retryCount = 0) {
+      // 檢查是否超過每請求最大重試次數
+      if (retryCount >= MAX_REQUEST_RETRIES) {
+        addLog('error', `Request exceeded maximum retry limit (${MAX_REQUEST_RETRIES}). Aborting.`);
+        stats.recordRequest(false);
+        return res.status(502).json({
+          error: { message: `Request exceeded maximum retry limit (${MAX_REQUEST_RETRIES}).` }
+        });
+      }
+
       if (modelIndex >= configuredModels.length) {
         addLog('error', 'All configured models and fallbacks failed to respond.');
         stats.recordRequest(false);
@@ -375,7 +387,7 @@ function createGatewayApp() {
           apiKeys.recordCooldown(selectedKey.id, 30, '429 Rate Limit Exceeded');
           
           // 重試當前模型，但換下一個 Key
-          return attemptRequest(modelIndex, keyIndexOffset + 1);
+          return attemptRequest(modelIndex, keyIndexOffset + 1, retryCount + 1);
         }
 
         // C. 處理 5xx 伺服器錯誤 或 404 找不到模型錯誤
@@ -390,7 +402,7 @@ function createGatewayApp() {
 
           // 切換至「下一順位模型」，並且重設 Key 索引從 0 開始嘗試
           addLog('info', `Initiating model fallback due to NVIDIA HTTP ${response.status} error...`);
-          return attemptRequest(modelIndex + 1, 0);
+          return attemptRequest(modelIndex + 1, 0, retryCount + 1);
         }
 
         // D. 處理 401/403 憑證無效錯誤
@@ -400,7 +412,7 @@ function createGatewayApp() {
           apiKeys.updateStatus(selectedKey.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
 
           // 重試當前模型，更換下一個 Key
-          return attemptRequest(modelIndex, keyIndexOffset + 1);
+          return attemptRequest(modelIndex, keyIndexOffset + 1, retryCount + 1);
         }
 
         // E. 處理其他 4xx 錯誤 (400 Bad Request 等) - 直接報錯
@@ -419,7 +431,7 @@ function createGatewayApp() {
           
           // 超時視同 5xx，切換至「下一順位模型」
           addLog('info', `Initiating model fallback due to timeout...`);
-          return attemptRequest(modelIndex + 1, 0);
+          return attemptRequest(modelIndex + 1, 0, retryCount + 1);
         }
 
         // 其他網路連線異常
@@ -427,7 +439,7 @@ function createGatewayApp() {
         apiKeys.recordFailure(selectedKey.id, `Network Error: ${err.message}`);
         
         // 網路異常通常也是 5xx 級別，切換下一順位模型
-        return attemptRequest(modelIndex + 1, 0);
+        return attemptRequest(modelIndex + 1, 0, retryCount + 1);
       }
     }
 
