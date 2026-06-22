@@ -73,7 +73,10 @@ function createGatewayApp() {
   });
 
   app.get('/api/models/available', (req, res) => {
-    res.json(modelsConfig.getAvailable());
+    res.json({
+      models: modelsConfig.getAvailable(),
+      lastSyncTime: modelsConfig.getLastSyncTime()
+    });
   });
 
   app.post('/api/models/sync', async (req, res) => {

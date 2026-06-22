@@ -66,6 +66,14 @@ function initDatabase(dbPath) {
     )
   `);
 
+  // 6. 建立 metadata 表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )
+  `);
+
   // 插入預設 Rules
   insertPresetRules();
 
@@ -73,30 +81,42 @@ function initDatabase(dbPath) {
 }
 
 function insertPresetRules() {
-  const checkPresets = db.prepare("SELECT COUNT(*) as count FROM rules WHERE is_preset = 1");
-  const result = checkPresets.get();
-  if (result.count > 0) return;
+  // 每次啟動皆清理並重新載入最新的 preset 規則，以確保規範內容與程式碼同步
+  db.exec("DELETE FROM rules WHERE is_preset = 1");
 
   const insert = db.prepare("INSERT INTO rules (title, content, is_preset) VALUES (?, ?, 1)");
 
-  // 1. Angular Commit Message 規範
+  // 1. Git Commit 與開發工作流規範
   insert.run(
-    "Angular Commit Message 規範",
-    `每個 Commit 格式必須符合: <type>(<scope>): <subject>
-
-常用的 <type> 類型:
-- feat: 新功能
-- fix: 修補 bug
-- docs: 文件修改
-- style: 格式調整 (不影響代碼運行的空白、格式化、分號等)
-- refactor: 重構 (既非新增功能也非修補 bug 的代碼修改)
-- perf: 提高性能的修改
-- test: 增加或修正測試代碼
-- chore: 建構程序或輔助工具的變更
+    "Git Commit 與開發工作流規範",
+    `根據格式要求，撰寫簡短、精確的 Commit 訊息：
+大標題使用【新增、調整、修改、重構】XXX，細項說明用 "-" 接續。
 
 範例:
-feat(auth): 實作 Google OAuth 登入功能
-fix(gateway): 修正 429 狀態下未觸發 Key 冷卻的錯誤`
+【修改】行動端互動優化
+-改善 mobile 操作流暢度與點擊回饋
+-優化觸控區域與滾動體驗
+
+【重構】折疊視圖與狀態顯示
+-重新設計 collapsed view UI 結構
+-整合 orb stats 狀態資訊顯示
+
+【新增】Proofreader 多模型系統與批次處理
+-實作 multi-model backend 架構
+-建立 web UI 操作介面
+-支援批次處理能力
+
+【新增】錯字右鍵快捷選單與操作流程優化
+-編輯器高亮錯字支援 context menu 操作
+-提供「接受建議 / 忽略 / 手動修改」快速操作
+-加入邊界偵測避免選單超出視窗
+
+遵守下列開發規範：
+1. 一律使用繁體中文 zh-TW。
+2. 優先查詢過往 commit msg 格式做統一的撰寫。
+3. 未追蹤的檔案勿隨意新增，需詢問使用者是否加入。
+4. 更改內容分類分次 commit。
+5. 使用者未確認要求，禁止執行，只顯示推薦 commit msg 在回覆中。`
   );
 
   // 2. Cline/OpenCode 專案開發規範
@@ -242,6 +262,14 @@ const modelsConfig = {
   getAvailable: () => {
     return db.prepare("SELECT * FROM available_models ORDER BY id ASC").all();
   },
+  getLastSyncTime: () => {
+    try {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'last_model_sync_time'").get();
+      return row ? row.value : null;
+    } catch (err) {
+      return null;
+    }
+  },
   syncFromNvidia: async (keyValue) => {
     try {
       const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
@@ -279,6 +307,8 @@ const modelsConfig = {
             insertConfig.run(mId, index + 1);
           });
         }
+        // 記錄同步時間至 metadata 表
+        db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(new Date().toISOString());
         return { success: true, count: data.data.length };
       }
       return { success: false, error: 'Invalid data format from NVIDIA API' };
