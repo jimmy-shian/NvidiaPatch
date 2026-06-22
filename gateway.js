@@ -19,7 +19,16 @@ function addLog(type, message) {
 function createGatewayApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: '1gb' }));
+
+  // 0. 基礎狀態檢查與歡迎頁面 (防止連線測試出現 Cannot GET /v1 錯誤)
+  app.get('/', (req, res) => {
+    res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: "1.0.1" });
+  });
+
+  app.get('/v1', (req, res) => {
+    res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: "1.0.1" });
+  });
 
   // 1. 取得日誌
   app.get('/api/logs', (req, res) => {
@@ -147,6 +156,63 @@ function createGatewayApp() {
     });
   });
 
+  // 5.5 OpenAI 相容的 Models 列表端點 (供 Cline / OpenCode 驗證連線與取得可用模型)
+  app.get('/v1/models', (req, res) => {
+    const configuredModels = modelsConfig.getAll().filter(m => m.is_active === 1);
+    const modelsData = [
+      {
+        id: 'patcher-main',
+        object: 'model',
+        created: 1718925400,
+        owned_by: 'myself'
+      }
+    ];
+    
+    configuredModels.forEach(m => {
+      if (m.model_id !== 'patcher-main') {
+        modelsData.push({
+          id: m.model_id,
+          object: 'model',
+          created: 1718925400,
+          owned_by: 'nvidia'
+        });
+      }
+    });
+
+    res.json({
+      object: 'list',
+      data: modelsData
+    });
+  });
+
+  app.get('/models', (req, res) => {
+    const configuredModels = modelsConfig.getAll().filter(m => m.is_active === 1);
+    const modelsData = [
+      {
+        id: 'patcher-main',
+        object: 'model',
+        created: 1718925400,
+        owned_by: 'myself'
+      }
+    ];
+    
+    configuredModels.forEach(m => {
+      if (m.model_id !== 'patcher-main') {
+        modelsData.push({
+          id: m.model_id,
+          object: 'model',
+          created: 1718925400,
+          owned_by: 'nvidia'
+        });
+      }
+    });
+
+    res.json({
+      object: 'list',
+      data: modelsData
+    });
+  });
+
   // 6. OpenAI 相容的 Chat Completions Gateway 中介核心
   app.post('/v1/chat/completions', async (req, res) => {
     const originalBody = req.body;
@@ -220,25 +286,71 @@ function createGatewayApp() {
           stats.recordRequest(true);
           addLog('success', `Request succeeded using [Priority ${currentModel.priority}] ${modelId}`);
 
-          // 設置響應標頭
-          res.setHeader('Content-Type', response.headers.get('Content-Type'));
+          // 設置與規範化響應標頭
           if (stream) {
-            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
             res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.flushHeaders();
+          } else {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
           }
 
-          // 串流轉發
+          // 串流轉發 (並動態將 response 中的 model 欄位改回為客戶端請求的模型 ID)
           if (stream) {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-            
+            let buffer = '';
+
+            const processLine = (line) => {
+              // 移除 Windows 常見的 \r 換行字元以進行規範化
+              const cleanLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+              const trimmed = cleanLine.trim();
+
+              if (trimmed.startsWith('data:')) {
+                const dataStr = trimmed.slice(5).trim();
+                if (dataStr === '[DONE]') {
+                  res.write('data: [DONE]\n\n');
+                  if (typeof res.flush === 'function') res.flush();
+                  return;
+                }
+                try {
+                  const chunk = JSON.parse(dataStr);
+                  if (chunk && typeof chunk === 'object') {
+                    // 強制為每個 JSON chunk 設定正確的 model ID
+                    chunk.model = originalBody.model || 'patcher-main';
+                  }
+                  res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                } catch (e) {
+                  res.write(cleanLine + '\n\n');
+                }
+              } else {
+                // 忽略純空行以防止過多換行，對有內容的非 data 行則正常寫入並加 \n
+                if (trimmed !== '') {
+                  res.write(cleanLine + '\n');
+                }
+              }
+              if (typeof res.flush === 'function') res.flush();
+            };
+
             function readChunk() {
               reader.read().then(({ done, value }) => {
                 if (done) {
+                  if (buffer) {
+                    processLine(buffer);
+                  }
                   res.end();
                   return;
                 }
-                res.write(value);
+                
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // 保留不完整的一行
+
+                for (const line of lines) {
+                  processLine(line);
+                }
                 readChunk();
               }).catch(err => {
                 addLog('error', `Stream pipe broke mid-transit: ${err.message}`);
@@ -247,8 +359,11 @@ function createGatewayApp() {
             }
             readChunk();
           } else {
-            // 非串流轉發
+            // 非串流轉發 (並動態將 response 中的 model 欄位改回為客戶端請求的模型 ID)
             const json = await response.json();
+            if (json && typeof json === 'object') {
+              json.model = originalBody.model || 'patcher-main';
+            }
             res.json(json);
           }
           return;
@@ -263,14 +378,18 @@ function createGatewayApp() {
           return attemptRequest(modelIndex, keyIndexOffset + 1);
         }
 
-        // C. 處理 5xx 伺服器錯誤
-        if (response.status >= 500) {
+        // C. 處理 5xx 伺服器錯誤 或 404 找不到模型錯誤
+        if (response.status >= 500 || response.status === 404) {
           const errText = await response.text();
           addLog('warning', `Received HTTP ${response.status} from NVIDIA for model ${modelId}. Error: ${errText.substring(0, 100)}`);
-          apiKeys.recordFailure(selectedKey.id, `HTTP ${response.status}: ${errText.substring(0, 50)}`);
+          if (response.status >= 500) {
+            apiKeys.recordFailure(selectedKey.id, `HTTP ${response.status}: ${errText.substring(0, 50)}`);
+          } else {
+            addLog('warning', `Model ${modelId} returned HTTP 404. Model may be deprecated or account lacks access.`);
+          }
 
           // 切換至「下一順位模型」，並且重設 Key 索引從 0 開始嘗試
-          addLog('info', `Initiating model fallback due to NVIDIA 5xx error...`);
+          addLog('info', `Initiating model fallback due to NVIDIA HTTP ${response.status} error...`);
           return attemptRequest(modelIndex + 1, 0);
         }
 
@@ -314,6 +433,100 @@ function createGatewayApp() {
 
     // 每次請求都從 index 0 (第一順位模型) 開始
     await attemptRequest(0, 0);
+  });
+
+  // 7. 測試專用聊天端點 (繞過模型重寫與 Fallback，直接使用健康的金鑰對特定 NIM 模型發送對話)
+  app.post('/api/test/chat', async (req, res) => {
+    const { model, messages, stream } = req.body;
+    
+    if (!model || !messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Model and messages array are required' });
+    }
+
+    const activeKeys = apiKeys.getActiveKeys();
+    if (activeKeys.length === 0) {
+      return res.status(503).json({ error: 'No active/healthy API Keys available in the Gateway pool.' });
+    }
+
+    const nvidiaBaseUrl = process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+
+    async function attemptTestChat(keyIndex) {
+      if (keyIndex >= activeKeys.length) {
+        addLog('error', `[Test Chat] All available keys (${activeKeys.length}) failed to test model ${model}.`);
+        return res.status(502).json({ error: `All active keys failed for model ${model}.` });
+      }
+
+      const selectedKey = activeKeys[keyIndex];
+      addLog('info', `[Test Chat] Testing model: ${model} with Key: ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} (Attempt ${keyIndex + 1}/${activeKeys.length})`);
+
+      let abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        abortController.abort();
+      }, 60000); // 測試 API 設定為 60 秒超時
+
+      try {
+        const response = await fetch(`${nvidiaBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${selectedKey.key_value}`
+          },
+          body: JSON.stringify({ model, messages, stream: !!stream }),
+          signal: abortController.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errText = await response.text();
+          addLog('warning', `[Test Chat] NIM replied with HTTP ${response.status} using Key ID ${selectedKey.id}: ${errText}`);
+
+          // 如果是 404, 401, 403, 429, 5xx 錯誤，更換下一個 Key 嘗試
+          if (response.status === 404 || response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
+            if (response.status === 401 || response.status === 403) {
+              apiKeys.updateStatus(selectedKey.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
+            } else if (response.status === 429) {
+              apiKeys.recordCooldown(selectedKey.id, 30, '429 Rate Limit Exceeded');
+            }
+            return attemptTestChat(keyIndex + 1);
+          }
+
+          return res.status(response.status).send(errText);
+        }
+
+        // 轉發標頭
+        res.setHeader('Content-Type', response.headers.get('Content-Type'));
+        if (stream) {
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+
+          const reader = response.body.getReader();
+          function readChunk() {
+            reader.read().then(({ done, value }) => {
+              if (done) {
+                res.end();
+                return;
+              }
+              res.write(value);
+              readChunk();
+            }).catch(err => {
+              addLog('error', `[Test Chat] Stream read error: ${err.message}`);
+              res.end();
+            });
+          }
+          readChunk();
+        } else {
+          const json = await response.json();
+          res.json(json);
+        }
+      } catch (err) {
+        clearTimeout(timeoutId);
+        addLog('warning', `[Test Chat] Request failed with Key ID ${selectedKey.id}: ${err.message}`);
+        return attemptTestChat(keyIndex + 1);
+      }
+    }
+
+    await attemptTestChat(0);
   });
 
   return app;
