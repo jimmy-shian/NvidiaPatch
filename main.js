@@ -1,7 +1,7 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { initDatabase } = require('./database');
+const { initDatabase, rules } = require('./database');
 const { createGatewayApp } = require('./gateway');
 
 let mainWindow = null;
@@ -30,8 +30,8 @@ function startServer() {
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1020,
-    height: 760,
+    width: 1280,
+    height: 800,
     frame: true, // 保留系統邊框以便操作
     title: 'NVIDIA NIM LLM Gateway',
     webPreferences: {
@@ -79,10 +79,28 @@ function createMainWindow() {
   });
 }
 
-function createTray() {
-  // 建立系統匣圖示
-  tray = new Tray(trayIcon);
-  
+function updateTrayMenu() {
+  if (!tray) return;
+
+  let allRules = [];
+  try {
+    allRules = rules.getAll();
+  } catch (err) {
+    console.error('Failed to query rules for tray:', err.message);
+  }
+
+  const ruleMenuItems = allRules.map(r => ({
+    label: `複製 ${r.title.substring(0, 16)}${r.title.length > 16 ? '...' : ''}`,
+    click: () => {
+      clipboard.writeText(r.content);
+      tray.displayBalloon({
+        title: '複製成功',
+        content: `已成功複製「${r.title}」至剪貼簿！`,
+        iconType: 'info'
+      });
+    }
+  }));
+
   const contextMenu = Menu.buildFromTemplate([
     { 
       label: '開啟主畫面', 
@@ -92,6 +110,11 @@ function createTray() {
           mainWindow.focus();
         }
       } 
+    },
+    { type: 'separator' },
+    {
+      label: '快捷複製開發規範',
+      submenu: ruleMenuItems.length > 0 ? ruleMenuItems : [{ label: '(無規範紀錄)', enabled: false }]
     },
     { type: 'separator' },
     { 
@@ -108,8 +131,14 @@ function createTray() {
     }
   ]);
 
-  tray.setToolTip('NVIDIA NIM LLM Gateway');
   tray.setContextMenu(contextMenu);
+}
+
+function createTray() {
+  // 建立系統匣圖示
+  tray = new Tray(trayIcon);
+  tray.setToolTip('NVIDIA NIM LLM Gateway');
+  updateTrayMenu();
 
   // 點擊 Tray 圖示時還原視窗
   tray.on('double-click', () => {
@@ -120,7 +149,12 @@ function createTray() {
   });
 }
 
-// 監聽來自 Preload 的視窗指令
+// 監聽來自 Preload 的視窗與規範異動指令
+ipcMain.on('rules-updated', () => {
+  console.log('[Tray] Rules database updated. Rebuilding Tray context menu...');
+  updateTrayMenu();
+});
+
 ipcMain.on('window-minimize', () => {
   if (mainWindow) mainWindow.minimize();
 });
