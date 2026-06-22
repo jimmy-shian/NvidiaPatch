@@ -31,6 +31,20 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
 
+  // 新增狀態用於 Playground 模型測試
+  const [selectedTestModel, setSelectedTestModel] = useState('');
+  const [chatHistory, setChatHistory] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatting, setIsChatting] = useState(false);
+  const chatEndRef = useRef(null);
+
+  // 自動捲動到聊天最下方
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatHistory]);
+
   // 1. 定時輪詢 Log 與 Stats
   useEffect(() => {
     fetchData();
@@ -40,7 +54,14 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // 2. 當切換至模型排序分頁，若列表為空且有 active 金鑰，自動在背景同步一次
+  // 2. 當切換至金鑰管理分頁，重新取得 API Keys 資料以顯示最新狀態
+  useEffect(() => {
+    if (activeTab === 'keys') {
+      fetchKeys();
+    }
+  }, [activeTab]);
+
+  // 3. 當切換至模型排序分頁，若列表為空且有 active 金鑰，自動在背景同步一次
   useEffect(() => {
     const hasActiveKey = keys.some(k => k.status === 'active');
     if (activeTab === 'models' && availableModels.length === 0 && hasActiveKey && !isSyncingModels) {
@@ -73,6 +94,85 @@ export default function App() {
     }
   };
 
+  const handleSendTestMessage = async (e) => {
+    if (e) e.preventDefault();
+    if (!chatInput.trim() || !selectedTestModel || isChatting) return;
+
+    const userMsg = { role: 'user', content: chatInput.trim() };
+    const assistantMsg = { role: 'assistant', content: '' };
+
+    setChatHistory(prev => [...prev, userMsg, assistantMsg]);
+    const targetMessages = [...chatHistory, userMsg];
+    const originalInput = chatInput.trim();
+    setChatInput('');
+    setIsChatting(true);
+
+    try {
+      const res = await fetch('http://localhost:4000/api/test/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: selectedTestModel,
+          messages: targetMessages,
+          stream: true
+        })
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        setChatHistory(prev => {
+          const updated = [...prev];
+          updated[updated.length - 1].content = `錯誤 (HTTP ${res.status}): ${text || '無法測試此模型'}`;
+          return updated;
+        });
+        setIsChatting(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // 保留不完整的一行
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') continue;
+            try {
+              const chunk = JSON.parse(dataStr);
+              if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+                const deltaText = chunk.choices[0].delta.content;
+                setChatHistory(prev => {
+                  const updated = [...prev];
+                  updated[updated.length - 1].content += deltaText;
+                  return updated;
+                });
+              }
+            } catch (err) {
+              // 忽略 JSON 解析異常
+            }
+          }
+        }
+      }
+    } catch (err) {
+      setChatHistory(prev => {
+        const updated = [...prev];
+        updated[updated.length - 1].content = `連線異常: ${err.message}`;
+        return updated;
+      });
+    } finally {
+      setIsChatting(false);
+    }
+  };
+
   const fetchData = async () => {
     try {
       const keysRes = await fetch('http://localhost:4000/api/keys');
@@ -86,6 +186,9 @@ export default function App() {
         const data = await availModelsRes.json();
         setAvailableModels(data.models || []);
         setLastSyncTime(data.lastSyncTime || null);
+        if (data.models && data.models.length > 0) {
+          setSelectedTestModel(prev => prev || data.models[0].id);
+        }
       }
 
       const rulesRes = await fetch('http://localhost:4000/api/rules');
@@ -108,6 +211,15 @@ export default function App() {
       setApiError(''); // 成功連線，清除錯誤
     } catch (err) {
       // 避免頻繁報錯
+    }
+  };
+
+  const fetchKeys = async () => {
+    try {
+      const keysRes = await fetch('http://localhost:4000/api/keys');
+      if (keysRes.ok) setKeys(await keysRes.json());
+    } catch (err) {
+      console.error('取得金鑰資料失敗:', err);
     }
   };
 
@@ -240,6 +352,9 @@ export default function App() {
         setNewRuleTitle('');
         setNewRuleContent('');
         fetchData();
+        if (window.electronAPI && window.electronAPI.notifyRulesUpdated) {
+          window.electronAPI.notifyRulesUpdated();
+        }
       }
     } catch (err) {
       alert('新增規則出錯');
@@ -252,7 +367,12 @@ export default function App() {
       const res = await fetch(`http://localhost:4000/api/rules/${id}`, {
         method: 'DELETE'
       });
-      if (res.ok) fetchData();
+      if (res.ok) {
+        fetchData();
+        if (window.electronAPI && window.electronAPI.notifyRulesUpdated) {
+          window.electronAPI.notifyRulesUpdated();
+        }
+      }
     } catch (err) {
       alert('刪除規則出錯');
     }
@@ -315,6 +435,14 @@ export default function App() {
           >
             <Cpu size={16} />
             <span>模型排序 ({stats.modelsCount})</span>
+          </button>
+          <button 
+            className={`btn ${activeTab === 'playground' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ justifyContent: 'flex-start', width: '100%' }}
+            onClick={() => setActiveTab('playground')}
+          >
+            <Play size={16} />
+            <span>模型測試 (Playground)</span>
           </button>
           <button 
             className={`btn ${activeTab === 'rules' ? 'btn-primary' : 'btn-secondary'}`}
@@ -397,6 +525,112 @@ export default function App() {
                 </span>
                 <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>優先嘗試順位 1 模型</span>
               </div>
+            </div>
+
+            {/* 編輯器自訂提供商整合設定引導 */}
+            <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <span style={{ fontSize: '16px', fontWeight: '700', color: '#10b981' }}>⚙️ 編輯器整合設定指引 (相容 OpenAI 接口之軟體如 Cline / Cursor / Double / Roo Code)</span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                <div 
+                  style={{ 
+                    background: 'rgba(0,0,0,0.2)', 
+                    padding: '12px', 
+                    borderRadius: '8px', 
+                    position: 'relative', 
+                    border: '1px solid rgba(255,255,255,0.03)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onClick={() => copyToClipboard('myself', 'prov_id')}
+                  onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+                  onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
+                  title="點擊複製提供商 ID"
+                >
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>提供商 ID (Provider ID)</div>
+                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>myself</div>
+                  <div 
+                    className="btn btn-secondary" 
+                    style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    {copiedId === 'prov_id' ? <Check size={12} /> : <Copy size={12} />}
+                  </div>
+                </div>
+                <div 
+                  style={{ 
+                    background: 'rgba(0,0,0,0.2)', 
+                    padding: '12px', 
+                    borderRadius: '8px', 
+                    position: 'relative', 
+                    border: '1px solid rgba(255,255,255,0.03)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onClick={() => copyToClipboard('http://127.0.0.1:4000/v1', 'prov_url')}
+                  onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+                  onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
+                  title="點擊複製基礎 URL"
+                >
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>基礎 URL (Base URL)</div>
+                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>http://127.0.0.1:4000/v1</div>
+                  <div 
+                    className="btn btn-secondary" 
+                    style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    {copiedId === 'prov_url' ? <Check size={12} /> : <Copy size={12} />}
+                  </div>
+                </div>
+                <div 
+                  style={{ 
+                    background: 'rgba(0,0,0,0.2)', 
+                    padding: '12px', 
+                    borderRadius: '8px', 
+                    position: 'relative', 
+                    border: '1px solid rgba(255,255,255,0.03)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onClick={() => copyToClipboard('any-key', 'prov_key')}
+                  onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+                  onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
+                  title="點擊複製金鑰"
+                >
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>API 金鑰 (API Key)</div>
+                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>any-key</div>
+                  <div 
+                    className="btn btn-secondary" 
+                    style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    {copiedId === 'prov_key' ? <Check size={12} /> : <Copy size={12} />}
+                  </div>
+                </div>
+                <div 
+                  style={{ 
+                    background: 'rgba(0,0,0,0.2)', 
+                    padding: '12px', 
+                    borderRadius: '8px', 
+                    position: 'relative', 
+                    border: '1px solid rgba(255,255,255,0.03)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onClick={() => copyToClipboard('patcher-main', 'prov_model')}
+                  onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+                  onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
+                  title="點擊複製模型 ID"
+                >
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>模型 ID (Model ID)</div>
+                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>patcher-main</div>
+                  <div 
+                    className="btn btn-secondary" 
+                    style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    {copiedId === 'prov_model' ? <Check size={12} /> : <Copy size={12} />}
+                  </div>
+                </div>
+              </div>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                💡 註：在編輯器的自訂提供商（OpenAI 相容）設定中填入上方數值即可。對外模型 ID 可任意填寫，Gateway 將在轉發時自動重寫為您在「模型排序」中配置的第一順位 NVIDIA NIM 模型。
+              </span>
             </div>
 
             {/* 圖表與統計 */}
@@ -659,7 +893,7 @@ export default function App() {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {['ALL', 'Llama', 'Mistral', 'Gemma', 'Nemotron', 'Phi', 'Other'].map(cat => (
+                    {['ALL', 'Llama', 'Mistral', 'Gemma', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Other'].map(cat => (
                       <button 
                         key={cat}
                         className={`btn ${selectedCategory === cat ? 'btn-primary' : 'btn-secondary'}`}
@@ -686,6 +920,8 @@ export default function App() {
                         if (id.includes('gemma')) return 'Gemma';
                         if (id.includes('nemotron')) return 'Nemotron';
                         if (id.includes('phi')) return 'Phi';
+                        if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
+                        if (id.includes('step')) return 'Step';
                         return 'Other';
                       };
                       
@@ -820,6 +1056,129 @@ export default function App() {
                   </button>
                 </form>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* 模型測試 Playground 頁面 */}
+        {activeTab === 'playground' && (
+          <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA NIM 模型測試 Playground</h2>
+                <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>可以直接選擇任一已同步的 NVIDIA 模型，快速進行對話發送與串流回應測試。</p>
+              </div>
+              <button 
+                className="btn btn-secondary" 
+                style={{ fontSize: '14px', padding: '8px 16px' }}
+                onClick={() => setChatHistory([])}
+                disabled={chatHistory.length === 0}
+              >
+                清空對話歷程
+              </button>
+            </div>
+
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
+              {/* 模型選擇與狀態 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-secondary)' }}>選擇測試模型:</span>
+                <select 
+                  className="input" 
+                  style={{ minWidth: '320px', fontSize: '15px', padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', cursor: 'pointer' }}
+                  value={selectedTestModel}
+                  onChange={(e) => setSelectedTestModel(e.target.value)}
+                  disabled={isChatting}
+                >
+                  {availableModels.length === 0 ? (
+                    <option value="">(無可用模型，請先點擊「同步」)</option>
+                  ) : (
+                    availableModels.map(m => (
+                      <option key={m.id} value={m.id}>{m.name} ({m.id.split('/').shift()})</option>
+                    ))
+                  )}
+                </select>
+                {isChatting && (
+                  <span style={{ fontSize: '13px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <RefreshCw size={14} className="animate-spin" />
+                    模型正在串流回應中...
+                  </span>
+                )}
+              </div>
+
+              {/* 聊天對話區域 */}
+              <div style={{ 
+                flex: 1, 
+                overflowY: 'auto', 
+                background: 'rgba(0, 0, 0, 0.25)', 
+                borderRadius: '10px', 
+                border: '1px solid var(--border-color)', 
+                padding: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px'
+              }}>
+                {chatHistory.length === 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', gap: '12px' }}>
+                    <Cpu size={48} style={{ color: 'var(--border-color)' }} />
+                    <span style={{ fontSize: '15px' }}>請在下方輸入訊息以測試選取的模型。所有測試將直接向 Gateway 發送。</span>
+                  </div>
+                ) : (
+                  chatHistory.map((msg, index) => {
+                    const isUser = msg.role === 'user';
+                    return (
+                      <div 
+                        key={index} 
+                        style={{ 
+                          display: 'flex', 
+                          justifyContent: isUser ? 'flex-end' : 'flex-start',
+                          width: '100%'
+                        }}
+                      >
+                        <div style={{ 
+                          maxWidth: '75%', 
+                          background: isUser ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'rgba(255,255,255,0.04)',
+                          border: isUser ? 'none' : '1px solid var(--border-color)',
+                          color: 'white',
+                          padding: '12px 16px',
+                          borderRadius: isUser ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
+                          fontSize: '15px',
+                          lineHeight: '1.5',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                        }}>
+                          <span style={{ fontSize: '12px', fontWeight: '700', opacity: 0.7, display: 'block', marginBottom: '6px' }}>
+                            {isUser ? '👤 使用者 (User)' : `🤖 NIM 助手 (${selectedTestModel.split('/').pop()})`}
+                          </span>
+                          {msg.content || (isChatting && index === chatHistory.length - 1 ? 'Thinking...' : '')}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* 輸入發送區域 */}
+              <form onSubmit={handleSendTestMessage} style={{ display: 'flex', gap: '10px' }}>
+                <input 
+                  type="text" 
+                  placeholder={selectedTestModel ? "請輸入對話訊息..." : "請先同步模型以進行測試"} 
+                  className="input" 
+                  style={{ flex: 1, fontSize: '15px', padding: '12px 16px' }}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  disabled={!selectedTestModel || isChatting}
+                />
+                <button 
+                  type="submit" 
+                  className="btn btn-primary" 
+                  style={{ padding: '0 24px', fontSize: '15px' }}
+                  disabled={!selectedTestModel || !chatInput.trim() || isChatting}
+                >
+                  發送訊息
+                </button>
+              </form>
             </div>
           </div>
         )}
