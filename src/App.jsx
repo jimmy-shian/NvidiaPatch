@@ -38,6 +38,9 @@ export default function App() {
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef(null);
 
+  // 拖曳排序狀態
+  const [draggedModelIndex, setDraggedModelIndex] = useState(null);
+
   // 自動捲動到聊天最下方
   useEffect(() => {
     if (chatEndRef.current) {
@@ -376,6 +379,32 @@ export default function App() {
     } catch (err) {
       alert('刪除規則出錯');
     }
+  };
+
+  // 簡易 Markdown 解析（粗體、斜體、連結、標題、清單、程式碼區塊、分隔線）
+  const parseMarkdown = (text) => {
+    if (!text) return '';
+    let html = text
+      .replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>')
+      .replace(/^#{6}\s*(.*$)/gm, '<h6>$1</h6>')
+      .replace(/^#{5}\s*(.*$)/gm, '<h5>$1</h5>')
+      .replace(/^#{4}\s*(.*$)/gm, '<h4>$1</h4>')
+      .replace(/^#{3}\s*(.*$)/gm, '<h3>$1</h3>')
+      .replace(/^#{2}\s*(.*$)/gm, '<h2>$1</h2>')
+      .replace(/^#{1}\s*(.*$)/gm, '<h1>$1</h1>')
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`{3}(\w+)?\n([\s\S]*?)`{3}/g, '<pre style="background:rgba(0,0,0,0.3);padding:8px 12px;border-radius:6px;overflow:auto;font-size:13px;line-height:1.5;border:1px solid rgba(255,255,255,0.05);"><code>$2</code></pre>')
+      .replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:4px;font-size:13px;">$1</code>')
+      .replace(/^-{3,}$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:12px 0;"/>')
+      .replace(/^>\s*(.*$)/gm, '<blockquote style="border-left:3px solid #10b981;padding-left:12px;margin:8px 0;color:var(--text-secondary);">$1</blockquote>')
+      .replace(/^\s*[-*]\s+(.*$)/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul style="margin:8px 0;padding-left:20px;list-style-type:disc;">${match}</ul>`)
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#10b981;text-decoration:underline;">$1</a>');
+    // 處理段落換行
+    const lines = html.split('\n');
+    return lines.map(line => line.trim() ? `<p style="margin:4px 0;line-height:1.6;">${line}</p>` : '').join('');
   };
 
   const copyToClipboard = (text, id) => {
@@ -854,7 +883,42 @@ export default function App() {
                     </div>
                   ) : (
                     models.map((m, index) => (
-                      <div key={m.id} className="glass-panel" style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderLeft: `4px solid ${index === 0 ? '#10b981' : '#3b82f6'}` }}>
+                      <div 
+                        key={m.id} 
+                        className="glass-panel" 
+                        style={{ 
+                          padding: '10px 14px', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'space-between', 
+                          borderLeft: `4px solid ${index === 0 ? '#10b981' : '#3b82f6'}`,
+                          cursor: 'move',
+                          opacity: draggedModelIndex === index ? 0.5 : 1,
+                          transition: 'opacity 0.2s'
+                        }}
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggedModelIndex(index);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          if (draggedModelIndex === null || draggedModelIndex === index) return;
+                          // 即時交換
+                          const updated = [...models.map(m => m.model_id)];
+                          const temp = updated[draggedModelIndex];
+                          updated[draggedModelIndex] = updated[index];
+                          updated[index] = temp;
+                          saveModelPriorities(updated);
+                          setDraggedModelIndex(index);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDraggedModelIndex(null);
+                        }}
+                        onDragEnd={() => setDraggedModelIndex(null)}
+                        title="可拖曳排序"
+                      >
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '70%' }}>
                           <span style={{ fontSize: '13px', color: index === 0 ? '#10b981' : 'var(--text-secondary)', fontWeight: '700' }}>
                             第 {m.priority} 順位 {index === 0 ? '【主要 Primary】' : '【備用 Fallback】'}
@@ -922,12 +986,16 @@ export default function App() {
                         if (id.includes('phi')) return 'Phi';
                         if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
                         if (id.includes('step')) return 'Step';
+                        if (id.includes('nvidia')) return 'Nvidia';
                         return 'Other';
                       };
                       
+                      const searchTerms = searchTerm.trim().toLowerCase().split(/\s+/).filter(Boolean);
                       const filtered = availableModels.filter(am => {
-                        const matchesSearch = am.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                                              am.id.toLowerCase().includes(searchTerm.toLowerCase());
+                        // OR 邏輯：只要有任何一個搜尋詞匹配即可
+                        const matchesSearch = searchTerms.length === 0 || searchTerms.some(term => 
+                          am.name.toLowerCase().includes(term) || am.id.toLowerCase().includes(term)
+                        );
                         const matchesCategory = selectedCategory === 'ALL' || getModelCategory(am.id) === selectedCategory;
                         return matchesSearch && matchesCategory;
                       });
@@ -949,10 +1017,10 @@ export default function App() {
                               <span style={{ fontSize: '12px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{am.id}</span>
                             </div>
                             <button 
-                              className="btn btn-primary" 
-                              style={{ padding: '4px 8px', fontSize: '13px' }}
+                              className={isAdded ? 'btn btn-secondary' : 'btn btn-primary'} 
+                              style={{ padding: '4px 8px', fontSize: '13px', opacity: isAdded ? 0.7 : 1 }}
                               disabled={isAdded}
-                              onClick={() => handleAddModelToPriority(am.id)}
+                              onClick={() => !isAdded && handleAddModelToPriority(am.id)}
                             >
                               {isAdded ? '已加入' : '新增'}
                             </button>
@@ -998,27 +1066,25 @@ export default function App() {
                           {copiedId === r.id ? <Check size={12} /> : <Copy size={12} />}
                           <span>{copiedId === r.id ? '已複製！' : '一鍵複製'}</span>
                         </button>
-                        {!r.is_preset && (
-                          <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => handleDeleteRule(r.id)}>
-                            <Trash size={12} />
-                          </button>
-                        )}
+                        <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => handleDeleteRule(r.id)}>
+                          <Trash size={12} />
+                        </button>
                       </div>
                     </div>
-                    <pre style={{ 
-                       background: 'rgba(0,0,0,0.3)', 
-                       padding: '12px', 
-                       borderRadius: '6px', 
-                       fontFamily: 'monospace', 
-                       fontSize: '13.5px', 
-                       whiteSpace: 'pre-wrap', 
-                       wordBreak: 'break-all', 
-                       border: '1px solid rgba(255,255,255,0.03)',
-                       color: 'var(--text-secondary)',
-                       lineHeight: '1.5'
-                     }}>
-                      {r.content}
-                    </pre>
+                    <div 
+                      style={{ 
+                        background: 'rgba(0,0,0,0.3)', 
+                        padding: '12px', 
+                        borderRadius: '6px', 
+                        fontSize: '14px', 
+                        border: '1px solid rgba(255,255,255,0.03)',
+                        color: 'var(--text-secondary)',
+                        lineHeight: '1.6',
+                        maxHeight: '200px',
+                        overflowY: 'auto'
+                      }}
+                      dangerouslySetInnerHTML={{ __html: parseMarkdown(r.content) }}
+                    />
                   </div>
                 ))}
               </div>
@@ -1092,9 +1158,33 @@ export default function App() {
                   {availableModels.length === 0 ? (
                     <option value="">(無可用模型，請先點擊「同步」)</option>
                   ) : (
-                    availableModels.map(m => (
-                      <option key={m.id} value={m.id}>{m.name} ({m.id.split('/').shift()})</option>
-                    ))
+                    (() => {
+                      const getModelCategory = (modelId) => {
+                        const id = modelId.toLowerCase();
+                        if (id.includes('llama')) return 'Llama';
+                        if (id.includes('mistral') || id.includes('mixtral')) return 'Mistral';
+                        if (id.includes('gemma')) return 'Gemma';
+                        if (id.includes('nemotron')) return 'Nemotron';
+                        if (id.includes('phi')) return 'Phi';
+                        if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
+                        if (id.includes('step')) return 'Step';
+                        if (id.includes('nvidia')) return 'Nvidia';
+                        return 'Other';
+                      };
+                      const grouped = availableModels.reduce((acc, m) => {
+                        const cat = getModelCategory(m.id);
+                        if (!acc[cat]) acc[cat] = [];
+                        acc[cat].push(m);
+                        return acc;
+                      }, {});
+                      return Object.entries(grouped).map(([cat, items]) => (
+                        <optgroup key={cat} label={cat}>
+                          {items.map(m => (
+                            <option key={m.id} value={m.id}>{m.name} ({m.id.split('/').shift()})</option>
+                          ))}
+                        </optgroup>
+                      ));
+                    })()
                   )}
                 </select>
                 {isChatting && (
@@ -1150,7 +1240,15 @@ export default function App() {
                           <span style={{ fontSize: '12px', fontWeight: '700', opacity: 0.7, display: 'block', marginBottom: '6px' }}>
                             {isUser ? '👤 使用者 (User)' : `🤖 NIM 助手 (${selectedTestModel.split('/').pop()})`}
                           </span>
-                          {msg.content || (isChatting && index === chatHistory.length - 1 ? 'Thinking...' : '')}
+                          {isUser ? (
+                            msg.content
+                          ) : (
+                            <div 
+                              dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
+                              style={{ fontSize: '14px', lineHeight: '1.6' }}
+                            />
+                          )}
+                          {isChatting && !msg.content && index === chatHistory.length - 1 && 'Thinking...'}
                         </div>
                       </div>
                     );
