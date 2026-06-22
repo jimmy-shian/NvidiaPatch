@@ -4,6 +4,15 @@ const fs = require('fs');
 
 let db = null;
 
+// 輔助函式：取得台灣時間 (Asia/Taipei, UTC+8) 的 ISO 格式字串
+function getTaiwanISOString() {
+  const now = new Date();
+  // 將當前時間轉換為台灣時間
+  const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+  // 替換掉 UTC 的 Z，加上 +08:00 時區標記
+  return taiwanTime.toISOString().replace('Z', '+08:00');
+}
+
 function initDatabase(dbPath) {
   if (db) return db;
 
@@ -145,7 +154,7 @@ const apiKeys = {
   },
   getActiveKeys: () => {
     // 撈出健康狀態且不在 cooldown 期的 key
-    const nowStr = new Date().toISOString();
+    const nowStr = getTaiwanISOString();
     return db.prepare(`
       SELECT * FROM api_keys 
       WHERE status != 'inactive' 
@@ -175,7 +184,7 @@ const apiKeys = {
     stmt.run(status, errorMsg, id);
   },
   recordSuccess: (id) => {
-    const nowStr = new Date().toISOString();
+    const nowStr = getTaiwanISOString();
     const stmt = db.prepare(`
       UPDATE api_keys 
       SET consecutive_failures = 0, last_used_at = ? 
@@ -202,7 +211,8 @@ const apiKeys = {
     return 'active';
   },
   recordCooldown: (id, seconds = 30, errorMsg) => {
-    const cooldownTime = new Date(Date.now() + seconds * 1000).toISOString();
+    const now = new Date();
+    const cooldownTime = new Date(now.getTime() + seconds * 1000 + (8 * 60 * 60 * 1000)).toISOString().replace('Z', '+08:00');
     const stmt = db.prepare(`
       UPDATE api_keys 
       SET status = 'cooldown',
@@ -287,19 +297,29 @@ const modelsConfig = {
         db.exec("DELETE FROM available_models");
         const insert = db.prepare("INSERT OR REPLACE INTO available_models (id, name, created) VALUES (?, ?, ?)");
         
-        // 篩選 NVIDIA NIM 的模型
+        // 篩選出免費預覽/互動對話的 NVIDIA NIM 模型 (nimType: nim_type_preview)
+        const chatKeywords = ['instruct', '-it', 'chat', 'coder', 'vision', 'flash', 'large', 'medium', 'small', 'mini', 'pro', 'glm', 'kimi', 'minimax', 'solar', 'seed-oss'];
+        const excludeKeywords = ['embed', 'gliner', 'pii', 'safety', 'guard', 'reward', 'translate', 'detector', 'calibration', 'parse', 'clip'];
+        const excludeExact = ['meta/codellama-70b', 'meta/llama2-70b'];
+
+        const filteredModels = [];
         data.data.forEach(m => {
-          insert.run(m.id, m.id.split('/').pop(), m.created || 0);
+          const modelIdLower = m.id.toLowerCase();
+          if (excludeExact.includes(m.id)) return;
+          if (excludeKeywords.some(ex => modelIdLower.includes(ex))) return;
+          if (chatKeywords.some(kw => modelIdLower.includes(kw))) {
+            insert.run(m.id, m.id.split('/').pop(), m.created || 0);
+            filteredModels.push(m.id);
+          }
         });
 
         // 預設將第一順位等自動設定（如果原本是空的）
         const check = db.prepare("SELECT COUNT(*) as count FROM models_config").get();
-        if (check.count === 0 && data.data.length > 0) {
+        if (check.count === 0 && filteredModels.length > 0) {
           // 找出一些常見的優秀模型先當預設
-          const sorted = data.data.map(d => d.id);
-          const primary = sorted.find(id => id.includes('llama3-70b') || id.includes('llama-3.1-70b')) || sorted[0];
-          const fallback1 = sorted.find(id => (id.includes('llama3-8b') || id.includes('llama-3.1-8b')) && id !== primary) || sorted[1];
-          const fallback2 = sorted.find(id => id.includes('mixtral') && id !== primary && id !== fallback1) || sorted[2];
+          const primary = filteredModels.find(id => id.includes('llama3-70b') || id.includes('llama-3.1-70b')) || filteredModels[0];
+          const fallback1 = filteredModels.find(id => (id.includes('llama3-8b') || id.includes('llama-3.1-8b')) && id !== primary) || filteredModels[1];
+          const fallback2 = filteredModels.find(id => id.includes('mixtral') && id !== primary && id !== fallback1) || filteredModels[2];
 
           const activePresets = [primary, fallback1, fallback2].filter(Boolean);
           const insertConfig = db.prepare("INSERT INTO models_config (model_id, priority, is_active) VALUES (?, ?, 1)");
@@ -308,8 +328,8 @@ const modelsConfig = {
           });
         }
         // 記錄同步時間至 metadata 表
-        db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(new Date().toISOString());
-        return { success: true, count: data.data.length };
+        db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(getTaiwanISOString());
+        return { success: true, count: filteredModels.length };
       }
       return { success: false, error: 'Invalid data format from NVIDIA API' };
     } catch (err) {
@@ -389,8 +409,20 @@ const stats = {
   }
 };
 
+function closeDatabase() {
+  if (db) {
+    try {
+      db.close();
+    } catch (e) {
+      console.error('Error closing database:', e.message);
+    }
+    db = null;
+  }
+}
+
 module.exports = {
   initDatabase,
+  closeDatabase,
   apiKeys,
   modelsConfig,
   rules,
