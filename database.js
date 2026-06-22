@@ -124,7 +124,7 @@ function insertPresetRules() {
 1. 一律使用繁體中文 zh-TW。
 2. 優先查詢過往 commit msg 格式做統一的撰寫。
 3. 未追蹤的檔案勿隨意新增，需詢問使用者是否加入。
-4. 更改內容分類分次 commit。
+4. 更改內容分類分次 commit / git add --patch。
 5. 使用者未確認要求，禁止執行，只顯示推薦 commit msg 在回覆中。`
   );
 
