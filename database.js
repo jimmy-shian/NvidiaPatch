@@ -5,12 +5,317 @@ const fs = require('fs');
 let db = null;
 
 // 輔助函式：取得台灣時間 (Asia/Taipei, UTC+8) 的 ISO 格式字串
-function getTaiwanISOString() {
-  const now = new Date();
-  // 將當前時間轉換為台灣時間
-  const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-  // 替換掉 UTC 的 Z，加上 +08:00 時區標記
-  return taiwanTime.toISOString().replace('Z', '+08:00');
+function getTaiwanDateParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  return formatter.formatToParts(date).reduce((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+}
+
+function getTaiwanISOString(date = new Date()) {
+  const parts = getTaiwanDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+08:00`;
+}
+
+function getTaiwanHourString(date = new Date()) {
+  const parts = getTaiwanDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:00`;
+}
+
+
+function ensureModelsConfigSchema() {
+  const tableInfo = db.prepare("PRAGMA table_info(models_config)").all();
+  const hasGroupId = tableInfo.some(col => col.name === 'group_id');
+  const tableRow = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'models_config'").get();
+  const tableSql = tableRow && tableRow.sql ? tableRow.sql : '';
+  const hasLegacyUniqueModelId = /model_id\s+TEXT\s+UNIQUE/i.test(tableSql);
+  const hasGroupUnique = /UNIQUE\s*\(\s*group_id\s*,\s*model_id\s*\)/i.test(tableSql);
+
+  if (!hasGroupId || hasLegacyUniqueModelId || !hasGroupUnique) {
+    console.log('Migrating models_config table to grouped priority schema...');
+    const rows = hasGroupId
+      ? db.prepare("SELECT group_id, model_id, priority, is_active FROM models_config ORDER BY group_id ASC, priority ASC").all()
+      : db.prepare("SELECT 1 AS group_id, model_id, priority, is_active FROM models_config ORDER BY priority ASC").all();
+
+    db.exec("DROP TABLE IF EXISTS models_config_new");
+    db.exec(`
+      CREATE TABLE models_config_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER DEFAULT 1,
+        model_id TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        UNIQUE(group_id, model_id)
+      )
+    `);
+
+    const insert = db.prepare("INSERT OR IGNORE INTO models_config_new (group_id, model_id, priority, is_active) VALUES (?, ?, ?, ?)");
+    const priorityByGroup = new Map();
+    rows.forEach((row) => {
+      const groupId = normalizeModelGroupId(row.group_id || 1);
+      const nextPriority = (priorityByGroup.get(groupId) || 0) + 1;
+      priorityByGroup.set(groupId, nextPriority);
+      insert.run(groupId, row.model_id, nextPriority, row.is_active === 0 ? 0 : 1);
+    });
+
+    db.exec(`
+      DROP TABLE models_config;
+      ALTER TABLE models_config_new RENAME TO models_config;
+    `);
+  }
+
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('active_model_group', '1')").run();
+}
+
+function normalizeModelGroupId(groupId) {
+  const parsed = Number.parseInt(groupId, 10);
+  if ([1, 2, 3].includes(parsed)) return parsed;
+  return 1;
+}
+
+
+const NVIDIA_BUILD_FREE_ENDPOINT_URL = 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview';
+const NVIDIA_FEATURED_MODELS_URL = 'https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json';
+
+function decodeHtmlEntities(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\\u002[fF]/g, '/')
+    .replace(/\\\//g, '/');
+}
+
+function stripHtml(value) {
+  return decodeHtmlEntities(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractExpectedFreeEndpointCount(html) {
+  const text = stripHtml(html);
+  const filtersCount = text.match(/Filters\s*\(?\s*1\s*\)?\s*(\d+)\s*models/i);
+  if (filtersCount) return Number(filtersCount[1]);
+
+  const freeEndpointCount = text.match(/Free\s+Endpoint\s+(\d+)/i);
+  if (freeEndpointCount) return Number(freeEndpointCount[1]);
+
+  return null;
+}
+
+function normalizeBuildModelId(provider, slug) {
+  const cleanedProvider = decodeURIComponent(String(provider || '').trim()).replace(/^\/+|\/+$/g, '');
+  const cleanedSlug = decodeURIComponent(String(slug || '').trim()).replace(/^\/+|\/+$/g, '');
+  if (!cleanedProvider || !cleanedSlug) return null;
+
+  const blockedFirstSegments = new Set([
+    'api', '_next', 'assets', 'docs', 'explore', 'models', 'skills', 'blueprints',
+    'terms', 'privacy', 'contact', 'login', 'search', 'favicon.ico'
+  ]);
+  if (blockedFirstSegments.has(cleanedProvider.toLowerCase())) return null;
+  if (cleanedSlug.includes('.') && !cleanedSlug.includes('-')) return null;
+
+  return `${cleanedProvider}/${cleanedSlug}`;
+}
+
+function extractBuildFreeEndpointModelsFromHtml(html) {
+  const normalizedHtml = decodeHtmlEntities(html);
+  const models = new Map();
+
+  const addModel = (modelId, name = null, created = 0) => {
+    if (!modelId || typeof modelId !== 'string') return;
+    const cleanedModelId = modelId.trim().replace(/^\/+|\/+$/g, '');
+    if (!/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(cleanedModelId)) return;
+    if (!models.has(cleanedModelId)) {
+      models.set(cleanedModelId, {
+        id: cleanedModelId,
+        name: name || cleanedModelId.split('/').pop(),
+        created: Number.isFinite(Number(created)) ? Number(created) : 0
+      });
+    }
+  };
+
+  // 1. 從模型卡片連結擷取完整路徑，例如 /minimaxai/minimax-m3
+  const hrefRegex = /href\s*=\s*["'](?:https:\/\/build\.nvidia\.com)?\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)(?:[?#][^"']*)?["']/g;
+  let hrefMatch;
+  while ((hrefMatch = hrefRegex.exec(normalizedHtml)) !== null) {
+    const modelId = normalizeBuildModelId(hrefMatch[1], hrefMatch[2]);
+    addModel(modelId);
+  }
+
+  // 2. 從 Next/JSON 片段或範例程式碼擷取 model 欄位
+  const jsonModelRegex = /["']model["']\s*:\s*["']([a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)["']/g;
+  let jsonMatch;
+  while ((jsonMatch = jsonModelRegex.exec(normalizedHtml)) !== null) {
+    addModel(jsonMatch[1]);
+  }
+
+  // 3. 從一般文字中的 build.nvidia.com/provider/model URL 擷取
+  const absoluteUrlRegex = /https:\/\/build\.nvidia\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)/g;
+  let absoluteMatch;
+  while ((absoluteMatch = absoluteUrlRegex.exec(normalizedHtml)) !== null) {
+    const modelId = normalizeBuildModelId(absoluteMatch[1], absoluteMatch[2]);
+    addModel(modelId);
+  }
+
+  return Array.from(models.values());
+}
+
+function buildNvidiaCatalogCandidateUrls(pageNumber) {
+  const encodedFilter = 'filters=nimType%3Anim_type_preview';
+  const base = `https://build.nvidia.com/models?${encodedFilter}`;
+
+  if (pageNumber === 1) {
+    return [
+      `${base}&itemsPerPage=100`,
+      `${base}&pageSize=100`,
+      `${base}&limit=100`,
+      base,
+      `${base}&page=1`,
+      `${base}&pageNumber=1`,
+      `${base}&p=1`
+    ];
+  }
+
+  const offset = (pageNumber - 1) * 24;
+  return [
+    `${base}&page=${pageNumber}`,
+    `${base}&pageNumber=${pageNumber}`,
+    `${base}&p=${pageNumber}`,
+    `${base}&page=${pageNumber}&itemsPerPage=24`,
+    `${base}&pageNumber=${pageNumber}&itemsPerPage=24`,
+    `${base}&limit=24&offset=${offset}`,
+    `${base}&offset=${offset}`
+  ];
+}
+
+async function fetchTextWithTimeout(url, options = {}, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Accept': 'text/html,application/json;q=0.9,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NVIDIA-NIM-Gateway/1.0',
+        ...(options.headers || {})
+      }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+    }
+    return text;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchNvidiaBuildFreeEndpointCatalog() {
+  const collected = new Map();
+  const visitedSignatures = new Set();
+  let expectedCount = null;
+  let lastError = null;
+
+  for (let page = 1; page <= 12; page += 1) {
+    let bestCandidate = null;
+    const candidateUrls = buildNvidiaCatalogCandidateUrls(page);
+
+    for (const url of candidateUrls) {
+      try {
+        const html = await fetchTextWithTimeout(url);
+        const parsedModels = extractBuildFreeEndpointModelsFromHtml(html);
+        const pageExpectedCount = extractExpectedFreeEndpointCount(html);
+        if (pageExpectedCount) expectedCount = pageExpectedCount;
+
+        const signature = parsedModels.map(m => m.id).sort().join('|');
+        const newModels = parsedModels.filter(m => !collected.has(m.id));
+
+        if (!bestCandidate || newModels.length > bestCandidate.newModels.length) {
+          bestCandidate = { url, parsedModels, newModels, signature };
+        }
+
+        if (expectedCount && parsedModels.length >= expectedCount) {
+          bestCandidate = { url, parsedModels, newModels: parsedModels.filter(m => !collected.has(m.id)), signature };
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (!bestCandidate || bestCandidate.parsedModels.length === 0) {
+      if (page === 1) {
+        throw lastError || new Error('Unable to parse NVIDIA Build Free Endpoint catalog.');
+      }
+      break;
+    }
+
+    if (visitedSignatures.has(bestCandidate.signature) && bestCandidate.newModels.length === 0) {
+      break;
+    }
+    visitedSignatures.add(bestCandidate.signature);
+
+    bestCandidate.parsedModels.forEach((model) => {
+      if (!collected.has(model.id)) collected.set(model.id, model);
+    });
+
+    if (expectedCount && collected.size >= expectedCount) break;
+    if (bestCandidate.newModels.length === 0 && page > 1) break;
+  }
+
+  if (collected.size === 0) {
+    throw lastError || new Error('No Free Endpoint models found from NVIDIA Build catalog.');
+  }
+
+  return {
+    models: Array.from(collected.values()).sort((a, b) => a.id.localeCompare(b.id)),
+    expectedCount,
+    source: NVIDIA_BUILD_FREE_ENDPOINT_URL
+  };
+}
+
+async function fetchNvidiaFeaturedModelsCatalog() {
+  const text = await fetchTextWithTimeout(NVIDIA_FEATURED_MODELS_URL, {}, 20000);
+  const data = JSON.parse(text);
+  const entries = Array.isArray(data) ? data : (Array.isArray(data.data) ? data.data : []);
+  const models = [];
+  const seen = new Set();
+
+  entries.forEach((entry) => {
+    const modelId = entry.model || entry.id || entry.name;
+    if (!modelId || seen.has(modelId)) return;
+    seen.add(modelId);
+    models.push({
+      id: modelId,
+      name: entry['model-name'] || entry.name || modelId.split('/').pop(),
+      created: 0
+    });
+  });
+
+  return {
+    models,
+    expectedCount: null,
+    source: NVIDIA_FEATURED_MODELS_URL
+  };
 }
 
 function initDatabase(dbPath) {
@@ -36,12 +341,15 @@ function initDatabase(dbPath) {
   `);
 
   // 2. 建立 models_config 表
+  // group_id 用於保存三組模型順位設定，使用者可在 UI 直接切換目前啟用組別
   db.exec(`
     CREATE TABLE IF NOT EXISTS models_config (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      model_id TEXT UNIQUE NOT NULL,
+      group_id INTEGER DEFAULT 1, -- 1~3 = 三組可切換的模型順位設定
+      model_id TEXT NOT NULL,
       priority INTEGER NOT NULL, -- 1 = primary, 2 = fallback-1, 3 = fallback-2 ...
-      is_active INTEGER DEFAULT 1
+      is_active INTEGER DEFAULT 1,
+      UNIQUE(group_id, model_id)
     )
   `);
 
@@ -83,6 +391,9 @@ function initDatabase(dbPath) {
     )
   `);
 
+  // 確保舊版資料庫可平滑升級到三組模型順位 schema
+  ensureModelsConfigSchema();
+
   // 插入預設 Rules
   insertPresetRules();
 
@@ -95,71 +406,196 @@ function insertPresetRules() {
 
   const insert = db.prepare("INSERT INTO rules (title, content, is_preset) VALUES (?, ?, 1)");
 
-  // 1. Git Commit 與開發工作流規範
-  insert.run(
-    "Git Commit 與開發工作流規範",
-    `根據格式要求，撰寫簡短、精確的 Commit 訊息：
-大標題使用【新增、調整、修改、重構】XXX，細項說明用 "-" 接續。
+  const presets = [
+    {
+      title: "Git Commit 與開發工作流規範",
+      content: `你是一位嚴謹的開發協作者。
+任務: 根據實際變更內容，撰寫簡短、精確、可追溯的 Commit 訊息，並確保每個 commit 只包含同一目的的變更。
 
-範例:
-【修改】行動端互動優化
--改善 mobile 操作流暢度與點擊回饋
--優化觸控區域與滾動體驗
+Commit 訊息格式：
 
-【重構】折疊視圖與狀態顯示
--重新設計 collapsed view UI 結構
--整合 orb stats 狀態資訊顯示
+1. 標題使用「【新增】、【調整】、【修改】、【重構】、【修復】、【文件】、【測試】」分類。
+2. 標題格式為：【分類】具體變更主題。
+3. 細項說明使用「-」開頭，描述實際完成的變更。
+4. 避免模糊描述，例如「更新一些東西」、「修一下」、「調整功能」。
+5. 若變更目的不同，必須建議拆成多次 commit。
 
-【新增】Proofreader 多模型系統與批次處理
--實作 multi-model backend 架構
--建立 web UI 操作介面
--支援批次處理能力
+Commit 範例：
+【修復】表單驗證錯誤
+-修正驗證條件判斷
+-避免錯誤輸入通過驗證
 
-【新增】錯字右鍵快捷選單與操作流程優化
--編輯器高亮錯字支援 context menu 操作
--提供「接受建議 / 忽略 / 手動修改」快速操作
--加入邊界偵測避免選單超出視窗
+【調整】按鈕 hover 樣式
+-優化 hover 狀態的視覺回饋
+-調整互動動畫與陰影效果
 
-遵守下列開發規範：
-1. 一律使用繁體中文 zh-TW。
-2. 優先查詢過往 commit msg 格式做統一的撰寫。
-3. 未追蹤的檔案勿隨意新增，需詢問使用者是否加入。
-4. 更改內容分類分次 commit / git add --patch。
-5. 使用者未確認要求，禁止執行，只顯示推薦 commit msg 在回覆中。`
-  );
+Git 操作與精確暫存規範：
 
-  // 2. Cline/OpenCode 專案開發規範
-  insert.run(
-    "Cline/OpenCode 開發規範",
-    `- **小步提交 (Incremental Steps)**: 每次修改控制在單一模塊，修改後立即執行測試，避免一次進行大面積修改。
-- **錯誤優先排除**: 當編譯或測試失敗時，優先閱讀日誌與排查原因，不得在錯誤未解的情況下繼續寫新功能。
-- **精確路徑連結**: 在回覆用戶時，涉及到的文件與代碼結構必須使用 Clickable File Links (e.g. [filename](file:///path/to/file))。
-- **保留既有註釋**: 在編輯代碼時，除非特別要求，否則應完整保留無關的註釋與說明文件。`
-  );
+1. 一律使用繁體中文 zh-TW 回覆。
+2. 產生 commit 訊息前，優先參考專案既有 commit message 寫法。
+3. 未追蹤檔案不可任意加入 commit，必須先提醒使用者確認。
+4. 一個 commit 只處理一個清楚目的；不同目的的變更必須分批 commit。
+5. 同一檔案內若包含不同目的的變更，必須使用 "git add -p <file>" 精確暫存，不可直接整檔加入。
+6. 若同一個 hunk 混有不同目的的變更，必須使用 split hunk 或 manual edit hunk 拆分。
+7. 禁止使用 "git add ." 混入不相關變更。
+8. 所有 diff 檢查指令都必須加上 "--no-pager"。
+9. 每次 commit 前，必須用 "git --no-pager diff --cached" 確認 staging area 只包含本次 commit 需要的內容。
+10. 若暫存內容混入不相關檔案或行數，必須先取消暫存並重新精確加入。
+11. 使用者未明確要求執行 commit 時，禁止直接 commit，只能提供建議 commit message。
 
-  // 3. UI/UX Pro Max 設計原則
-  insert.run(
-    "UI/UX Pro Max 設計原則",
-    `- **色彩美學**: 禁用飽和度過高的純紅、純藍、純綠。應使用特製的和諧色調（如 HSL 微調深色系），並搭配漸變。
-- **磨砂玻璃效果**: 大量運用 Backdrop Filter blur 與半透明邊框 (Border 1px solid rgba(255,255,255,0.08)) 營造高級感。
-- **微動畫 (Micro-animations)**: 按鈕懸停時應有輕微的縮放 (scale(1.02))、平滑過渡 (transition 200ms) 與陰影。
-- **佈局流暢度**: 保持適當的留白 (padding & gap)，使用 Inter、Outfit 等現代字體，讓排版具備呼吸感。`
-  );
+同檔案分段 commit 範例：
+
+若 A 檔案中：
+* 第 1-10 行：修復表單驗證
+* 第 12-15 行：調整按鈕樣式
+
+不可使用：
+"git add A檔案"
+
+正確流程：
+"""bash
+git --no-pager diff A檔案
+git add -p A檔案
+git --no-pager diff --cached
+git commit -m "【修復】表單驗證錯誤"
+git add -p A檔案
+git --no-pager diff --cached
+git commit -m "【調整】按鈕 hover 樣式"
+`
+    },
+
+    {
+      title: "Skill-First 與 Grill-Me 需求釐清規範",
+      content: `你是一位具備 Skill-First 工作流的 AI 開發代理。面對任務時，不可急著直接實作，必須先判斷目前任務適合啟用哪一種工作模式。
+
+Skill-First 工作模式：
+1. 需求不清楚時，啟用「需求釐清模式」。
+2. 任務涉及多檔案、多步驟或架構變更時，啟用「計畫模式」。
+3. 已有明確計畫時，啟用「執行計畫模式」。
+4. 遇到錯誤、測試失敗或非預期行為時，啟用「系統化除錯模式」。
+5. 修改完成後，啟用「驗證與回顧模式」。
+6. 涉及 UI/UX 時，啟用「介面品質審查模式」。
+
+Grill-Me 需求釐清原則：
+1. 當需求、設計、資料流、邊界條件或使用者意圖不明確時，必須主動追問。
+2. 追問時應沿著決策樹逐步釐清，不可一次拋出大量鬆散問題。
+3. 每個問題都要附上「建議答案」，讓使用者可以快速確認或修正。
+4. 若問題可透過閱讀程式碼、文件、測試或既有實作取得答案，應優先自行查證，不要把可查證問題丟給使用者。
+5. 當多個決策互相依賴時，應先釐清上游決策，再處理下游細節。
+6. 完成釐清後，必須整理「已確認事項」、「待確認風險」與「建議執行方案」。
+
+Grill-Me 提問格式：
+【問題】這裡提出需要釐清的具體問題。
+【建議答案】根據目前上下文，我建議採用的答案。
+【原因】簡短說明此建議如何影響設計、實作或維護性。
+
+範例：
+【問題】這個功能是否需要支援批次操作？
+【建議答案】建議支援，因為目前 Proofreader 已有批次處理脈絡，新增批次操作可保持一致性。
+【原因】若現在只支援單筆操作，後續再補批次會增加 UI 狀態與 API 設計的重工成本。
+
+執行限制：
+1. 不可在需求明顯不完整時直接大幅修改程式碼。
+2. 不可為了快速完成而假設高風險需求，例如資料刪除、權限變更、付款流程、安全策略。
+3. 若使用者要求「直接做」，但仍存在高風險歧義，應先列出假設並用最小安全變更執行。
+4. 若遇到阻塞問題，必須停止、回報阻塞點、提出可選解法，不可硬猜。`
+    },
+
+    {
+      title: "Cline/OpenCode 開發規範",
+      content: `你是一位負責任的 Cline/OpenCode 開發代理。請以小步、可驗證、可回滾的方式協助使用者完成開發任務。
+
+工作原則：
+- **小步提交 (Incremental Steps)**：每次修改控制在單一模組、單一目的或單一問題，避免一次進行大面積修改。
+- **先理解再修改**：修改前先閱讀相關檔案、資料流、呼叫關係與既有命名風格，不可只根據猜測改 code。
+- **錯誤優先排除**：當編譯或測試失敗時，優先閱讀日誌與排查原因，不得在錯誤未解的情況下繼續寫新功能。
+- **測試與驗證優先**：每次完成修改後，應執行最相關的測試、lint、typecheck 或 build。
+- **阻塞立即回報**：遇到缺少依賴、測試無法執行、權限不足或需求矛盾時，必須停止並回報。
+- **保留既有註釋**：在編輯程式碼時，除非使用者特別要求，否則應完整保留無關的註釋、文件與被註解的程式碼。
+- **最小侵入修改**：優先修改必要範圍，不應重寫與任務無關的架構或樣式。
+- **遵守專案風格**：命名、檔案結構、格式化、錯誤處理與狀態管理應跟隨既有專案慣例。
+- **精確路徑連結**：在回覆使用者時，涉及的文件與程式碼結構必須使用可點擊檔案連結，例如 [filename](file:///absolute/path/to/filename)。
+
+回覆格式：
+1. 先摘要本次完成了什麼。
+2. 條列修改過的檔案與重點。
+3. 說明已執行的驗證指令與結果。
+4. 若未執行測試，必須明確說明原因。
+5. 若有後續建議，僅列出與本次任務直接相關的項目。
+
+禁止行為：
+1. 不可擅自刪除使用者未要求移除的功能。
+2. 不可擅自新增大型依賴。
+3. 不可在未說明原因的情況下改變公開 API、資料庫 schema 或設定檔。
+4. 不可忽略錯誤訊息或測試失敗。
+5. 不可把 unrelated formatting change 混入功能修改。`
+    },
+
+    {
+      title: "UI/UX Pro Max 設計原則",
+      content: `你是一位重視細節的 UI/UX 設計工程師。請在保持功能清晰的前提下，打造具有現代感、層次感與操作回饋的介面。
+
+視覺設計：
+- **色彩美學**：避免使用飽和度過高的純紅、純藍、純綠。應使用經過 HSL 微調的和諧色調，並搭配柔和漸層。
+- **層次與深度**：可使用陰影、透明度、邊框與背景模糊建立視覺層次，但不可讓裝飾壓過內容。
+- **磨砂玻璃效果**：適度運用 backdrop-filter: blur(...)、半透明背景與 1px rgba 邊框營造高級感。
+- **留白與節奏**：保持足夠 padding、gap、line-height，讓資訊有呼吸感，不要把元素塞滿畫面。
+- **字體選擇**：優先使用 Inter、Outfit、system-ui 或專案既有現代字體設定。
+
+互動設計：
+- **微動畫 (Micro-animations)**：按鈕、卡片、選單 hover 時可加入 scale(1.01 ~ 1.03)、陰影變化與 150ms ~ 250ms transition。
+- **操作回饋**：點擊、載入、成功、錯誤、空狀態都應有明確視覺提示。
+- **可預期性**：互動元素必須看得出可以點擊，禁用狀態必須清楚。
+- **邊界處理**：浮動選單、tooltip、context menu 必須避免超出視窗或遮擋主要內容。
+- **行動端友善**：觸控目標需足夠大，避免 hover-only 操作，滾動與點擊區域需流暢。
+
+可用性與一致性：
+1. 優先清楚，再追求華麗。
+2. 同一類元件應保持一致的間距、圓角、陰影、字級與互動回饋。
+3. 表單錯誤訊息應靠近欄位，文案要具體可修正。
+4. 空狀態不應只顯示「沒有資料」，應提示下一步操作。
+5. loading 狀態應避免版面跳動，可使用 skeleton 或保留內容區塊高度。
+6. 深色模式下需注意文字對比、邊框可見度與陰影層次。
+7. 不可為了視覺效果犧牲可讀性、效能或無障礙。`
+    }
+  ];
+
+  const transaction = db.transaction((rules) => {
+    for (const rule of rules) {
+      insert.run(rule.title, rule.content);
+    }
+  });
+
+  transaction(presets);
 }
 
 // 輔助函式庫 - API Keys
+function releaseExpiredKeyCooldowns() {
+  if (!db) return;
+  const nowStr = getTaiwanISOString();
+  db.prepare(`
+    UPDATE api_keys
+    SET status = 'active',
+        cooldown_until = NULL
+    WHERE status = 'cooldown'
+      AND cooldown_until IS NOT NULL
+      AND cooldown_until < ?
+  `).run(nowStr);
+}
+
 const apiKeys = {
   getAll: () => {
+    releaseExpiredKeyCooldowns();
     return db.prepare("SELECT * FROM api_keys ORDER BY id DESC").all();
   },
   getActiveKeys: () => {
     // 撈出健康狀態且不在 cooldown 期的 key
-    const nowStr = getTaiwanISOString();
+    // 注意：只有 429 會讓 key 進入 cooldown，其他錯誤會記錄但不冷卻。
+    releaseExpiredKeyCooldowns();
     return db.prepare(`
       SELECT * FROM api_keys 
-      WHERE status != 'inactive' 
-      AND (cooldown_until IS NULL OR cooldown_until < ?)
-    `).all(nowStr);
+      WHERE status = 'active'
+    `).all();
   },
   add: (keyValue) => {
     try {
@@ -178,16 +614,22 @@ const apiKeys = {
   updateStatus: (id, status, errorMsg = null) => {
     const stmt = db.prepare(`
       UPDATE api_keys 
-      SET status = ?, last_error_message = ? 
+      SET status = ?,
+          cooldown_until = CASE WHEN ? = 'cooldown' THEN cooldown_until ELSE NULL END,
+          last_error_message = ? 
       WHERE id = ?
     `);
-    stmt.run(status, errorMsg, id);
+    stmt.run(status, status, errorMsg, id);
   },
   recordSuccess: (id) => {
     const nowStr = getTaiwanISOString();
     const stmt = db.prepare(`
       UPDATE api_keys 
-      SET consecutive_failures = 0, last_used_at = ? 
+      SET status = 'active',
+          consecutive_failures = 0,
+          last_used_at = ?,
+          cooldown_until = NULL,
+          last_error_message = NULL
       WHERE id = ?
     `);
     stmt.run(nowStr, id);
@@ -195,24 +637,20 @@ const apiKeys = {
   recordFailure: (id, errorMsg) => {
     const stmt = db.prepare(`
       UPDATE api_keys 
-      SET consecutive_failures = consecutive_failures + 1,
+      SET status = CASE WHEN status = 'inactive' THEN 'inactive' ELSE 'active' END,
+          cooldown_until = CASE WHEN status = 'inactive' THEN cooldown_until ELSE NULL END,
+          consecutive_failures = consecutive_failures + 1,
           total_errors = total_errors + 1,
           last_error_message = ?
       WHERE id = ?
     `);
     stmt.run(errorMsg, id);
-
-    // 檢查是否需要禁用 (連續失敗大於等於 3 次)
-    const check = db.prepare("SELECT consecutive_failures FROM api_keys WHERE id = ?").get(id);
-    if (check && check.consecutive_failures >= 3) {
-      db.prepare("UPDATE api_keys SET status = 'inactive' WHERE id = ?").run(id);
-      return 'inactive';
-    }
+    // 除了 429 之外，其他狀況不應使 key 進入冷卻。
+    // 非 401/403 的暫時性錯誤只記錄錯誤，不會把 key 排除出可用池。
     return 'active';
   },
   recordCooldown: (id, seconds = 30, errorMsg) => {
-    const now = new Date();
-    const cooldownTime = new Date(now.getTime() + seconds * 1000 + (8 * 60 * 60 * 1000)).toISOString().replace('Z', '+08:00');
+    const cooldownTime = getTaiwanISOString(new Date(Date.now() + seconds * 1000));
     const stmt = db.prepare(`
       UPDATE api_keys 
       SET status = 'cooldown',
@@ -236,18 +674,25 @@ const apiKeys = {
           }
         });
         if (res.ok) {
-          db.prepare("UPDATE api_keys SET status = 'active', consecutive_failures = 0, last_error_message = NULL WHERE id = ?").run(key.id);
+          apiKeys.recordSuccess(key.id);
           results.push({ id: key.id, status: 'active', success: true });
         } else {
           const text = await res.text();
-          db.prepare("UPDATE api_keys SET status = 'inactive', consecutive_failures = consecutive_failures + 1, last_error_message = ? WHERE id = ?")
-            .run(text || `HTTP ${res.status}`, key.id);
-          results.push({ id: key.id, status: 'inactive', success: false, error: text });
+          const errorMessage = text || `HTTP ${res.status}`;
+          if (res.status === 429) {
+            apiKeys.recordCooldown(key.id, 30, errorMessage || '429 Rate Limit Exceeded');
+            results.push({ id: key.id, status: 'cooldown', success: false, error: errorMessage });
+          } else if (res.status === 401 || res.status === 403) {
+            apiKeys.updateStatus(key.id, 'inactive', `HTTP ${res.status}: Key revoked/invalid`);
+            results.push({ id: key.id, status: 'inactive', success: false, error: errorMessage });
+          } else {
+            apiKeys.recordFailure(key.id, errorMessage);
+            results.push({ id: key.id, status: 'active', success: false, error: errorMessage });
+          }
         }
       } catch (err) {
-        db.prepare("UPDATE api_keys SET status = 'inactive', consecutive_failures = consecutive_failures + 1, last_error_message = ? WHERE id = ?")
-          .run(err.message, key.id);
-        results.push({ id: key.id, status: 'inactive', success: false, error: err.message });
+        apiKeys.recordFailure(key.id, err.message);
+        results.push({ id: key.id, status: 'active', success: false, error: err.message });
       }
     }
     return results;
@@ -256,18 +701,48 @@ const apiKeys = {
 
 // 輔助函式庫 - 模型設定
 const modelsConfig = {
-  getAll: () => {
-    return db.prepare("SELECT * FROM models_config ORDER BY priority ASC").all();
+  getActiveGroup: () => {
+    try {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'active_model_group'").get();
+      return normalizeModelGroupId(row ? row.value : 1);
+    } catch (err) {
+      return 1;
+    }
   },
-  savePriorityList: (modelIds) => {
-    // 傳入陣列，例如 ['meta/llama3-70b-instruct', 'meta/llama3-8b-instruct']
-    // 重設所有配置
-    db.exec("DELETE FROM models_config");
-    const insert = db.prepare("INSERT INTO models_config (model_id, priority, is_active) VALUES (?, ?, 1)");
-    modelIds.forEach((modelId, idx) => {
-      insert.run(modelId, idx + 1);
+  setActiveGroup: (groupId) => {
+    const normalizedGroupId = normalizeModelGroupId(groupId);
+    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('active_model_group', ?)").run(String(normalizedGroupId));
+    return { success: true, activeGroup: normalizedGroupId };
+  },
+  getAll: (groupId = null) => {
+    const targetGroupId = groupId === null ? modelsConfig.getActiveGroup() : normalizeModelGroupId(groupId);
+    return db.prepare("SELECT * FROM models_config WHERE group_id = ? ORDER BY priority ASC").all(targetGroupId);
+  },
+  getGroups: () => {
+    const activeGroup = modelsConfig.getActiveGroup();
+    const groups = [1, 2, 3].map((groupId) => {
+      const models = db.prepare("SELECT * FROM models_config WHERE group_id = ? ORDER BY priority ASC").all(groupId);
+      return {
+        group_id: groupId,
+        is_active_group: groupId === activeGroup,
+        models,
+        count: models.length,
+        primary_model: models[0] ? models[0].model_id : null
+      };
     });
-    return { success: true };
+    return { activeGroup, groups };
+  },
+  savePriorityList: (modelIds, groupId = null) => {
+    const targetGroupId = groupId === null ? modelsConfig.getActiveGroup() : normalizeModelGroupId(groupId);
+    // 傳入陣列，例如 ['meta/llama3-70b-instruct', 'meta/llama3-8b-instruct']
+    // 只重設指定組別的配置，避免覆蓋另外兩組模型順位
+    db.prepare("DELETE FROM models_config WHERE group_id = ?").run(targetGroupId);
+    const insert = db.prepare("INSERT INTO models_config (group_id, model_id, priority, is_active) VALUES (?, ?, ?, 1)");
+    const uniqueModelIds = [...new Set(modelIds.filter(Boolean))];
+    uniqueModelIds.forEach((modelId, idx) => {
+      insert.run(targetGroupId, modelId, idx + 1);
+    });
+    return { success: true, groupId: targetGroupId };
   },
   getAvailable: () => {
     return db.prepare("SELECT * FROM available_models ORDER BY id ASC").all();
@@ -280,150 +755,130 @@ const modelsConfig = {
       return null;
     }
   },
-  syncFromNvidia: async (keyValue) => {
+  getLastSyncSource: () => {
     try {
-      // 1. 從 NVIDIA NIM API 取得所有模型清單
-      const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${keyValue}`
-        }
-      });
-      if (!res.ok) {
-        throw new Error(`NVIDIA API replied with HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      if (!data || !Array.isArray(data.data)) {
-        return { success: false, error: 'Invalid data format from NVIDIA API' };
-      }
-
-      // 2. 從 build.nvidia.com 爬取 Free Endpoint (nim_type_preview) 模型名稱
-      //    抓取四個分頁的純文字內容，從中提取 Free Endpoint 標籤後的模型名稱
-      const buildBaseUrl = 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview';
-      const pageTexts = [];
-      
-      for (let page = 1; page <= 4; page++) {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'last_model_sync_source'").get();
+      return row ? row.value : null;
+    } catch (err) {
+      return null;
+    }
+  },
+  getLastSyncExpectedCount: () => {
+    try {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'last_model_sync_expected_count'").get();
+      const count = row && row.value ? Number(row.value) : null;
+      return Number.isFinite(count) && count > 0 ? count : null;
+    } catch (err) {
+      return null;
+    }
+  },
+  syncFromNvidia: async (keyValue = null) => {
+    try {
+      let catalog;
+      try {
+        // 主要來源：NVIDIA Build 網頁的 Free Endpoint 篩選結果。
+        // /v1/models 是「這把 key 當下可見的模型」，不等同於 build.nvidia.com 上標示可免費試用的 Preview Endpoint 清單。
+        catalog = await fetchNvidiaBuildFreeEndpointCatalog();
+      } catch (buildErr) {
+        // 備援來源：NVIDIA 公開 featured catalog，避免 Build 頁面暫時改版時完全無法同步。
+        // 若有 API Key，再退回 /v1/models 作為最後保底，但不再把它當作主要 Free Endpoint 來源。
+        let fallbackError = buildErr;
         try {
-          const pageRes = await fetch(`${buildBaseUrl}&page=${page}`, {
+          catalog = await fetchNvidiaFeaturedModelsCatalog();
+        } catch (featuredErr) {
+          fallbackError = featuredErr;
+        }
+
+        if (!catalog && keyValue) {
+          const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
+            method: 'GET',
             headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+              'Authorization': `Bearer ${keyValue}`
             }
           });
-          if (pageRes.ok) {
-            const text = await pageRes.text();
-            pageTexts.push(text);
+          if (!res.ok) {
+            const errorText = await res.text().catch(() => '');
+            throw new Error(`NVIDIA Build catalog failed (${buildErr.message}); fallback /v1/models replied with HTTP ${res.status}${errorText ? `: ${errorText.substring(0, 200)}` : ''}`);
           }
-        } catch (err) {
-          // 忽略個別分頁的錯誤，繼續下一頁
-          console.error(`Failed to fetch build.nvidia.com page ${page}:`, err.message);
+          const data = await res.json();
+          if (!data || !Array.isArray(data.data)) {
+            throw new Error(`NVIDIA Build catalog failed (${buildErr.message}); fallback /v1/models returned invalid data.`);
+          }
+          const seen = new Set();
+          catalog = {
+            models: data.data
+              .map((m) => {
+                const modelId = typeof m.id === 'string' ? m.id.trim() : '';
+                if (!modelId || seen.has(modelId)) return null;
+                seen.add(modelId);
+                return {
+                  id: modelId,
+                  name: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : modelId.split('/').pop(),
+                  created: Number.isFinite(Number(m.created)) ? Number(m.created) : 0
+                };
+              })
+              .filter(Boolean),
+            expectedCount: null,
+            source: 'https://integrate.api.nvidia.com/v1/models'
+          };
         }
+
+        if (!catalog) throw fallbackError;
       }
 
-      // 從所有分頁文字中提取 Free Endpoint 模型名稱
-      // 策略：擷取包含 "Free Endpoint" 標籤的 HTML 片段，再從中提取模型 slug
-      // 由於頁面格式可能變更，使用更寬鬆的多階段匹配
-      const freeEndpointSlugs = new Set();
-      for (const text of pageTexts) {
-        // 方法1：匹配 "Free Endpoint" 附近的所有潛在模型 slug（小寫字母開頭，含數字、連字符、底線、點號）
-        // 放寬匹配：在 Free Endpoint 前後 200 字元範圍內尋找所有 slug 模式
-        const broadRegex = /Free\s*Endpoint/gi;
-        let broadMatch;
-        while ((broadMatch = broadRegex.exec(text)) !== null) {
-          const start = Math.max(0, broadMatch.index - 100);
-          const end = Math.min(text.length, broadMatch.index + broadMatch[0].length + 300);
-          const context = text.substring(start, end);
-          
-          // 在上下文中提取所有可能的模型 slug 模式
-          const slugRegex = /\b([a-z][a-z0-9._-]{2,}(?:\.[a-z0-9]+)*(?:-[a-z0-9]+)*)\b/g;
-          let slugMatch;
-          while ((slugMatch = slugRegex.exec(context)) !== null) {
-            const candidate = slugMatch[1].toLowerCase();
-            // 過濾掉明顯不是模型名稱的 token
-            if (candidate.length > 3 && 
-                !/^(items|per|page|of|pages|models|sort|by|next|prev|span|div|class|data|type|href|http|https|json|html|text|meta|link|style|script|head|body|true|false|null|undefined|this|that|with|from|your|have|been|were|they|will|also|each|more|some|than|when|what|which|their|about|other|after|before|first|last|only|over|under|every|both|such|like|just|also|most|very|well|much|many|some|then|them|here|there|where|these|those|since|until|while|still|never|always|often|would|could|should|might|cannot|being|doing|said|used|made|based|including|between|through)$/i.test(candidate)) {
-              freeEndpointSlugs.add(candidate);
-            }
-          }
-        }
-        
-        // 方法2：備用 - 直接匹配原本的嚴格模式（相容舊格式）
-        const strictRegex = /Free\s*Endpoint\s*:?\s*([a-z][a-z0-9._-]+(?:\.[a-z0-9]+)*(?:-[a-z0-9]+)*)/gi;
-        let strictMatch;
-        while ((strictMatch = strictRegex.exec(text)) !== null) {
-          const slug = strictMatch[1].toLowerCase();
-          if (slug.length > 3 && !/^(items|per|page|of|pages|models|sort|by)$/i.test(slug)) {
-            freeEndpointSlugs.add(slug);
-          }
-        }
+      if (!catalog || !Array.isArray(catalog.models) || catalog.models.length === 0) {
+        return { success: false, error: 'Invalid data format from NVIDIA Build catalog' };
       }
 
-      console.log(`[syncFromNvidia] Extracted ${freeEndpointSlugs.size} Free Endpoint model slugs from build.nvidia.com`);
-
-      // 若無法從 build.nvidia.com 取得任何模型名稱，保留現有資料不清空
-      if (freeEndpointSlugs.size === 0) {
-        console.log('[syncFromNvidia] Warning: No Free Endpoint models extracted from build.nvidia.com. Keeping existing available models.');
-        const existingCount = db.prepare("SELECT COUNT(*) as count FROM available_models").get();
-        return { success: true, count: existingCount.count, warning: 'Could not fetch Free Endpoint list from build.nvidia.com. Existing model list preserved.' };
-      }
-
-      // 3. 做交集比對：只保留同時存在於 /v1/models 和 build.nvidia.com 的模型
-      const insert = db.prepare("INSERT OR REPLACE INTO available_models (id, name, created) VALUES (?, ?, ?)");
-      
       // 先清空原本的可用模型
       db.exec("DELETE FROM available_models");
-      
-      const filteredModels = [];
-      for (const m of data.data) {
-        const modelName = m.id.split('/').pop().toLowerCase();
-        // 檢查模型名稱是否在 Free Endpoint 列表中
-        // 同時也檢查完整 ID 的部分匹配（處理 publisher 名稱大小寫差異）
-        const fullIdLower = m.id.toLowerCase();
-        let isFreeEndpoint = freeEndpointSlugs.has(modelName);
-        
-        // 如果精確名稱不匹配，嘗試模糊比對（處理名稱中的版本後綴差異）
-        if (!isFreeEndpoint) {
-          for (const slug of freeEndpointSlugs) {
-            if (fullIdLower.includes(slug) || slug.includes(modelName) || modelName.includes(slug)) {
-              isFreeEndpoint = true;
-              break;
-            }
-          }
-        }
-        
-        if (isFreeEndpoint) {
-          insert.run(m.id, m.id.split('/').pop(), m.created || 0);
-          filteredModels.push(m.id);
-        }
-      }
+      const insert = db.prepare("INSERT OR REPLACE INTO available_models (id, name, created) VALUES (?, ?, ?)");
 
-      console.log(`[syncFromNvidia] Matched ${filteredModels.length} models after cross-referencing with build.nvidia.com`);
+      const syncedModels = [];
+      const seen = new Set();
+      catalog.models.forEach((m) => {
+        const modelId = typeof m.id === 'string' ? m.id.trim() : '';
+        if (!modelId || seen.has(modelId)) return;
+        seen.add(modelId);
 
-      // 4. 預設將第一順位等自動設定（如果原本是空的）
-      const check = db.prepare("SELECT COUNT(*) as count FROM models_config").get();
-      if (check.count === 0 && filteredModels.length > 0) {
-        // 優先選擇常見的優秀 LLM 模型當預設
-        const primary = filteredModels.find(id => 
-          id.includes('llama-3.3-70b') || id.includes('llama-3.1-70b') || id.includes('llama3-70b')
-        ) || filteredModels[0];
-        
-        const fallback1 = filteredModels.find(id => 
-          (id.includes('llama-3.3') || id.includes('llama-3.1-8b') || id.includes('llama3-8b') || id.includes('gemma')) && id !== primary
-        ) || filteredModels[1];
-        
-        const fallback2 = filteredModels.find(id => 
-          (id.includes('mixtral') || id.includes('qwen') || id.includes('deepseek')) && id !== primary && id !== fallback1
-        ) || filteredModels[2];
+        const modelName = typeof m.name === 'string' && m.name.trim()
+          ? m.name.trim()
+          : modelId.split('/').pop();
+        const created = Number.isFinite(Number(m.created)) ? Number(m.created) : 0;
+
+        insert.run(modelId, modelName, created);
+        syncedModels.push(modelId);
+      });
+
+      // 預設將第一順位等自動設定（如果第 1 組原本是空的）
+      const check = db.prepare("SELECT COUNT(*) as count FROM models_config WHERE group_id = 1").get();
+      if (check.count === 0 && syncedModels.length > 0) {
+        // 找出一些常見的優秀模型先當預設
+        const findPreferred = (patterns, exclude = []) => syncedModels.find(id => {
+          const lowered = id.toLowerCase();
+          return !exclude.includes(id) && patterns.some(pattern => lowered.includes(pattern));
+        });
+        const primary = findPreferred(['nemotron-3-ultra', 'deepseek-v4', 'kimi-k2', 'minimax-m3', 'llama-4', 'llama-3.3']) || syncedModels[0];
+        const fallback1 = findPreferred(['qwen', 'glm', 'mistral', 'gemma', 'step'], [primary]) || syncedModels.find(id => id !== primary);
+        const fallback2 = findPreferred(['minimax', 'deepseek', 'moonshotai', 'nvidia'], [primary, fallback1]) || syncedModels.find(id => id !== primary && id !== fallback1);
 
         const activePresets = [primary, fallback1, fallback2].filter(Boolean);
-        const insertConfig = db.prepare("INSERT INTO models_config (model_id, priority, is_active) VALUES (?, ?, 1)");
+        const insertConfig = db.prepare("INSERT INTO models_config (group_id, model_id, priority, is_active) VALUES (1, ?, ?, 1)");
         activePresets.forEach((mId, index) => {
           insertConfig.run(mId, index + 1);
         });
       }
-
       // 記錄同步時間至 metadata 表
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(getTaiwanISOString());
-      return { success: true, count: filteredModels.length };
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_source', ?)").run(catalog.source || NVIDIA_BUILD_FREE_ENDPOINT_URL);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_expected_count', ?)").run(catalog.expectedCount ? String(catalog.expectedCount) : '');
+
+      return {
+        success: true,
+        count: syncedModels.length,
+        expectedCount: catalog.expectedCount,
+        source: catalog.source || NVIDIA_BUILD_FREE_ENDPOINT_URL
+      };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -475,11 +930,8 @@ const stats = {
     `).all().reverse();
   },
   recordRequest: (isSuccess) => {
-    // 使用台灣時間 (UTC+8) 來計算小時區段
-    const now = new Date();
-    const taiwanNow = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-    const pad = (n) => String(n).padStart(2, '0');
-    const hourStr = `${taiwanNow.getUTCFullYear()}-${pad(taiwanNow.getUTCMonth() + 1)}-${pad(taiwanNow.getUTCDate())} ${pad(taiwanNow.getUTCHours())}:00`;
+    // 格式化台灣時間 YYYY-MM-DD HH:00，避免系統時區造成每小時流量與即時日誌偏移
+    const hourStr = getTaiwanHourString();
 
     // 先插入或忽略
     db.prepare("INSERT OR IGNORE INTO stats (hour, request_count, success_count, error_count) VALUES (?, 0, 0, 0)").run(hourStr);

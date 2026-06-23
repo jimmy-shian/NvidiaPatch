@@ -2,10 +2,27 @@ const express = require('express');
 const cors = require('cors');
 const { apiKeys, modelsConfig, stats, rules } = require('./database');
 
-function getTaiwanISOString() {
-  const now = new Date();
-  const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-  return taiwanTime.toISOString().replace('Z', '+08:00');
+function getTaiwanDateParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  return formatter.formatToParts(date).reduce((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+}
+
+function getTaiwanISOString(date = new Date()) {
+  const parts = getTaiwanDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+08:00`;
 }
 
 const activeLogs = [];
@@ -23,16 +40,54 @@ function addLog(type, message) {
 }
 
 /**
- * 檢查內容中是否有未閉合的 HTML/XML tag
+ * 檢查內容中是否有未閉合或格式不完整的 HTML/XML tag
  * @param {string} content - 要檢查的字串
- * @returns {{ valid: boolean, unclosedTags: string[] }} 檢查結果
+ * @returns {{ valid: boolean, unclosedTags: string[], malformedTags: string[], mismatchedTags: string[] }} 檢查結果
  */
 function validateContent(content) {
   if (!content || typeof content !== 'string') {
-    return { valid: true, unclosedTags: [] };
+    return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
   }
 
-  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(\/?)>/g;
+  const malformedTags = [];
+
+  // 先檢查「看起來像 tag 開頭，但沒有 > 結尾」的情況。
+  // 例如：<tool_call、</thinking、<>。這類輸出會讓 Cline 的 XML/HTML-like parser 直接炸開。
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] !== '<') continue;
+
+    const nextChar = content[i + 1] || '';
+
+    // a < b 這種比較符號不要誤判；只處理像標籤的開頭。
+    if (nextChar === '>') {
+      malformedTags.push('<>');
+      continue;
+    }
+    if (!/[A-Za-z/!?]/.test(nextChar)) {
+      continue;
+    }
+
+    const closeIndex = content.indexOf('>', i + 1);
+    const nextOpenIndex = content.indexOf('<', i + 1);
+    if (closeIndex === -1 || (nextOpenIndex !== -1 && nextOpenIndex < closeIndex)) {
+      const endIndex = nextOpenIndex !== -1 && nextOpenIndex < closeIndex ? nextOpenIndex : Math.min(content.length, i + 80);
+      const fragment = content.slice(i, endIndex).replace(/\s+/g, ' ').trim();
+      malformedTags.push(fragment || '<');
+      if (nextOpenIndex === -1) break;
+      i = Math.max(i, nextOpenIndex - 1);
+    }
+  }
+
+  if (malformedTags.length > 0) {
+    return {
+      valid: false,
+      unclosedTags: [],
+      malformedTags: [...new Set(malformedTags)].slice(0, 8),
+      mismatchedTags: []
+    };
+  }
+
+  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9:_-]*)\b[^>]*(\/?)>/g;
   const selfClosingTags = new Set([
     'br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base', 'col',
     'embed', 'source', 'track', 'wbr', 'frame', 'param', 'spacer',
@@ -40,6 +95,7 @@ function validateContent(content) {
   ]);
   
   const stack = [];
+  const mismatchedTags = [];
   let match;
 
   while ((match = tagRegex.exec(content)) !== null) {
@@ -49,7 +105,7 @@ function validateContent(content) {
     const isClosingTag = fullTag.startsWith('</');
 
     // 自閉合 tag 跳過
-    if (isSelfClosing || selfClosingTags.has(tagName)) {
+    if (isSelfClosing || selfClosingTags.has(tagName) || fullTag.startsWith('<!') || fullTag.startsWith('<?')) {
       continue;
     }
 
@@ -58,8 +114,7 @@ function validateContent(content) {
       if (stack.length > 0 && stack[stack.length - 1] === tagName) {
         stack.pop();
       } else {
-        // 不匹配的閉合 tag，忽略（可能是內容中的文字）
-        // 但如果是 stack 為空卻出現閉合 tag，不視為錯誤
+        mismatchedTags.push(`</${tagName}>`);
       }
     } else {
       // 開頭 tag：push 進 stack
@@ -67,11 +122,30 @@ function validateContent(content) {
     }
   }
 
-  if (stack.length > 0) {
-    return { valid: false, unclosedTags: [...new Set(stack)] };
+  if (stack.length > 0 || mismatchedTags.length > 0) {
+    return {
+      valid: false,
+      unclosedTags: [...new Set(stack)],
+      malformedTags: [],
+      mismatchedTags: [...new Set(mismatchedTags)].slice(0, 8)
+    };
   }
 
-  return { valid: true, unclosedTags: [] };
+  return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
+}
+
+function formatValidationIssue(validation) {
+  const issues = [];
+  if (validation.unclosedTags && validation.unclosedTags.length > 0) {
+    issues.push(validation.unclosedTags.map(t => `<${t}>`).join(', '));
+  }
+  if (validation.malformedTags && validation.malformedTags.length > 0) {
+    issues.push(validation.malformedTags.join(', '));
+  }
+  if (validation.mismatchedTags && validation.mismatchedTags.length > 0) {
+    issues.push(validation.mismatchedTags.join(', '));
+  }
+  return issues.join(', ') || 'unknown tag issue';
 }
 
 function createGatewayApp() {
@@ -126,40 +200,52 @@ function createGatewayApp() {
 
   // 3. 模型管理
   app.get('/api/models', (req, res) => {
-    res.json(modelsConfig.getAll());
+    const groupId = req.query.groupId ? Number(req.query.groupId) : null;
+    res.json(modelsConfig.getAll(groupId));
   });
 
   app.post('/api/models', (req, res) => {
-    const { models } = req.body;
+    const { models, groupId } = req.body;
     if (!models || !Array.isArray(models)) {
       return res.status(400).json({ error: 'Models list is required' });
     }
-    modelsConfig.savePriorityList(models);
-    addLog('info', `Updated model priority order: ${models.join(' -> ')}`);
-    res.json({ success: true });
+    const result = modelsConfig.savePriorityList(models, groupId);
+    addLog('info', `Updated model priority order for Group ${result.groupId}: ${models.join(' -> ')}`);
+    res.json({ success: true, groupId: result.groupId });
+  });
+
+  app.get('/api/models/groups', (req, res) => {
+    res.json(modelsConfig.getGroups());
+  });
+
+  app.post('/api/models/groups/active', (req, res) => {
+    const { groupId } = req.body;
+    const result = modelsConfig.setActiveGroup(groupId);
+    addLog('info', `Switched active model priority group to Group ${result.activeGroup}.`);
+    res.json(result);
   });
 
   app.get('/api/models/available', (req, res) => {
     res.json({
       models: modelsConfig.getAvailable(),
-      lastSyncTime: modelsConfig.getLastSyncTime()
+      lastSyncTime: modelsConfig.getLastSyncTime(),
+      lastSyncSource: modelsConfig.getLastSyncSource(),
+      expectedCount: modelsConfig.getLastSyncExpectedCount()
     });
   });
 
   app.post('/api/models/sync', async (req, res) => {
-    // 找出第一個 active 的 key 來做同步
+    // 主要同步來源改為 NVIDIA Build 網頁 Free Endpoint catalog，不再依賴 /v1/models。
+    // 若 Build catalog 暫時不可用，仍會用第一把 active key 做最後保底 fallback。
     const activeKeys = apiKeys.getActiveKeys();
-    if (activeKeys.length === 0) {
-      addLog('error', 'Sync models failed: No active API Key found. Add and test a key first.');
-      return res.status(400).json({ error: 'No active API Key found. Please add a key and test it first.' });
-    }
+    const fallbackKey = activeKeys.length > 0 ? activeKeys[0].key_value : null;
 
-    const testKey = activeKeys[0].key_value;
-    addLog('info', `Syncing models from NVIDIA NIM using key: ${activeKeys[0].key_value.substring(0, 10)}...`);
-    const result = await modelsConfig.syncFromNvidia(testKey);
+    addLog('info', 'Syncing Free Endpoint models from NVIDIA Build catalog...');
+    const result = await modelsConfig.syncFromNvidia(fallbackKey);
     if (result.success) {
-      addLog('success', `Successfully synced ${result.count} models from NVIDIA API.`);
-      res.json({ success: true, count: result.count });
+      const expectedText = result.expectedCount ? ` / NVIDIA Build expected ${result.expectedCount}` : '';
+      addLog('success', `Successfully synced ${result.count}${expectedText} Free Endpoint models. Source: ${result.source || 'NVIDIA Build catalog'}`);
+      res.json({ success: true, count: result.count, expectedCount: result.expectedCount || null, source: result.source || null });
     } else {
       addLog('error', `Sync models failed: ${result.error}`);
       res.status(500).json({ error: result.error });
@@ -475,11 +561,11 @@ function createGatewayApp() {
                     // 對完整內容做校驗
                     const validation = validateContent(fullContent);
                     if (!validation.valid) {
-                      const unclosedStr = validation.unclosedTags.map(t => `<${t}>`).join(', ');
-                      addLog('error', `[Round ${roundNumber}] Content validation failed for stream response from model ${modelId}: unclosed HTML tags detected: ${unclosedStr}. Content length: ${fullContent.length}. Treating as key failure, will retry with next key/round.`);
-                      apiKeys.recordFailure(selectedKey.id, `ContentValidation: unclosed tags <${unclosedStr}>`);
+                      const validationIssue = formatValidationIssue(validation);
+                      addLog('error', `[Round ${roundNumber}] Content validation failed for stream response from model ${modelId}: invalid or unclosed tag detected: ${validationIssue}. Content length: ${fullContent.length}. Rejecting response and regenerating with the next available attempt.`);
+                      apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
                       // 回傳失敗，讓外層繼續嘗試下一把 key 或下一輪
-                      return { success: false, shouldFallbackModel: false, statusCode: 0, errorText: `Content validation failed: unclosed HTML tags: ${unclosedStr}` };
+                      return { success: false, shouldFallbackModel: false, statusCode: 0, errorText: `Content validation failed: ${validationIssue}` };
                     }
 
                     // 校驗通過，回傳 success + 所有 SSE 行
@@ -539,9 +625,9 @@ function createGatewayApp() {
 
               const validation = validateContent(contentToCheck);
               if (!validation.valid) {
-                const unclosedStr = validation.unclosedTags.map(t => `<${t}>`).join(', ');
-                addLog('error', `[Round ${roundNumber}] Content validation failed for model ${modelId}: unclosed HTML tags detected: ${unclosedStr}. Content length: ${contentToCheck.length}. Treating as key failure, will retry with next key/round.`);
-                apiKeys.recordFailure(selectedKey.id, `ContentValidation: unclosed tags <${unclosedStr}>`);
+                const validationIssue = formatValidationIssue(validation);
+                addLog('error', `[Round ${roundNumber}] Content validation failed for model ${modelId}: invalid or unclosed tag detected: ${validationIssue}. Content length: ${contentToCheck.length}. Rejecting response and regenerating with the next available attempt.`);
+                apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
                 // 繼續嘗試下一把 key
                 continue;
               }
@@ -683,7 +769,7 @@ function createGatewayApp() {
       addLog('error', 'All configured models exhausted all retry rounds. No model could fulfill the request.');
       stats.recordRequest(false);
       return res.status(503).json({
-        error: { message: 'All configured models exhausted all retry rounds. Check Gateway logs for details. Every model was tried for 10 rounds with 15s delays between rounds, but none succeeded.' }
+        error: { message: 'All configured models exhausted all retry rounds. Check Gateway logs for details. Every model was tried for the configured retry rounds with 15s delays between rounds, but none succeeded.' }
       });
     }
 
@@ -764,11 +850,14 @@ function createGatewayApp() {
                 const validation = validateContent(fullContent);
                 if (!validation.valid) {
                   validationFailed = true;
-                  addLog('error', `[Test Chat - Content Validation] Stream response rejected: unclosed HTML tags detected: <${validation.unclosedTags.join('>, <')}>.`);
+                  addLog('error', `[Test Chat - Content Validation] Stream response rejected: invalid or unclosed tag detected: ${formatValidationIssue(validation)}.`);
                   // 不發送任何內容，直接拋錯
                   throw new ContentValidationError(fullContent);
                 }
-                // 校驗通過，flush 所有緩衝內容
+                // 校驗通過，才將串流標頭與內容 flush 給前端
+                res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
                 for (const chunk of contentBuffer) {
                   res.write(chunk);
                 }
@@ -799,20 +888,19 @@ function createGatewayApp() {
           }
 
           try {
-            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
             await readTestChunk();
             if (validationFailed) {
               // 串流已 flush 完成或失敗，但我們不回傳錯誤資料
             }
           } catch (err) {
             if (err.name === 'ContentValidationError') {
-              addLog('error', `[Test Chat] Content validation failed. Retrying with next key...`);
-              res.end();
+              addLog('error', `[Test Chat] Content validation failed before flushing to frontend. Regenerating with next key...`);
               return attemptTestChat(keyIndex + 1);
             }
             addLog('error', `[Test Chat] Stream read error: ${err.message}`);
+            if (!res.headersSent) {
+              return res.status(502).json({ error: `Stream read error: ${err.message}` });
+            }
             res.end();
           }
         } else {
@@ -825,8 +913,8 @@ function createGatewayApp() {
           
           const validation = validateContent(contentToCheck);
           if (!validation.valid) {
-            const unclosedStr = validation.unclosedTags.map(t => `<${t}>`).join(', ');
-            addLog('error', `[Test Chat - Content Validation] Non-stream response rejected: unclosed HTML tags detected: ${unclosedStr}. Retrying with next key...`);
+            const validationIssue = formatValidationIssue(validation);
+            addLog('error', `[Test Chat - Content Validation] Non-stream response rejected: invalid or unclosed tag detected: ${validationIssue}. Regenerating with next key...`);
             return attemptTestChat(keyIndex + 1);
           }
 
