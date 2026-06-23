@@ -5,6 +5,91 @@ import {
   ArrowDown, RefreshCw, X, Play, CopyCheck
 } from 'lucide-react';
 import packageJson from '../package.json';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
+
+const markdownComponents = {
+  a: ({ node, ...props }) => (
+    <a
+      {...props}
+      className="md-link"
+      target="_blank"
+      rel="noopener noreferrer"
+    />
+  ),
+
+  table: ({ node, ...props }) => (
+    <div className="md-table-wrap">
+      <table {...props} className="md-table" />
+    </div>
+  ),
+
+  th: ({ node, style, ...props }) => (
+    <th {...props} style={style} />
+  ),
+
+  td: ({ node, style, ...props }) => (
+    <td {...props} style={style} />
+  ),
+
+  pre: ({ node, ...props }) => (
+    <pre {...props} className="md-code-block" />
+  ),
+
+  code: ({ node, inline, className, children, ...props }) => {
+    const isInline = inline || !className;
+
+    if (isInline) {
+      return (
+        <code {...props} className="md-inline-code">
+          {children}
+        </code>
+      );
+    }
+
+    return (
+      <code {...props} className={className}>
+        {children}
+      </code>
+    );
+  },
+
+  blockquote: ({ node, ...props }) => (
+    <blockquote {...props} />
+  ),
+
+  ul: ({ node, ...props }) => (
+    <ul {...props} className="md-list" />
+  ),
+
+  ol: ({ node, ...props }) => (
+    <ol {...props} className="md-list" />
+  ),
+
+  input: ({ node, ...props }) => (
+    <input {...props} disabled />
+  ),
+
+  img: ({ node, ...props }) => (
+    <img {...props} className="md-image" loading="lazy" />
+  ),
+
+  hr: ({ node, ...props }) => (
+    <hr {...props} />
+  )
+};
+
+function MarkdownContent({ children }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkBreaks]}
+      components={markdownComponents}
+    >
+      {children || ''}
+    </ReactMarkdown>
+  );
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -48,6 +133,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef(null);
+  const logsEndRef = useRef(null);
 
   // 拖曳排序狀態
   const [draggedModelIndex, setDraggedModelIndex] = useState(null);
@@ -63,6 +149,13 @@ export default function App() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatHistory]);
+
+  // 即時日誌採用終端機風格：舊訊息在上、新訊息往下追加，並自動跟隨最新一行。
+  useEffect(() => {
+    if (dashboardSubTab === 'logs' && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [logs, dashboardSubTab]);
 
   // 清理非阻塞提示的計時器
   useEffect(() => {
@@ -531,32 +624,6 @@ export default function App() {
     }
   };
 
-  // 簡易 Markdown 解析（粗體、斜體、連結、標題、清單、程式碼區塊、分隔線）
-  const parseMarkdown = (text) => {
-    if (!text) return '';
-    let html = text
-      .replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>')
-      .replace(/^#{6}\s*(.*$)/gm, '<h6>$1</h6>')
-      .replace(/^#{5}\s*(.*$)/gm, '<h5>$1</h5>')
-      .replace(/^#{4}\s*(.*$)/gm, '<h4>$1</h4>')
-      .replace(/^#{3}\s*(.*$)/gm, '<h3>$1</h3>')
-      .replace(/^#{2}\s*(.*$)/gm, '<h2>$1</h2>')
-      .replace(/^#{1}\s*(.*$)/gm, '<h1>$1</h1>')
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/`{3}(\w+)?\n([\s\S]*?)`{3}/g, '<pre style="background:rgba(0,0,0,0.3);padding:8px 12px;border-radius:6px;overflow:auto;font-size:13px;line-height:1.5;border:1px solid rgba(255,255,255,0.05);"><code>$2</code></pre>')
-      .replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:4px;font-size:13px;">$1</code>')
-      .replace(/^-{3,}$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:12px 0;"/>')
-      .replace(/^>\s*(.*$)/gm, '<blockquote style="border-left:3px solid #10b981;padding-left:12px;margin:8px 0;color:var(--text-secondary);">$1</blockquote>')
-      .replace(/^\s*[-*]\s+(.*$)/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul style="margin:8px 0;padding-left:20px;list-style-type:disc;">${match}</ul>`)
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#10b981;text-decoration:underline;">$1</a>');
-    // 處理段落換行
-    const lines = html.split('\n');
-    return lines.map(line => line.trim() ? `<p style="margin:4px 0;line-height:1.6;">${line}</p>` : '').join('');
-  };
-
   const copyToClipboard = (text, id) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
@@ -935,34 +1002,35 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <RefreshCw size={14} className={logs.length > 0 ? 'animate-spin' : ''} style={{ animationDuration: '3s', color: '#10b981' }} />
-                  <span style={{ fontSize: '16px', fontWeight: '700' }}>Gateway 即時轉發日誌 (最多 100 筆)</span>
+                  <span style={{ fontSize: '16px', fontWeight: '700' }}>Gateway 即時轉發日誌（最多 100 筆）</span>
                 </div>
                 <button className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={fetchLogsAndStats}>
                   手動刷新
                 </button>
               </div>
 
-              <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0, 0, 0, 0.2)', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '10px' }}>
+              <div className="terminal-log-panel">
                 {logs.length === 0 ? (
                   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px' }}>
                     等待 Cline/OpenCode 連線請求，或目前無轉發日誌。
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div className="terminal-log-lines">
                     {logs.map((log, index) => {
-                      let logColor = '#fff';
+                      let logColor = '#dbeafe';
                       let icon = 'ℹ️';
                       if (log.type === 'success') { logColor = '#34d399'; icon = '✅'; }
                       else if (log.type === 'warning') { logColor = '#fbbf24'; icon = '⚠️'; }
                       else if (log.type === 'error') { logColor = '#f87171'; icon = '❌'; }
                       return (
-                        <div key={index} style={{ fontSize: '14px', display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px', lineHeight: '1.4' }}>
-                          <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>[{formatTaiwanTime(log.timestamp)}]</span>
-                          <span style={{ flexShrink: 0 }}>{icon}</span>
-                          <span style={{ color: logColor, wordBreak: 'break-all' }}>{log.message}</span>
+                        <div key={`${log.timestamp}-${index}`} className="terminal-log-line">
+                          <span className="terminal-log-time">[{formatTaiwanTime(log.timestamp)}]</span>
+                          <span className="terminal-log-icon">{icon}</span>
+                          <span className="terminal-log-message" style={{ color: logColor }}>{log.message}</span>
                         </div>
                       );
                     })}
+                    <div ref={logsEndRef} />
                   </div>
                 )}
               </div>
@@ -1240,7 +1308,7 @@ export default function App() {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {['ALL', 'Llama', 'Mistral', 'Gemma', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Nvidia', 'Other'].map(cat => (
+                    {['ALL', 'Llama', 'GPT', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Nvidia', 'Other'].map(cat => (
                       <button 
                         key={cat}
                         className={`btn ${selectedCategory === cat ? 'btn-primary' : 'btn-secondary'}`}
@@ -1263,6 +1331,7 @@ export default function App() {
                       const getModelCategory = (modelId) => {
                         const id = modelId.toLowerCase();
                         if (id.includes('llama')) return 'Llama';
+                        if (id.includes('gpt')) return 'GPT';
                         if (id.includes('mistral') || id.includes('mixtral')) return 'Mistral';
                         if (id.includes('gemma')) return 'Gemma';
                         if (id.includes('nemotron')) return 'Nemotron';
@@ -1355,6 +1424,7 @@ export default function App() {
                       </div>
                     </div>
                     <div 
+                      className="markdown-body"
                       style={{ 
                         background: 'rgba(0,0,0,0.3)', 
                         padding: '12px', 
@@ -1364,10 +1434,12 @@ export default function App() {
                         color: 'var(--text-secondary)',
                         lineHeight: '1.6',
                         maxHeight: '200px',
-                        overflowY: 'auto'
+                        overflowY: 'auto',
+                        whiteSpace: 'normal'
                       }}
-                      dangerouslySetInnerHTML={{ __html: parseMarkdown(r.content) }}
-                    />
+                    >
+                      <MarkdownContent>{r.content}</MarkdownContent>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1446,6 +1518,7 @@ export default function App() {
                         const id = modelId.toLowerCase();
                         if (id.includes('llama')) return 'Llama';
                         if (id.includes('mistral') || id.includes('mixtral')) return 'Mistral';
+                        if (id.includes('gpt')) return 'GPT';
                         if (id.includes('gemma')) return 'Gemma';
                         if (id.includes('nemotron')) return 'Nemotron';
                         if (id.includes('phi')) return 'Phi';
@@ -1460,11 +1533,19 @@ export default function App() {
                         acc[cat].push(m);
                         return acc;
                       }, {});
-                      return Object.entries(grouped).map(([cat, items]) => (
+                      return Object.entries(grouped).sort(([a], [b]) => {
+                        if (a === 'Other') return 1;
+                        if (b === 'Other') return -1;
+                        return a.localeCompare(b);
+                      }).map(([cat, items]) => (
                         <optgroup key={cat} label={cat}>
-                          {items.map(m => (
-                            <option key={m.id} value={m.id}>{m.name} ({m.id.split('/').shift()})</option>
-                          ))}
+                          {items
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map(m => (
+                              <option key={m.id} value={m.id}>
+                                {m.name} ({m.id.split('/').shift()})
+                              </option>
+                            ))}
                         </optgroup>
                       ));
                     })()
@@ -1516,20 +1597,22 @@ export default function App() {
                           borderRadius: isUser ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                           fontSize: '15px',
                           lineHeight: '1.5',
-                          whiteSpace: 'pre-wrap',
+                          whiteSpace: isUser ? 'pre-wrap' : 'normal',
                           wordBreak: 'break-word',
-                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                          userSelect: 'text'
                         }}>
                           <span style={{ fontSize: '12px', fontWeight: '700', opacity: 0.7, display: 'block', marginBottom: '6px' }}>
                             {isUser ? '👤 使用者 (User)' : `🤖 NIM 助手 (${selectedTestModel.split('/').pop()})`}
                           </span>
                           {isUser ? (
-                            msg.content
+                            <div style={{ whiteSpace: 'pre-wrap' }}>
+                              {msg.content}
+                            </div>
                           ) : (
-                            <div 
-                              dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
-                              style={{ fontSize: '14px', lineHeight: '1.6' }}
-                            />
+                            <div className="markdown-body" style={{ fontSize: '14px', lineHeight: '1.6' }}>
+                              <MarkdownContent>{msg.content}</MarkdownContent>
+                            </div>
                           )}
                           {isChatting && !msg.content && index === chatHistory.length - 1 && 'Thinking...'}
                         </div>

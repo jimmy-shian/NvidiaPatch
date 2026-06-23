@@ -31,7 +31,6 @@ body {
   height: 100vh;
   overflow: hidden;
   user-select: none;
-  -webkit-user-select: none;
 }
 
 /* 捲軸美化 */
@@ -175,34 +174,189 @@ input, textarea, pre, code, [contenteditable="true"] {
   -webkit-user-select: text !important;
 }
 
-/* 模型同步非阻塞提示 */
-.sync-notice {
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  padding: 8px 12px;
-  border-radius: 8px;
+/* Markdown 渲染內容：支援表格、清單、引用、程式碼、圖片與一般排版 */
+.markdown-body {
+  color: inherit;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0 8px 22px;
+  padding-left: 18px;
+}
+
+.markdown-body li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+
+.markdown-body li > p {
+  margin: 2px 0;
+}
+
+.markdown-body .contains-task-list {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.markdown-body .task-list-item {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.markdown-body .task-list-item input {
+  margin-top: 6px;
+  accent-color: #10b981;
+}
+
+.markdown-body .md-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.markdown-body .md-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  white-space: normal;
   font-size: 13px;
-  font-weight: 600;
-  line-height: 1.4;
-  animation: fadeIn 0.18s ease-out forwards;
-  transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
-.sync-notice-info {
-  background: rgba(59, 130, 246, 0.1);
-  color: #93c5fd;
-  border: 1px solid rgba(59, 130, 246, 0.22);
+.markdown-body .md-table th,
+.markdown-body .md-table td {
+  padding: 9px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
 }
 
-.sync-notice-success {
-  background: rgba(16, 185, 129, 0.1);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.22);
+.markdown-body .md-table th:last-child,
+.markdown-body .md-table td:last-child {
+  border-right: none;
 }
 
-.sync-notice-error {
-  background: rgba(239, 68, 68, 0.1);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.22);
+.markdown-body .md-table tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown-body .md-table thead th {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.markdown-body .md-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.markdown-body .md-inline-code {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 0.92em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  word-break: break-word;
+}
+
+.markdown-body .md-code-block {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 10px 0;
+  overflow: auto;
+  white-space: pre;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.markdown-body blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid #10b981;
+  background: rgba(16, 185, 129, 0.07);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-secondary);
+}
+
+.markdown-body img.md-image {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 10px;
+  margin: 10px 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* CMD / training-console style live logs */
+.terminal-log-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(2, 6, 23, 0.72);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  scroll-behavior: smooth;
+}
+
+.terminal-log-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 100%;
+}
+
+.terminal-log-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 24px;
+  padding: 3px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.025);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.terminal-log-line:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.terminal-log-time {
+  flex: 0 0 5.4rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.terminal-log-icon {
+  flex: 0 0 1.35rem;
+  text-align: center;
+  line-height: 1.45;
+}
+
+.terminal-log-message {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
