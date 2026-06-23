@@ -2,6 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const { apiKeys, modelsConfig, stats, rules } = require('./database');
 
+// Windows CMD 若不是 UTF-8 code page，中文 console 可能會顯示亂碼。
+// 這裡先要求 Node 以 UTF-8 寫出；若終端仍亂碼，請在 CMD 先執行 chcp 65001。
+try {
+  process.stdout.setDefaultEncoding('utf8');
+  process.stderr.setDefaultEncoding('utf8');
+} catch (err) {
+  // ignore
+}
+
 function getTaiwanDateParts(date = new Date()) {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Taipei',
@@ -32,11 +41,35 @@ function addLog(type, message) {
     type, // 'info', 'success', 'warning', 'error'
     message
   };
-  activeLogs.unshift(logEntry);
+
+  // 像終端機一樣由上往下追加：舊日誌在上，新日誌在下。
+  // 超過 100 筆時移除最舊的一筆，保留最近 100 筆。
+  activeLogs.push(logEntry);
   if (activeLogs.length > 100) {
-    activeLogs.pop();
+    activeLogs.shift();
   }
+
   console.log(`[Gateway Log] [${type.toUpperCase()}] ${message}`);
+}
+
+// 模型層級錯誤冷卻表：避免同一個壞掉或逾時的模型被多個並行請求反覆測試
+const modelFailureCooldowns = new Map();
+let gatewayRequestSequence = 0;
+const MODEL_FAILURE_COOLDOWN_MS = 60000;
+
+function isModelInFailureCooldown(modelId) {
+  const until = modelFailureCooldowns.get(modelId);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    modelFailureCooldowns.delete(modelId);
+    return false;
+  }
+  return true;
+}
+
+function markModelFailureCooldown(modelId, reason = '模型層級失敗') {
+  modelFailureCooldowns.set(modelId, Date.now() + MODEL_FAILURE_COOLDOWN_MS);
+  addLog('warning', `模型「${modelId}」已進入 ${Math.round(MODEL_FAILURE_COOLDOWN_MS / 1000)} 秒暫時跳過狀態；原因：${reason}`);
 }
 
 /**
@@ -177,7 +210,7 @@ function createGatewayApp() {
     if (!key) return res.status(400).json({ error: 'Key is required' });
     const result = apiKeys.add(key.trim());
     if (result.success) {
-      addLog('info', `Added new API Key: ${key.substring(0, 10)}...`);
+      addLog('info', `已新增 API Key：${key.substring(0, 10)}...`);
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
@@ -186,15 +219,15 @@ function createGatewayApp() {
 
   app.delete('/api/keys/:id', (req, res) => {
     apiKeys.delete(req.params.id);
-    addLog('info', `Deleted API Key ID: ${req.params.id}`);
+    addLog('info', `已刪除 API Key ID：${req.params.id}`);
     res.json({ success: true });
   });
 
   app.post('/api/keys/test', async (req, res) => {
-    addLog('info', 'Starting manual connectivity test for all API keys...');
+    addLog('info', '開始手動測試所有 API Key 連線狀態。');
     const results = await apiKeys.testAllKeys();
     const successCount = results.filter(r => r.success).length;
-    addLog('info', `Key test complete. ${successCount}/${results.length} keys are active.`);
+    addLog('info', `API Key 測試完成：${successCount}/${results.length} 把 Key 可用。`);
     res.json(results);
   });
 
@@ -210,7 +243,7 @@ function createGatewayApp() {
       return res.status(400).json({ error: 'Models list is required' });
     }
     const result = modelsConfig.savePriorityList(models, groupId);
-    addLog('info', `Updated model priority order for Group ${result.groupId}: ${models.join(' -> ')}`);
+    addLog('info', `已更新第 ${result.groupId} 組模型順位：${models.join(' -> ')}`);
     res.json({ success: true, groupId: result.groupId });
   });
 
@@ -221,7 +254,7 @@ function createGatewayApp() {
   app.post('/api/models/groups/active', (req, res) => {
     const { groupId } = req.body;
     const result = modelsConfig.setActiveGroup(groupId);
-    addLog('info', `Switched active model priority group to Group ${result.activeGroup}.`);
+    addLog('info', `已切換目前使用的模型順位組別為第 ${result.activeGroup} 組。`);
     res.json(result);
   });
 
@@ -242,11 +275,11 @@ function createGatewayApp() {
     const activeKeys = apiKeys.getActiveKeys();
     const fallbackKey = activeKeys.length > 0 ? activeKeys[0].key_value : null;
 
-    addLog('info', 'Syncing Free Endpoint models from NVIDIA Build catalog...');
+    addLog('info', '開始從 NVIDIA Build 目錄同步 Free Endpoint 模型清單。');
     const result = await modelsConfig.syncFromNvidia(fallbackKey);
     if (result.success) {
-      const expectedText = result.expectedCount ? ` / NVIDIA Build expected ${result.expectedCount}` : '';
-      addLog('success', `Free Endpoint model sync complete. Parsed ${result.parsedCount}, saved ${result.savedCount}${expectedText}. Source: ${result.source || 'NVIDIA Build catalog'}`);
+      const expectedText = result.expectedCount ? ` / NVIDIA Build 標示 ${result.expectedCount} 個` : '';
+      addLog('success', `Free Endpoint 模型清單同步完成：解析 ${result.parsedCount} 個，入庫 ${result.savedCount} 個${expectedText}。來源：${result.source || 'NVIDIA Build 目錄'}`);
       res.json({
         success: true,
         count: result.savedCount,
@@ -256,7 +289,7 @@ function createGatewayApp() {
         source: result.source || null
       });
     } else {
-      addLog('error', `Sync models failed: ${result.error}`);
+      addLog('error', `同步模型失敗：${result.error}`);
       res.status(500).json({ error: result.error });
     }
   });
@@ -271,7 +304,7 @@ function createGatewayApp() {
     if (!title || !content) return res.status(400).json({ error: 'Title and Content are required' });
     const result = rules.add(title, content);
     if (result.success) {
-      addLog('info', `Added custom rule: "${title}"`);
+      addLog('info', `已新增自訂規範：「${title}」`);
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
@@ -282,7 +315,7 @@ function createGatewayApp() {
     const { title, content } = req.body;
     const result = rules.update(req.params.id, title, content);
     if (result.success) {
-      addLog('info', `Updated custom rule ID: ${req.params.id}`);
+      addLog('info', `已更新自訂規範 ID：${req.params.id}`);
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
@@ -292,7 +325,7 @@ function createGatewayApp() {
   app.delete('/api/rules/:id', (req, res) => {
     const result = rules.delete(req.params.id);
     if (result.success) {
-      addLog('info', `Deleted custom rule ID: ${req.params.id}`);
+      addLog('info', `已刪除自訂規範 ID：${req.params.id}`);
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
@@ -370,46 +403,87 @@ function createGatewayApp() {
   app.post('/v1/chat/completions', async (req, res) => {
     const originalBody = req.body;
     const stream = !!originalBody.stream;
+    const requestId = ++gatewayRequestSequence;
+    const requestStartedAt = Date.now();
+    let clientDisconnected = false;
+    let responseFinished = false;
+
+    res.once('finish', () => {
+      responseFinished = true;
+    });
+
+    res.once('close', () => {
+      if (!responseFinished && !res.writableEnded) {
+        clientDisconnected = true;
+        addLog('warning', `請求 #${requestId}：客戶端在 Gateway 回傳完成前中斷連線，停止後續模型調度。`);
+      }
+    });
+
+    function isClientGone() {
+      return clientDisconnected || req.aborted || res.destroyed || res.writableEnded;
+    }
 
     // 支援 Mock 測試環境變數
     const nvidiaBaseUrl = process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
 
-    // 撈出排序好的模型
+    // 撈出排序好的模型；若某模型剛發生逾時 / 5xx / 串流錯誤，會先暫時略過，避免並行請求繼續打同一顆壞模型。
     const configuredModels = modelsConfig.getAll().filter(m => m.is_active === 1);
     if (configuredModels.length === 0) {
-      addLog('error', 'Gateway request rejected: No active models configured in priority list.');
+      addLog('error', `請求 #${requestId} 已拒絕：目前沒有任何啟用中的模型順位。`);
       return res.status(500).json({ error: { message: 'No active models configured in the Gateway' } });
     }
 
-    addLog('info', `New request received (stream=${stream}). Initializing dispatch...`);
+    addLog('info', `請求 #${requestId} 已收到（stream=${stream}），開始依模型順位調度。`);
 
-    // ========== 新邏輯：模型順位替換 + Key 輪詢 + 完整重試機制 ==========
-    //
-    // 概念說明：
-    // - 每個模型都有自己的一輪測試（所有可用 key 輪過一次 = 一輪）
-    // - 如果某一輪中所有 key 都失敗，等待 15 秒後進行下一輪
-    // - 一個模型最多嘗試 MAX_ROUNDS_PER_MODEL 輪（2 輪）
-    // - 所有輪都失敗後，才切換到下一個順位的模型
-    // - 所有模型都失敗，才爆錯
+    res.once('finish', () => {
+      if (res.statusCode >= 400) {
+        addLog('error', `請求 #${requestId}：HTTP 回應完成但狀態碼為 ${res.statusCode}。`);
+      }
+    });
 
-    const MAX_ROUNDS_PER_MODEL = 2;  // 每個模型最多嘗試 2 輪
-    const ROUND_DELAY_MS = 15000;     // 每輪之間的等待時間（15 秒）
+    // ========== 調度規則 ==========
+    // - 429：Key 層級問題，只換 Key，同模型繼續。
+    // - 401 / 403：Key 層級問題，停用該 Key 後換 Key。
+    // - timeout / network / 404 / 5xx / 503 / JSON 解析錯 / 串流讀取錯 / 內容校驗失敗：模型層級問題，立即切下一個模型。
+    // - 只有全部 Key 都是 Key 層級錯誤時，才允許同一模型進入下一輪。
+    const MAX_ROUNDS_PER_MODEL = 2;
+    const ROUND_DELAY_MS = Number(process.env.GATEWAY_ROUND_DELAY_MS || 15000);
+    // Cline/OpenAI 相容客戶端通常會在長時間沒有任何回應時自行判定失敗。
+    // 因為 Gateway 會先完整校驗串流內容再回傳，模型層級逾時必須比客戶端逾時更短，避免「後端成功、前端已放棄」的假成功。
+    const REQUEST_TIMEOUT_MS = Number(process.env.GATEWAY_MODEL_TIMEOUT_MS || 12000);
+    const STREAM_READ_TIMEOUT_MS = Number(process.env.GATEWAY_STREAM_READ_TIMEOUT_MS || 12000);
 
-    /**
-     * 對指定的模型和 key 發送請求
-     * @param {object} model - 模型配置對象
-     * @param {object} key - API Key 對象
-     * @param {number} keyIndex - 當前 key 在 availableKeys 中的索引
-     * @returns {Promise<object>} { success, shouldFallbackModel, statusCode, errorText }
-     */
+    function getMaskedKey(keyValue) {
+      const value = String(keyValue || '');
+      return value ? `...${value.substring(Math.max(0, value.length - 8))}` : '未知 Key';
+    }
+
+    async function readTextSafely(response) {
+      try {
+        return await response.text();
+      } catch (err) {
+        return '';
+      }
+    }
+
     async function sendSingleRequest(model, key, keyIndex, availableKeys) {
       const modelId = model.model_id;
       const forwardBody = { ...originalBody, model: modelId };
 
-      let abortController = new AbortController();
+      const abortController = new AbortController();
+      let abortReason = 'timeout';
       const timeoutId = setTimeout(() => {
+        abortReason = 'timeout';
         abortController.abort();
-      }, 120000); // 120 秒超時
+      }, REQUEST_TIMEOUT_MS);
+
+      const abortOnClientDisconnect = () => {
+        if (!responseFinished && !abortController.signal.aborted) {
+          abortReason = 'client_disconnected';
+          abortController.abort();
+        }
+      };
+      res.once('close', abortOnClientDisconnect);
 
       try {
         const response = await fetch(`${nvidiaBaseUrl}/chat/completions`, {
@@ -423,367 +497,492 @@ function createGatewayApp() {
         });
 
         clearTimeout(timeoutId);
+        res.off('close', abortOnClientDisconnect);
 
-        // A. 處理 200 成功響應
         if (response.ok) {
           apiKeys.recordSuccess(key.id);
-          stats.recordRequest(true);
-          addLog('success', `Request succeeded using [Priority ${model.priority}] ${modelId}`);
-          return { success: true, response, shouldFallbackModel: false };
+          addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到 NVIDIA HTTP 200，開始校驗回傳內容。`);
+          return { success: true, response, retryScope: 'none' };
         }
 
-        // B. 處理 503 Service Unavailable - 模型暫時不可用
-        if (response.status === 503) {
-          const errText = await response.text();
-          addLog('warning', `Received HTTP 503 from NVIDIA for model ${modelId} with Key ID ${key.id}. Model temporarily unavailable. Error: ${errText.substring(0, 100)}`);
-          apiKeys.recordFailure(key.id, `HTTP 503: ${errText.substring(0, 50)}`);
-          // 503 代表模型有問題，需要切換模型，但先繼續試下一把 key
-          return { success: false, shouldFallbackModel: true, statusCode: 503, errorText: errText };
-        }
-
-        // C. 處理 429 速率限制響應
         if (response.status === 429) {
-          addLog('warning', `Received 429 Rate Limit on Key ID ${key.id}. Entering 30s Cooldown.`);
-          apiKeys.recordCooldown(key.id, 30, '429 Rate Limit Exceeded');
-          // 換下一把 key，繼續當前模型
-          return { success: false, shouldFallbackModel: false, statusCode: 429, errorText: '' };
+          const errText = await readTextSafely(response);
+          addLog('warning', `請求 #${requestId}：Key ID ${key.id} 遇到 429 速率限制，該 Key 進入 30 秒冷卻，改用下一把 Key 繼續同一模型「${modelId}」。`);
+          apiKeys.recordCooldown(key.id, 30, errText || '429 Rate Limit Exceeded');
+          return { success: false, retryScope: 'key', statusCode: 429, errorText: errText || '429 Rate Limit Exceeded' };
         }
 
-        // D. 處理 5xx 伺服器錯誤（不含 503，503 已在前面處理）
-        if (response.status >= 500) {
-          const errText = await response.text();
-          addLog('warning', `Received HTTP ${response.status} from NVIDIA for model ${modelId} with Key ID ${key.id}. Error: ${errText.substring(0, 100)}`);
-          apiKeys.recordFailure(key.id, `HTTP ${response.status}: ${errText.substring(0, 50)}`);
-          // 5xx 也視為模型問題，需要模型順位替換
-          return { success: false, shouldFallbackModel: true, statusCode: response.status, errorText: errText };
-        }
-
-        // E. 處理 404 找不到模型
-        if (response.status === 404) {
-          const errText = await response.text();
-          addLog('warning', `Received HTTP 404 from NVIDIA for model ${modelId}. Model may be deprecated or account lacks access. Error: ${errText.substring(0, 100)}`);
-          // 404 表示模型不存在，應該直接切換到下一個模型
-          return { success: false, shouldFallbackModel: true, statusCode: 404, errorText: errText };
-        }
-
-        // F. 處理 401/403 憑證無效錯誤
         if (response.status === 401 || response.status === 403) {
-          const errText = await response.text();
-          addLog('error', `Invalid Key error (HTTP ${response.status}) on Key ID ${key.id}. Key is now set to Inactive.`);
+          const errText = await readTextSafely(response);
+          addLog('error', `請求 #${requestId}：Key ID ${key.id} 回傳 HTTP ${response.status}，已設為停用，改用下一把 Key 繼續同一模型「${modelId}」。`);
           apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
-          // 換下一把 key
-          return { success: false, shouldFallbackModel: false, statusCode: response.status, errorText: errText };
+          return { success: false, retryScope: 'key', statusCode: response.status, errorText: errText };
         }
 
-        // G. 處理其他 4xx 錯誤 (400 Bad Request 等) - 直接報錯
-        const errText = await response.text();
-        addLog('error', `Non-retryable client error (HTTP ${response.status}): ${errText}`);
-        stats.recordRequest(false);
-        return { success: false, fatal: true, statusCode: response.status, errorText: errText, response };
+        if (response.status === 404) {
+          const errText = await readTextSafely(response);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 404，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+          apiKeys.recordFailure(key.id, `ModelNotFound HTTP 404: ${errText.substring(0, 80)}`);
+          return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 404, errorText: errText || 'HTTP 404' };
+        }
+
+        if (response.status >= 500) {
+          const errText = await readTextSafely(response);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP ${response.status}，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+          apiKeys.recordFailure(key.id, `ModelServerError HTTP ${response.status}: ${errText.substring(0, 80)}`);
+          return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText || `HTTP ${response.status}` };
+        }
+
+        const errText = await readTextSafely(response);
+        addLog('error', `請求 #${requestId}：NVIDIA 回傳不可重試的 HTTP ${response.status}，停止本次調度。錯誤：${errText.substring(0, 200)}`);
+        return { success: false, retryScope: 'fatal', fatal: true, statusCode: response.status, errorText: errText, response };
 
       } catch (err) {
         clearTimeout(timeoutId);
-        
-        // 捕捉 Timeout / Network Abort 錯誤
+        res.off('close', abortOnClientDisconnect);
+
         if (err.name === 'AbortError') {
-          addLog('warning', `NVIDIA request timed out (120s) for model ${modelId} with Key ID ${key.id}`);
-          apiKeys.recordFailure(key.id, 'Request timeout (120s)');
-          // 超時視同模型問題
-          return { success: false, shouldFallbackModel: true, statusCode: 0, errorText: 'Request timeout (120s)' };
+          if (abortReason === 'client_disconnected' || isClientGone()) {
+            addLog('warning', `請求 #${requestId}：客戶端已中斷連線，取消模型「${modelId}」的 NVIDIA 請求。`);
+            return { success: false, clientGone: true, retryScope: 'client', errorText: '客戶端已中斷連線' };
+          }
+          const msg = `請求逾時 ${REQUEST_TIMEOUT_MS / 1000} 秒`;
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生逾時，立即切換下一個模型，不再測試此模型的其他 Key。`);
+          apiKeys.recordFailure(key.id, msg);
+          return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: msg };
         }
 
-        // 其他網路連線異常
-        addLog('warning', `Network/Connection error for model ${modelId} with Key ID ${key.id}: ${err.message}`);
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生網路或連線錯誤，立即切換下一個模型。錯誤：${err.message}`);
         apiKeys.recordFailure(key.id, `Network Error: ${err.message}`);
-        // 網路異常也視為需要模型順位替換
-        return { success: false, shouldFallbackModel: true, statusCode: 0, errorText: err.message };
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: err.message };
       }
     }
 
-    /**
-     * 嘗試使用所有 key 對當前模型進行一輪測試
-     * @param {object} model - 當前模型
-     * @param {number} roundNumber - 第幾輪 (1-based)
-     * @returns {Promise<object>} { success, response, forceFallbackModel }
-     */
-    async function tryModelWithAllKeys(model, roundNumber) {
-      const modelId = model.model_id;
+    function readStreamChunkWithTimeout(reader) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`串流讀取逾時 ${STREAM_READ_TIMEOUT_MS / 1000} 秒`));
+        }, STREAM_READ_TIMEOUT_MS);
 
-      // 取得目前所有可用的健康的 Key
-      const availableKeys = apiKeys.getActiveKeys();
-      if (availableKeys.length === 0) {
-        addLog('error', `[Round ${roundNumber}] Model: ${modelId} failed. No healthy API Keys available.`);
-        return { success: false, forceFallbackModel: true };
-      }
-
-      addLog('info', `[Round ${roundNumber}/${MAX_ROUNDS_PER_MODEL}] Trying model: [Priority ${model.priority}] ${modelId} with ${availableKeys.length} key(s)...`);
-
-      // 逐一嘗試所有 key
-      for (let keyIndex = 0; keyIndex < availableKeys.length; keyIndex++) {
-        const selectedKey = availableKeys[keyIndex];
-        addLog('info', `[Round ${roundNumber}] Attempting model: ${modelId} with Key: ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} (Key ${keyIndex + 1}/${availableKeys.length})`);
-
-        const result = await sendSingleRequest(model, selectedKey, keyIndex, availableKeys);
-
-        // 成功
-        if (result.success) {
-          // === 在回傳前檢查內容是否有未閉合的 HTML tag ===
-          // 對非串流模式：直接檢查 JSON 中的 content
-          // 對串流模式：需要先讀取完整串流內容再做檢查
-          const isStream = !!originalBody.stream;
-          
-          if (isStream) {
-            // 串流模式：緩衝所有內容，等完整收到後再校驗
-            try {
-              const reader = result.response.body.getReader();
-              const decoder = new TextDecoder();
-              let streamBuffer = '';
-              let fullContent = '';
-              const sseLines = [];
-              let streamDone = false;
-
-              function readStreamFully() {
-                return reader.read().then(({ done, value }) => {
-                  if (done) {
-                    streamDone = true;
-                    // 處理最後殘留的 buffer
-                    if (streamBuffer) {
-                      const lines = streamBuffer.split('\n');
-                      for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (trimmed.startsWith('data:')) {
-                          const dataStr = trimmed.slice(5).trim();
-                          if (dataStr !== '[DONE]') {
-                            try {
-                              const chunk = JSON.parse(dataStr);
-                              if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
-                                fullContent += chunk.choices[0].delta.content;
-                              }
-                            } catch (e) {
-                              // 忽略解析錯誤
-                            }
-                          }
-                        }
-                      }
-                    }
-
-                    // 對完整內容做校驗
-                    const validation = validateContent(fullContent);
-                    if (!validation.valid) {
-                      const validationIssue = formatValidationIssue(validation);
-                      addLog('error', `[Round ${roundNumber}] Content validation failed for stream response from model ${modelId}: invalid or unclosed tag detected: ${validationIssue}. Content length: ${fullContent.length}. Rejecting response and regenerating with the next available attempt.`);
-                      apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-                      // 回傳失敗，讓外層繼續嘗試下一把 key 或下一輪
-                      return { success: false, shouldFallbackModel: false, statusCode: 0, errorText: `Content validation failed: ${validationIssue}` };
-                    }
-
-                    // 校驗通過，回傳 success + 所有 SSE 行
-                    return { success: true, response: result.response, sseLines };
-                  }
-
-                  streamBuffer += decoder.decode(value, { stream: true });
-                  const lines = streamBuffer.split('\n');
-                  streamBuffer = lines.pop();
-
-                  for (const line of lines) {
-                    const trimmed = line.trim();
-                    sseLines.push(line.endsWith('\r') ? line.slice(0, -1) : line);
-                    if (trimmed.startsWith('data:')) {
-                      const dataStr = trimmed.slice(5).trim();
-                      if (dataStr !== '[DONE]') {
-                        try {
-                          const chunk = JSON.parse(dataStr);
-                          if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
-                            fullContent += chunk.choices[0].delta.content;
-                          }
-                        } catch (e) {
-                          // 忽略解析錯誤
-                        }
-                      }
-                    }
-                  }
-
-                  return readStreamFully();
-                });
-              }
-
-              const streamResult = await readStreamFully();
-              
-              // 如果串流校驗失敗（包含未閉合 tag），streamResult 會是 { success: false, ... }
-              // 這裡繼續迭代下一把 key
-              if (!streamResult.success) {
-                continue;
-              }
-              
-              // 串流校驗通過，回傳 success 並附上 SSE lines 和原始 response
-              return { success: true, response: result.response, sseLines: streamResult.sseLines, streamContent: fullContent };
-            } catch (err) {
-              addLog('error', `[Round ${roundNumber}] Stream read/validation error for model ${modelId}: ${err.message}`);
-              apiKeys.recordFailure(selectedKey.id, `Stream validation error: ${err.message}`);
-              // 繼續嘗試下一把 key
-              continue;
-            }
-          } else {
-            // 非串流模式：直接解析 JSON 並檢查 content
-            try {
-              const json = await result.response.json();
-              let contentToCheck = '';
-              if (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) {
-                contentToCheck = json.choices[0].message.content;
-              }
-
-              const validation = validateContent(contentToCheck);
-              if (!validation.valid) {
-                const validationIssue = formatValidationIssue(validation);
-                addLog('error', `[Round ${roundNumber}] Content validation failed for model ${modelId}: invalid or unclosed tag detected: ${validationIssue}. Content length: ${contentToCheck.length}. Rejecting response and regenerating with the next available attempt.`);
-                apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-                // 繼續嘗試下一把 key
-                continue;
-              }
-
-              // 校驗通過，回傳 success + json
-              return { success: true, response: result.response, jsonData: json };
-            } catch (err) {
-              if (err.message && err.message.includes('Content validation')) {
-                // 這已經是 validation error，繼續嘗試下一把 key
-                continue;
-              }
-              // 其他 JSON 解析錯誤
-              addLog('error', `[Round ${roundNumber}] JSON parse error for model ${modelId}: ${err.message}`);
-              apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
-              continue;
-            }
-          }
-        }
-
-        // 致命錯誤（非可重試的 4xx），直接回傳
-        if (result.fatal) {
-          return { success: false, fatal: true, statusCode: result.statusCode, errorText: result.errorText, response: result.response };
-        }
-
-        // shouldFallbackModel 為 true 表示這個 key 的錯誤顯示模型有問題
-        // 但我們還是要繼續試完剩下的 key，因為可能有 key-specific 的問題
-        // 如果所有 key 都返回 shouldFallbackModel，則表示模型確實有問題
-        
-        // 記錄最後一次錯誤資訊以便判斷
-        if (keyIndex === availableKeys.length - 1) {
-          // 這是最後一把 key 了
-        }
-      }
-
-      // 所有 key 都嘗試完畢，檢查是否需要切換模型
-      // 如果所有 key 都失敗，返回 forceFallbackModel = true 觸發模型切換
-      addLog('warning', `[Round ${roundNumber}] All ${availableKeys.length} key(s) failed for model ${modelId}.`);
-      return { success: false, forceFallbackModel: true };
-    }
-
-    /**
-     * 主要調度邏輯：模型順位替換 + 多輪重試
-     */
-    async function dispatchRequest() {
-      // 遍歷所有模型（按優先順序）
-      for (let modelIndex = 0; modelIndex < configuredModels.length; modelIndex++) {
-        const currentModel = configuredModels[modelIndex];
-        const modelId = currentModel.model_id;
-
-        addLog('info', `=== Starting dispatch for model: [Priority ${currentModel.priority}] ${modelId} ===`);
-
-        // 對此模型進行多輪測試
-        let anyKeyWasAvailable = false;
-        
-        for (let round = 1; round <= MAX_ROUNDS_PER_MODEL; round++) {
-          // 在開始新一輪前先檢查是否有可用的 key
-          const availableKeys = apiKeys.getActiveKeys();
-          if (availableKeys.length === 0) {
-            addLog('error', `Model ${modelId}: No healthy API Keys available in pool. Breaking out of rounds.`);
-            break; // 跳出 round 迴圈，嘗試下一個模型
-          }
-
-          // 如果不是第一輪，等待 15 秒
-          if (round > 1) {
-            addLog('info', `Model ${modelId}: Round ${round - 1} completed with all keys failed. Waiting ${ROUND_DELAY_MS / 1000}s before round ${round}...`);
-            await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
-          }
-
-          const result = await tryModelWithAllKeys(currentModel, round);
-
-          // 成功！（content validation 已在 tryModelWithAllKeys 中完成）
-          if (result.success) {
-            const stream = !!originalBody.stream;
-            
-            if (stream) {
-              // 串流模式：直接 flush 已校驗通過的 SSE lines
-              res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-              res.setHeader('Cache-Control', 'no-cache, no-transform');
-              res.setHeader('Connection', 'keep-alive');
-              res.setHeader('X-Accel-Buffering', 'no');
-              res.flushHeaders();
-
-              for (const line of result.sseLines) {
-                // 對每個 data line 添加 model 覆蓋
-                if (line.startsWith('data:') && !line.includes('[DONE]')) {
-                  try {
-                    const dataStr = line.slice(5).trim();
-                    const chunk = JSON.parse(dataStr);
-                    if (chunk && typeof chunk === 'object') {
-                      chunk.model = originalBody.model || 'patcher-main';
-                      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-                      if (typeof res.flush === 'function') res.flush();
-                      continue;
-                    }
-                  } catch (e) {
-                    // 解析失敗，直接寫入原始行
-                  }
-                }
-                res.write(line + '\n');
-                if (typeof res.flush === 'function') res.flush();
-              }
-              res.write('data: [DONE]\n\n');
-              if (typeof res.flush === 'function') res.flush();
-              res.end();
-            } else {
-              // 非串流模式：直接回傳已校驗通過的 JSON
-              const json = result.jsonData;
-              if (json && typeof json === 'object') {
-                json.model = originalBody.model || 'patcher-main';
-              }
-              res.setHeader('Content-Type', 'application/json; charset=utf-8');
-              res.json(json);
-            }
-            return; // 成功，結束
-          }
-
-          // 致命錯誤
-          if (result.fatal) {
-            stats.recordRequest(false);
-            return res.status(result.statusCode).send(result.errorText);
-          }
-
-          // forceFallbackModel 表示所有 key 都失敗，需要切換模型或等待下一輪
-          if (result.forceFallbackModel) {
-            addLog('info', `Model ${modelId}: All keys exhausted in round ${round}.`);
-            
-            // 如果不是最後一輪，會繼續下一輪（先等待 15 秒）
-            if (round < MAX_ROUNDS_PER_MODEL) {
-              addLog('info', `Model ${modelId}: Will retry in next round (${round + 1}/${MAX_ROUNDS_PER_MODEL}) after delay.`);
-            }
-          }
-        }
-
-        // 此模型的所有輪數都消耗完畢且失敗，切換到下一個模型
-        addLog('warning', `Model ${modelId}: Exhausted all ${MAX_ROUNDS_PER_MODEL} rounds without success. Falling back to next model.`);
-      }
-
-      // 所有模型都失敗
-      addLog('error', 'All configured models exhausted all retry rounds. No model could fulfill the request.');
-      stats.recordRequest(false);
-      return res.status(503).json({
-        error: { message: 'All configured models exhausted all retry rounds. Check Gateway logs for details. Every model was tried for the configured retry rounds with 15s delays between rounds, but none succeeded.' }
+        reader.read()
+          .then((result) => {
+            clearTimeout(timer);
+            resolve(result);
+          })
+          .catch((err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
       });
     }
 
-    // 開始調度（內容校驗已在 tryModelWithAllKeys 中處理，無需外層 try/catch）
-    await dispatchRequest();
+    function extractContentFromSseLine(line) {
+      const trimmed = String(line || '').trim();
+      if (!trimmed.startsWith('data:')) return '';
+
+      const dataStr = trimmed.slice(5).trim();
+      if (!dataStr || dataStr === '[DONE]') return '';
+
+      try {
+        const chunk = JSON.parse(dataStr);
+        return chunk?.choices?.[0]?.delta?.content || '';
+      } catch (err) {
+        return '';
+      }
+    }
+
+    async function validateSuccessfulResponse(model, selectedKey, result, roundNumber) {
+      const modelId = model.model_id;
+      const isStream = !!originalBody.stream;
+
+      if (isStream) {
+        const reader = result.response.body.getReader();
+        const decoder = new TextDecoder();
+        let streamBuffer = '';
+        let fullContent = '';
+        const sseLines = [];
+
+        const consumeLine = (rawLine) => {
+          const cleanLine = String(rawLine || '').endsWith('\r')
+            ? String(rawLine || '').slice(0, -1)
+            : String(rawLine || '');
+
+          sseLines.push(cleanLine);
+          fullContent += extractContentFromSseLine(cleanLine);
+        };
+
+        try {
+          while (true) {
+            if (isClientGone()) {
+              throw new Error('客戶端已中斷連線');
+            }
+            const { done, value } = await readStreamChunkWithTimeout(reader);
+            if (done) break;
+
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              consumeLine(line);
+            }
+          }
+
+          if (streamBuffer.trim()) {
+            consumeLine(streamBuffer);
+          }
+
+          const validation = validateContent(fullContent);
+          if (!validation.valid) {
+            const validationIssue = formatValidationIssue(validation);
+            addLog('error', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+            apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+            return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: `內容校驗失敗：${validationIssue}` };
+          }
+
+          return { success: true, response: result.response, sseLines, streamContent: fullContent };
+        } catch (err) {
+          try {
+            await reader.cancel();
+          } catch (cancelErr) {
+            // ignore
+          }
+
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+          apiKeys.recordFailure(selectedKey.id, `串流讀取錯誤：${err.message}`);
+          return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: err.message };
+        }
+      }
+
+      try {
+        const json = await result.response.json();
+        const contentToCheck = json?.choices?.[0]?.message?.content || '';
+
+        const validation = validateContent(contentToCheck);
+        if (!validation.valid) {
+          const validationIssue = formatValidationIssue(validation);
+          addLog('error', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+          apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+          return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: `內容校驗失敗：${validationIssue}` };
+        }
+
+        return { success: true, response: result.response, jsonData: json };
+      } catch (err) {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 解析失敗（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+        apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
+        return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: err.message };
+      }
+    }
+
+    async function tryModelWithKeys(model, roundNumber) {
+      const modelId = model.model_id;
+      const availableKeys = apiKeys.getActiveKeys();
+
+      if (availableKeys.length === 0) {
+        addLog('error', `請求 #${requestId}：模型「${modelId}」無法嘗試，因為目前沒有健康的 API Key。`);
+        return { success: false, noHealthyKeys: true, errorText: '目前沒有健康的 API Key。' };
+      }
+
+      addLog('info', `請求 #${requestId}：第 ${roundNumber}/${MAX_ROUNDS_PER_MODEL} 輪，嘗試模型「${modelId}」（順位 ${model.priority}），可用 Key 數：${availableKeys.length}。`);
+
+      for (let keyIndex = 0; keyIndex < availableKeys.length; keyIndex += 1) {
+        const selectedKey = availableKeys[keyIndex];
+        addLog('info', `請求 #${requestId}：模型「${modelId}」使用 ${getMaskedKey(selectedKey.key_value)}（Key ${keyIndex + 1}/${availableKeys.length}，ID ${selectedKey.id}）。`);
+
+        const result = await sendSingleRequest(model, selectedKey, keyIndex, availableKeys);
+
+        if (result.clientGone) {
+          return { success: false, clientGone: true, errorText: result.errorText || '客戶端已中斷連線' };
+        }
+
+        if (result.success) {
+          const validated = await validateSuccessfulResponse(model, selectedKey, result, roundNumber);
+          if (validated.success) return validated;
+
+          if (validated.forceFallbackModel || validated.retryScope === 'model') {
+            return {
+              success: false,
+              forceFallbackModel: true,
+              errorText: validated.errorText || '模型回傳內容無效'
+            };
+          }
+
+          // 理論上不會走到這裡；保守起見當成 Key 層級錯誤繼續下一把 Key。
+          continue;
+        }
+
+        if (result.fatal || result.retryScope === 'fatal') {
+          return {
+            success: false,
+            fatal: true,
+            statusCode: result.statusCode,
+            errorText: result.errorText,
+            response: result.response
+          };
+        }
+
+        // 模型層級錯誤：timeout / 404 / 5xx / network，不再測試其他 Key，也不進下一輪，直接切下一模型。
+        if (result.shouldFallbackModel || result.retryScope === 'model') {
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」發生模型層級失敗（${result.errorText || `HTTP ${result.statusCode}` }），立即略過剩餘 Key 並切換下一個模型。`);
+          return {
+            success: false,
+            forceFallbackModel: true,
+            statusCode: result.statusCode,
+            errorText: result.errorText || `HTTP ${result.statusCode}`
+          };
+        }
+
+        // Key 層級錯誤：429 / 401 / 403，才繼續下一把 Key。
+        addLog('info', `請求 #${requestId}：模型「${modelId}」遇到 Key 層級錯誤，繼續嘗試下一把 Key。`);
+      }
+
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」本輪所有 Key 都因 Key 層級錯誤失敗。`);
+      return { success: false, forceRetrySameModel: true, errorText: '本輪所有 Key 都因 Key 層級錯誤失敗。' };
+    }
+
+    function buildSafeSsePayload(sseLines, clientModelId = 'patcher-main') {
+      const outputLines = [];
+      let validChunkCount = 0;
+
+      for (const rawLine of Array.isArray(sseLines) ? sseLines : []) {
+        const trimmed = String(rawLine ?? '').trim();
+
+        // OpenAI 相容串流只輸出 data: JSON 與最後的 [DONE]。
+        // 其他 event/comment/raw line 全部略過，避免 Cline 的 OpenAI SSE parser 被非預期行弄壞。
+        if (!trimmed.startsWith('data:')) continue;
+
+        const dataStr = trimmed.slice(5).trim();
+        if (!dataStr || dataStr === '[DONE]') continue;
+
+        try {
+          const chunk = JSON.parse(dataStr);
+          if (!chunk || typeof chunk !== 'object' || !Array.isArray(chunk.choices)) {
+            continue;
+          }
+
+          chunk.id = chunk.id || `chatcmpl-gateway-${requestId}`;
+          chunk.object = chunk.object || 'chat.completion.chunk';
+          chunk.created = chunk.created || Math.floor(Date.now() / 1000);
+          chunk.model = clientModelId;
+
+          outputLines.push(`data: ${JSON.stringify(chunk)}`);
+          validChunkCount += 1;
+        } catch (err) {
+          addLog('warning', `請求 #${requestId}：略過一行無法解析的 NVIDIA 串流資料，避免傳給 Cline 後造成 OpenAI SSE 解析失敗。`);
+        }
+      }
+
+      if (validChunkCount === 0) {
+        return '';
+      }
+
+      outputLines.push('data: [DONE]');
+      return `${outputLines.join('\n\n')}\n\n`;
+    }
+
+    function waitForResponseFinish(sendAction) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+
+        const cleanup = () => {
+          res.off('finish', onFinish);
+          res.off('close', onClose);
+          res.off('error', onError);
+        };
+
+        const onFinish = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+
+        const onClose = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(new Error('客戶端在回傳完成前中斷連線'));
+        };
+
+        const onError = (err) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(err);
+        };
+
+        res.once('finish', onFinish);
+        res.once('close', onClose);
+        res.once('error', onError);
+
+        try {
+          sendAction();
+        } catch (err) {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(err);
+          }
+        }
+      });
+    }
+
+    async function sendValidatedResponse(result, currentModel) {
+      const modelId = currentModel.model_id;
+      const clientModelId = originalBody.model || 'patcher-main';
+
+      if (isClientGone()) {
+        throw new Error('客戶端已中斷連線，略過回傳。');
+      }
+
+      if (stream) {
+        const ssePayload = buildSafeSsePayload(result.sseLines, clientModelId);
+        if (!ssePayload || !ssePayload.includes('data:') || !ssePayload.includes('[DONE]')) {
+          throw new Error('校驗後的串流內容是空的或格式不正確。');
+        }
+
+        await waitForResponseFinish(() => {
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('Connection', 'keep-alive');
+          res.setHeader('X-Accel-Buffering', 'no');
+          res.status(200).send(ssePayload);
+        });
+      } else {
+        const json = result.jsonData;
+        if (json && typeof json === 'object') {
+          json.model = clientModelId;
+        }
+
+        await waitForResponseFinish(() => {
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.json(json);
+        });
+      }
+
+      stats.recordRequest(true);
+      const durationMs = Date.now() - requestStartedAt;
+      addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。`);
+    }
+
+    async function dispatchRequest() {
+      let skippedByCooldown = 0;
+
+      for (let modelIndex = 0; modelIndex < configuredModels.length; modelIndex += 1) {
+        if (isClientGone()) {
+          addLog('warning', `請求 #${requestId}：客戶端已中斷，停止模型順位調度。`);
+          return;
+        }
+
+        const currentModel = configuredModels[modelIndex];
+        const modelId = currentModel.model_id;
+
+        if (isModelInFailureCooldown(modelId)) {
+          skippedByCooldown += 1;
+          addLog('info', `請求 #${requestId}：模型「${modelId}」仍在暫時跳過狀態，直接嘗試下一個模型。`);
+          continue;
+        }
+
+        addLog('info', `請求 #${requestId}：開始調度模型「${modelId}」（順位 ${currentModel.priority}）。`);
+
+        for (let round = 1; round <= MAX_ROUNDS_PER_MODEL; round += 1) {
+          if (round > 1) {
+            addLog('info', `請求 #${requestId}：模型「${modelId}」只有 Key 層級錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪。`);
+            await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
+          }
+
+          const result = await tryModelWithKeys(currentModel, round);
+
+          if (result.clientGone) {
+            addLog('warning', `請求 #${requestId}：客戶端已中斷，停止後續模型調度。`);
+            return;
+          }
+
+          if (result.success) {
+            try {
+              await sendValidatedResponse(result, currentModel);
+              return;
+            } catch (err) {
+              addLog('error', `請求 #${requestId}：模型「${modelId}」在 Gateway 包裝回傳時失敗（${err.message}），改切下一個模型。`);
+              if (!res.headersSent && !res.writableEnded) {
+                markModelFailureCooldown(modelId, `Gateway 回傳包裝失敗：${err.message}`);
+                break;
+              }
+              try {
+                res.end();
+              } catch (endErr) {
+                // ignore
+              }
+              return;
+            }
+          }
+
+          if (result.noHealthyKeys) {
+            stats.recordRequest(false);
+            addLog('error', `請求 #${requestId}：目前沒有健康的 API Key，停止模型切換。`);
+            return res.status(503).json({
+              error: {
+                message: 'Gateway 目前沒有健康的 API Key。',
+                detail: result.errorText || '所有 Key 可能都已停用或正在冷卻。'
+              }
+            });
+          }
+
+          if (result.fatal) {
+            stats.recordRequest(false);
+            addLog('error', `請求 #${requestId}：遇到不可重試錯誤 HTTP ${result.statusCode}，停止調度。`);
+            return res.status(result.statusCode || 400).send(result.errorText || '不可重試錯誤');
+          }
+
+          if (result.forceFallbackModel) {
+            markModelFailureCooldown(modelId, result.errorText || '模型層級失敗');
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪判定為模型層級失敗，跳過剩餘輪次並切換下一個模型。`);
+            break;
+          }
+
+          if (result.forceRetrySameModel) {
+            addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪僅發生 Key 層級錯誤。`);
+            if (round < MAX_ROUNDS_PER_MODEL) {
+              continue;
+            }
+          }
+        }
+
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」未能完成本次請求，嘗試下一個模型。`);
+      }
+
+      stats.recordRequest(false);
+      const cooldownText = skippedByCooldown > 0 ? `，其中 ${skippedByCooldown} 個模型因近期模型層級失敗被暫時跳過` : '';
+      addLog('error', `請求 #${requestId}：所有模型都無法完成請求${cooldownText}。`);
+      return res.status(503).json({
+        error: {
+          message: '所有設定中的模型都無法完成請求，請檢查 Gateway 日誌。',
+          detail: `所有模型都無法完成請求${cooldownText}。`
+        }
+      });
+    }
+
+    try {
+      await dispatchRequest();
+    } catch (err) {
+      addLog('error', `請求 #${requestId}：Gateway 調度流程發生未預期錯誤：${err.stack || err.message}`);
+      stats.recordRequest(false);
+
+      if (!res.headersSent && !res.writableEnded) {
+        return res.status(502).json({
+          error: {
+            message: 'Gateway dispatch crashed before a response could be sent. Check Gateway logs.',
+            detail: err.message
+          }
+        });
+      }
+
+      try {
+        res.end();
+      } catch (endErr) {
+        // ignore
+      }
+    }
   });
 
   // 7. 測試專用聊天端點 (繞過模型重寫與 Fallback，直接使用健康的金鑰對特定 NIM 模型發送對話)
@@ -803,12 +1002,12 @@ function createGatewayApp() {
 
     async function attemptTestChat(keyIndex) {
       if (keyIndex >= activeKeys.length) {
-        addLog('error', `[Test Chat] All available keys (${activeKeys.length}) failed to test model ${model}.`);
-        return res.status(502).json({ error: `All active keys failed for model ${model}.` });
+        addLog('error', `[模型測試] 所有可用 Key（${activeKeys.length} 把）都無法測試模型「${model}」。`);
+        return res.status(502).json({ error: `模型「${model}」測試失敗：所有可用 Key 都無法完成請求。` });
       }
 
       const selectedKey = activeKeys[keyIndex];
-      addLog('info', `[Test Chat] Testing model: ${model} with Key: ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} (Attempt ${keyIndex + 1}/${activeKeys.length})`);
+      addLog('info', `[模型測試] 使用 Key ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} 測試模型「${model}」（第 ${keyIndex + 1}/${activeKeys.length} 把）。`);
 
       let abortController = new AbortController();
       const timeoutId = setTimeout(() => {
@@ -830,7 +1029,7 @@ function createGatewayApp() {
 
         if (!response.ok) {
           const errText = await response.text();
-          addLog('warning', `[Test Chat] NIM replied with HTTP ${response.status} using Key ID ${selectedKey.id}: ${errText}`);
+          addLog('warning', `[模型測試] Key ID ${selectedKey.id} 收到 NIM HTTP ${response.status}：${errText}`);
 
           // 如果是 404, 401, 403, 429, 5xx 錯誤，更換下一個 Key 嘗試
           if (response.status === 404 || response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
@@ -859,7 +1058,7 @@ function createGatewayApp() {
                 const validation = validateContent(fullContent);
                 if (!validation.valid) {
                   validationFailed = true;
-                  addLog('error', `[Test Chat - Content Validation] Stream response rejected: invalid or unclosed tag detected: ${formatValidationIssue(validation)}.`);
+                  addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${formatValidationIssue(validation)}。`);
                   // 不發送任何內容，直接拋錯
                   throw new ContentValidationError(fullContent);
                 }
@@ -903,12 +1102,12 @@ function createGatewayApp() {
             }
           } catch (err) {
             if (err.name === 'ContentValidationError') {
-              addLog('error', `[Test Chat] Content validation failed before flushing to frontend. Regenerating with next key...`);
+              addLog('error', `[模型測試] 內容在送到前端前校驗失敗，改用下一把 Key 重新生成。`);
               return attemptTestChat(keyIndex + 1);
             }
-            addLog('error', `[Test Chat] Stream read error: ${err.message}`);
+            addLog('error', `[模型測試] 串流讀取錯誤：${err.message}`);
             if (!res.headersSent) {
-              return res.status(502).json({ error: `Stream read error: ${err.message}` });
+              return res.status(502).json({ error: `串流讀取錯誤：${err.message}` });
             }
             res.end();
           }
@@ -923,7 +1122,7 @@ function createGatewayApp() {
           const validation = validateContent(contentToCheck);
           if (!validation.valid) {
             const validationIssue = formatValidationIssue(validation);
-            addLog('error', `[Test Chat - Content Validation] Non-stream response rejected: invalid or unclosed tag detected: ${validationIssue}. Regenerating with next key...`);
+            addLog('error', `[模型測試｜內容校驗] 非串流回應被拒收：偵測到不合法或未閉合標籤：${validationIssue}，改用下一把 Key 重新生成。`);
             return attemptTestChat(keyIndex + 1);
           }
 
@@ -931,7 +1130,7 @@ function createGatewayApp() {
         }
       } catch (err) {
         clearTimeout(timeoutId);
-        addLog('warning', `[Test Chat] Request failed with Key ID ${selectedKey.id}: ${err.message}`);
+        addLog('warning', `[模型測試] Key ID ${selectedKey.id} 請求失敗：${err.message}`);
         return attemptTestChat(keyIndex + 1);
       }
     }
@@ -948,7 +1147,7 @@ function createGatewayApp() {
  */
 class ContentValidationError extends Error {
   constructor(content) {
-    super('Content validation failed: unclosed HTML tags detected');
+    super('內容校驗失敗：偵測到未閉合的 HTML/XML 標籤');
     this.name = 'ContentValidationError';
     this.content = content;
   }
