@@ -399,13 +399,8 @@ function initDatabase(dbPath) {
 
   return db;
 }
-
 function insertPresetRules() {
   // 每次啟動皆清理並重新載入最新的 preset 規則，以確保規範內容與程式碼同步
-  db.exec("DELETE FROM rules WHERE is_preset = 1");
-
-  const insert = db.prepare("INSERT INTO rules (title, content, is_preset) VALUES (?, ?, 1)");
-
   const presets = [
     {
       title: "Git Commit 與開發工作流規範",
@@ -414,7 +409,7 @@ function insertPresetRules() {
 
 Commit 訊息格式：
 
-1. 標題使用「【新增】、【調整】、【修改】、【重構】、【修復】、【文件】、【測試】」分類。
+1. 標題使用「【新增、【調整】、【修改】、【重構】、【修復】、【文件】、【測試】」分類。
 2. 標題格式為：【分類】具體變更主題。
 3. 細項說明使用「-」開頭，描述實際完成的變更。
 4. 避免模糊描述，例如「更新一些東西」、「修一下」、「調整功能」。
@@ -560,13 +555,27 @@ Grill-Me 提問格式：
     }
   ];
 
-  const transaction = db.transaction((rules) => {
-    for (const rule of rules) {
+  const insert = db.prepare("INSERT INTO rules (title, content, is_preset) VALUES (?, ?, 1)");
+
+  try {
+    db.exec("BEGIN TRANSACTION");
+
+    db.exec("DELETE FROM rules WHERE is_preset = 1");
+
+    for (const rule of presets) {
       insert.run(rule.title, rule.content);
     }
-  });
 
-  transaction(presets);
+    db.exec("COMMIT");
+  } catch (err) {
+    try {
+      db.exec("ROLLBACK");
+    } catch (rollbackErr) {
+      console.error("Rollback preset rules failed:", rollbackErr.message);
+    }
+
+    throw err;
+  }
 }
 
 // 輔助函式庫 - API Keys
@@ -772,6 +781,24 @@ const modelsConfig = {
       return null;
     }
   },
+  getLastSyncParsedCount: () => {
+    try {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'last_model_sync_parsed_count'").get();
+      const count = row && row.value ? Number(row.value) : null;
+      return Number.isFinite(count) && count >= 0 ? count : null;
+    } catch (err) {
+      return null;
+    }
+  },
+  getLastSyncSavedCount: () => {
+    try {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'last_model_sync_saved_count'").get();
+      const count = row && row.value ? Number(row.value) : null;
+      return Number.isFinite(count) && count >= 0 ? count : null;
+    } catch (err) {
+      return null;
+    }
+  },
   syncFromNvidia: async (keyValue = null) => {
     try {
       let catalog;
@@ -830,6 +857,10 @@ const modelsConfig = {
         return { success: false, error: 'Invalid data format from NVIDIA Build catalog' };
       }
 
+      // parsedCount 代表從同步來源實際解析出的模型數量；不是寫死數值。
+      // savedCount 代表去重後實際寫入 available_models 的數量。
+      const parsedCount = catalog.models.length;
+
       // 先清空原本的可用模型
       db.exec("DELETE FROM available_models");
       const insert = db.prepare("INSERT OR REPLACE INTO available_models (id, name, created) VALUES (?, ?, ?)");
@@ -869,13 +900,18 @@ const modelsConfig = {
         });
       }
       // 記錄同步時間至 metadata 表
+      const savedCount = syncedModels.length;
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(getTaiwanISOString());
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_source', ?)").run(catalog.source || NVIDIA_BUILD_FREE_ENDPOINT_URL);
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_expected_count', ?)").run(catalog.expectedCount ? String(catalog.expectedCount) : '');
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_parsed_count', ?)").run(String(parsedCount));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_saved_count', ?)").run(String(savedCount));
 
       return {
         success: true,
-        count: syncedModels.length,
+        count: savedCount,
+        parsedCount,
+        savedCount,
         expectedCount: catalog.expectedCount,
         source: catalog.source || NVIDIA_BUILD_FREE_ENDPOINT_URL
       };
