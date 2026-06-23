@@ -282,6 +282,7 @@ const modelsConfig = {
   },
   syncFromNvidia: async (keyValue) => {
     try {
+      // 1. 從 NVIDIA NIM API 取得所有模型清單
       const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
         method: 'GET',
         headers: {
@@ -292,46 +293,137 @@ const modelsConfig = {
         throw new Error(`NVIDIA API replied with HTTP ${res.status}`);
       }
       const data = await res.json();
-      if (data && Array.isArray(data.data)) {
-        // 先清空原本的可用模型
-        db.exec("DELETE FROM available_models");
-        const insert = db.prepare("INSERT OR REPLACE INTO available_models (id, name, created) VALUES (?, ?, ?)");
-        
-        // 篩選出免費預覽/互動對話的 NVIDIA NIM 模型 (nimType: nim_type_preview)
-        const chatKeywords = ['instruct', '-it', 'chat', 'coder', 'vision', 'flash', 'large', 'medium', 'small', 'mini', 'pro', 'glm', 'kimi', 'minimax', 'solar', 'seed-oss'];
-        const excludeKeywords = ['embed', 'gliner', 'pii', 'safety', 'guard', 'reward', 'translate', 'detector', 'calibration', 'parse', 'clip'];
-        const excludeExact = ['meta/codellama-70b', 'meta/llama2-70b'];
-
-        const filteredModels = [];
-        data.data.forEach(m => {
-          const modelIdLower = m.id.toLowerCase();
-          if (excludeExact.includes(m.id)) return;
-          if (excludeKeywords.some(ex => modelIdLower.includes(ex))) return;
-          if (chatKeywords.some(kw => modelIdLower.includes(kw))) {
-            insert.run(m.id, m.id.split('/').pop(), m.created || 0);
-            filteredModels.push(m.id);
-          }
-        });
-
-        // 預設將第一順位等自動設定（如果原本是空的）
-        const check = db.prepare("SELECT COUNT(*) as count FROM models_config").get();
-        if (check.count === 0 && filteredModels.length > 0) {
-          // 找出一些常見的優秀模型先當預設
-          const primary = filteredModels.find(id => id.includes('llama3-70b') || id.includes('llama-3.1-70b')) || filteredModels[0];
-          const fallback1 = filteredModels.find(id => (id.includes('llama3-8b') || id.includes('llama-3.1-8b')) && id !== primary) || filteredModels[1];
-          const fallback2 = filteredModels.find(id => id.includes('mixtral') && id !== primary && id !== fallback1) || filteredModels[2];
-
-          const activePresets = [primary, fallback1, fallback2].filter(Boolean);
-          const insertConfig = db.prepare("INSERT INTO models_config (model_id, priority, is_active) VALUES (?, ?, 1)");
-          activePresets.forEach((mId, index) => {
-            insertConfig.run(mId, index + 1);
-          });
-        }
-        // 記錄同步時間至 metadata 表
-        db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(getTaiwanISOString());
-        return { success: true, count: filteredModels.length };
+      if (!data || !Array.isArray(data.data)) {
+        return { success: false, error: 'Invalid data format from NVIDIA API' };
       }
-      return { success: false, error: 'Invalid data format from NVIDIA API' };
+
+      // 2. 從 build.nvidia.com 爬取 Free Endpoint (nim_type_preview) 模型名稱
+      //    抓取四個分頁的純文字內容，從中提取 Free Endpoint 標籤後的模型名稱
+      const buildBaseUrl = 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview';
+      const pageTexts = [];
+      
+      for (let page = 1; page <= 4; page++) {
+        try {
+          const pageRes = await fetch(`${buildBaseUrl}&page=${page}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+          });
+          if (pageRes.ok) {
+            const text = await pageRes.text();
+            pageTexts.push(text);
+          }
+        } catch (err) {
+          // 忽略個別分頁的錯誤，繼續下一頁
+          console.error(`Failed to fetch build.nvidia.com page ${page}:`, err.message);
+        }
+      }
+
+      // 從所有分頁文字中提取 Free Endpoint 模型名稱
+      // 策略：擷取包含 "Free Endpoint" 標籤的 HTML 片段，再從中提取模型 slug
+      // 由於頁面格式可能變更，使用更寬鬆的多階段匹配
+      const freeEndpointSlugs = new Set();
+      for (const text of pageTexts) {
+        // 方法1：匹配 "Free Endpoint" 附近的所有潛在模型 slug（小寫字母開頭，含數字、連字符、底線、點號）
+        // 放寬匹配：在 Free Endpoint 前後 200 字元範圍內尋找所有 slug 模式
+        const broadRegex = /Free\s*Endpoint/gi;
+        let broadMatch;
+        while ((broadMatch = broadRegex.exec(text)) !== null) {
+          const start = Math.max(0, broadMatch.index - 100);
+          const end = Math.min(text.length, broadMatch.index + broadMatch[0].length + 300);
+          const context = text.substring(start, end);
+          
+          // 在上下文中提取所有可能的模型 slug 模式
+          const slugRegex = /\b([a-z][a-z0-9._-]{2,}(?:\.[a-z0-9]+)*(?:-[a-z0-9]+)*)\b/g;
+          let slugMatch;
+          while ((slugMatch = slugRegex.exec(context)) !== null) {
+            const candidate = slugMatch[1].toLowerCase();
+            // 過濾掉明顯不是模型名稱的 token
+            if (candidate.length > 3 && 
+                !/^(items|per|page|of|pages|models|sort|by|next|prev|span|div|class|data|type|href|http|https|json|html|text|meta|link|style|script|head|body|true|false|null|undefined|this|that|with|from|your|have|been|were|they|will|also|each|more|some|than|when|what|which|their|about|other|after|before|first|last|only|over|under|every|both|such|like|just|also|most|very|well|much|many|some|then|them|here|there|where|these|those|since|until|while|still|never|always|often|would|could|should|might|cannot|being|doing|said|used|made|based|including|between|through)$/i.test(candidate)) {
+              freeEndpointSlugs.add(candidate);
+            }
+          }
+        }
+        
+        // 方法2：備用 - 直接匹配原本的嚴格模式（相容舊格式）
+        const strictRegex = /Free\s*Endpoint\s*:?\s*([a-z][a-z0-9._-]+(?:\.[a-z0-9]+)*(?:-[a-z0-9]+)*)/gi;
+        let strictMatch;
+        while ((strictMatch = strictRegex.exec(text)) !== null) {
+          const slug = strictMatch[1].toLowerCase();
+          if (slug.length > 3 && !/^(items|per|page|of|pages|models|sort|by)$/i.test(slug)) {
+            freeEndpointSlugs.add(slug);
+          }
+        }
+      }
+
+      console.log(`[syncFromNvidia] Extracted ${freeEndpointSlugs.size} Free Endpoint model slugs from build.nvidia.com`);
+
+      // 若無法從 build.nvidia.com 取得任何模型名稱，保留現有資料不清空
+      if (freeEndpointSlugs.size === 0) {
+        console.log('[syncFromNvidia] Warning: No Free Endpoint models extracted from build.nvidia.com. Keeping existing available models.');
+        const existingCount = db.prepare("SELECT COUNT(*) as count FROM available_models").get();
+        return { success: true, count: existingCount.count, warning: 'Could not fetch Free Endpoint list from build.nvidia.com. Existing model list preserved.' };
+      }
+
+      // 3. 做交集比對：只保留同時存在於 /v1/models 和 build.nvidia.com 的模型
+      const insert = db.prepare("INSERT OR REPLACE INTO available_models (id, name, created) VALUES (?, ?, ?)");
+      
+      // 先清空原本的可用模型
+      db.exec("DELETE FROM available_models");
+      
+      const filteredModels = [];
+      for (const m of data.data) {
+        const modelName = m.id.split('/').pop().toLowerCase();
+        // 檢查模型名稱是否在 Free Endpoint 列表中
+        // 同時也檢查完整 ID 的部分匹配（處理 publisher 名稱大小寫差異）
+        const fullIdLower = m.id.toLowerCase();
+        let isFreeEndpoint = freeEndpointSlugs.has(modelName);
+        
+        // 如果精確名稱不匹配，嘗試模糊比對（處理名稱中的版本後綴差異）
+        if (!isFreeEndpoint) {
+          for (const slug of freeEndpointSlugs) {
+            if (fullIdLower.includes(slug) || slug.includes(modelName) || modelName.includes(slug)) {
+              isFreeEndpoint = true;
+              break;
+            }
+          }
+        }
+        
+        if (isFreeEndpoint) {
+          insert.run(m.id, m.id.split('/').pop(), m.created || 0);
+          filteredModels.push(m.id);
+        }
+      }
+
+      console.log(`[syncFromNvidia] Matched ${filteredModels.length} models after cross-referencing with build.nvidia.com`);
+
+      // 4. 預設將第一順位等自動設定（如果原本是空的）
+      const check = db.prepare("SELECT COUNT(*) as count FROM models_config").get();
+      if (check.count === 0 && filteredModels.length > 0) {
+        // 優先選擇常見的優秀 LLM 模型當預設
+        const primary = filteredModels.find(id => 
+          id.includes('llama-3.3-70b') || id.includes('llama-3.1-70b') || id.includes('llama3-70b')
+        ) || filteredModels[0];
+        
+        const fallback1 = filteredModels.find(id => 
+          (id.includes('llama-3.3') || id.includes('llama-3.1-8b') || id.includes('llama3-8b') || id.includes('gemma')) && id !== primary
+        ) || filteredModels[1];
+        
+        const fallback2 = filteredModels.find(id => 
+          (id.includes('mixtral') || id.includes('qwen') || id.includes('deepseek')) && id !== primary && id !== fallback1
+        ) || filteredModels[2];
+
+        const activePresets = [primary, fallback1, fallback2].filter(Boolean);
+        const insertConfig = db.prepare("INSERT INTO models_config (model_id, priority, is_active) VALUES (?, ?, 1)");
+        activePresets.forEach((mId, index) => {
+          insertConfig.run(mId, index + 1);
+        });
+      }
+
+      // 記錄同步時間至 metadata 表
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(getTaiwanISOString());
+      return { success: true, count: filteredModels.length };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -383,10 +475,11 @@ const stats = {
     `).all().reverse();
   },
   recordRequest: (isSuccess) => {
+    // 使用台灣時間 (UTC+8) 來計算小時區段
     const now = new Date();
-    // 格式化 YYYY-MM-DD HH:00
+    const taiwanNow = new Date(now.getTime() + (8 * 60 * 60 * 1000));
     const pad = (n) => String(n).padStart(2, '0');
-    const hourStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:00`;
+    const hourStr = `${taiwanNow.getUTCFullYear()}-${pad(taiwanNow.getUTCMonth() + 1)}-${pad(taiwanNow.getUTCDate())} ${pad(taiwanNow.getUTCHours())}:00`;
 
     // 先插入或忽略
     db.prepare("INSERT OR IGNORE INTO stats (hour, request_count, success_count, error_count) VALUES (?, 0, 0, 0)").run(hourStr);
