@@ -2,10 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const { apiKeys, modelsConfig, stats, rules } = require('./database');
 
+function getTaiwanISOString() {
+  const now = new Date();
+  const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+  return taiwanTime.toISOString().replace('Z', '+08:00');
+}
+
 const activeLogs = [];
 function addLog(type, message) {
   const logEntry = {
-    timestamp: new Date().toISOString(),
+    timestamp: getTaiwanISOString(),
     type, // 'info', 'success', 'warning', 'error'
     message
   };
@@ -14,6 +20,58 @@ function addLog(type, message) {
     activeLogs.pop();
   }
   console.log(`[Gateway Log] [${type.toUpperCase()}] ${message}`);
+}
+
+/**
+ * 檢查內容中是否有未閉合的 HTML/XML tag
+ * @param {string} content - 要檢查的字串
+ * @returns {{ valid: boolean, unclosedTags: string[] }} 檢查結果
+ */
+function validateContent(content) {
+  if (!content || typeof content !== 'string') {
+    return { valid: true, unclosedTags: [] };
+  }
+
+  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(\/?)>/g;
+  const selfClosingTags = new Set([
+    'br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base', 'col',
+    'embed', 'source', 'track', 'wbr', 'frame', 'param', 'spacer',
+    'circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect', 'stop', 'use'
+  ]);
+  
+  const stack = [];
+  let match;
+
+  while ((match = tagRegex.exec(content)) !== null) {
+    const fullTag = match[0];
+    const tagName = match[1].toLowerCase();
+    const isSelfClosing = match[2] === '/' || fullTag.endsWith('/>');
+    const isClosingTag = fullTag.startsWith('</');
+
+    // 自閉合 tag 跳過
+    if (isSelfClosing || selfClosingTags.has(tagName)) {
+      continue;
+    }
+
+    if (isClosingTag) {
+      // 閉合 tag：檢查 stack 頂端是否匹配
+      if (stack.length > 0 && stack[stack.length - 1] === tagName) {
+        stack.pop();
+      } else {
+        // 不匹配的閉合 tag，忽略（可能是內容中的文字）
+        // 但如果是 stack 為空卻出現閉合 tag，不視為錯誤
+      }
+    } else {
+      // 開頭 tag：push 進 stack
+      stack.push(tagName);
+    }
+  }
+
+  if (stack.length > 0) {
+    return { valid: false, unclosedTags: [...new Set(stack)] };
+  }
+
+  return { valid: true, unclosedTags: [] };
 }
 
 function createGatewayApp() {
@@ -230,48 +288,27 @@ function createGatewayApp() {
 
     addLog('info', `New request received (stream=${stream}). Initializing dispatch...`);
 
-    // 每個請求獨立的最大重試次數上限
-    const MAX_REQUEST_RETRIES = 10;
+    // ========== 新邏輯：模型順位替換 + Key 輪詢 + 完整重試機制 ==========
+    //
+    // 概念說明：
+    // - 每個模型都有自己的一輪測試（所有可用 key 輪過一次 = 一輪）
+    // - 如果某一輪中所有 key 都失敗，等待 15 秒後進行下一輪
+    // - 一個模型最多嘗試 MAX_ROUNDS_PER_MODEL 輪（2 輪）
+    // - 所有輪都失敗後，才切換到下一個順位的模型
+    // - 所有模型都失敗，才爆錯
 
-    // 執行轉發與 Fallback 機制
-    async function attemptRequest(modelIndex, keyIndexOffset = 0, retryCount = 0) {
-      // 檢查是否超過每請求最大重試次數
-      if (retryCount >= MAX_REQUEST_RETRIES) {
-        addLog('error', `Request exceeded maximum retry limit (${MAX_REQUEST_RETRIES}). Aborting.`);
-        stats.recordRequest(false);
-        return res.status(502).json({
-          error: { message: `Request exceeded maximum retry limit (${MAX_REQUEST_RETRIES}).` }
-        });
-      }
+    const MAX_ROUNDS_PER_MODEL = 2;  // 每個模型最多嘗試 2 輪
+    const ROUND_DELAY_MS = 15000;     // 每輪之間的等待時間（15 秒）
 
-      if (modelIndex >= configuredModels.length) {
-        addLog('error', 'All configured models and fallbacks failed to respond.');
-        stats.recordRequest(false);
-        return res.status(502).json({
-          error: { message: 'All configured models and fallbacks failed. Check Gateway logs for details.' }
-        });
-      }
-
-      const currentModel = configuredModels[modelIndex];
-      const modelId = currentModel.model_id;
-
-      // 取得目前所有可用的健康的 Key
-      const availableKeys = apiKeys.getActiveKeys();
-      if (availableKeys.length === 0) {
-        addLog('error', `Model: ${modelId} failed. Reason: No healthy API Keys available (all keys might be disabled or in cooldown).`);
-        stats.recordRequest(false);
-        return res.status(503).json({
-          error: { message: 'No active/healthy NVIDIA API Keys available in the Gateway pool.' }
-        });
-      }
-
-      // 選擇一個 Key (輪詢 + Offset)
-      const keyIndex = keyIndexOffset % availableKeys.length;
-      const selectedKey = availableKeys[keyIndex];
-
-      addLog('info', `Attempting model: [Priority ${currentModel.priority}] ${modelId} with Key: ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)}`);
-
-      // 複製 Request Body 並修改 model 欄位為 NVIDIA NIM 實際的 model_id
+    /**
+     * 對指定的模型和 key 發送請求
+     * @param {object} model - 模型配置對象
+     * @param {object} key - API Key 對象
+     * @param {number} keyIndex - 當前 key 在 availableKeys 中的索引
+     * @returns {Promise<object>} { success, shouldFallbackModel, statusCode, errorText }
+     */
+    async function sendSingleRequest(model, key, keyIndex, availableKeys) {
+      const modelId = model.model_id;
       const forwardBody = { ...originalBody, model: modelId };
 
       let abortController = new AbortController();
@@ -284,7 +321,7 @@ function createGatewayApp() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${selectedKey.key_value}`
+            'Authorization': `Bearer ${key.key_value}`
           },
           body: JSON.stringify(forwardBody),
           signal: abortController.signal
@@ -294,157 +331,364 @@ function createGatewayApp() {
 
         // A. 處理 200 成功響應
         if (response.ok) {
-          apiKeys.recordSuccess(selectedKey.id);
+          apiKeys.recordSuccess(key.id);
           stats.recordRequest(true);
-          addLog('success', `Request succeeded using [Priority ${currentModel.priority}] ${modelId}`);
-
-          // 設置與規範化響應標頭
-          if (stream) {
-            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-            res.setHeader('Cache-Control', 'no-cache, no-transform');
-            res.setHeader('Connection', 'keep-alive');
-            res.setHeader('X-Accel-Buffering', 'no');
-            res.flushHeaders();
-          } else {
-            res.setHeader('Content-Type', 'application/json; charset=utf-8');
-          }
-
-          // 串流轉發 (並動態將 response 中的 model 欄位改回為客戶端請求的模型 ID)
-          if (stream) {
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-
-            const processLine = (line) => {
-              // 移除 Windows 常見的 \r 換行字元以進行規範化
-              const cleanLine = line.endsWith('\r') ? line.slice(0, -1) : line;
-              const trimmed = cleanLine.trim();
-
-              if (trimmed.startsWith('data:')) {
-                const dataStr = trimmed.slice(5).trim();
-                if (dataStr === '[DONE]') {
-                  res.write('data: [DONE]\n\n');
-                  if (typeof res.flush === 'function') res.flush();
-                  return;
-                }
-                try {
-                  const chunk = JSON.parse(dataStr);
-                  if (chunk && typeof chunk === 'object') {
-                    // 強制為每個 JSON chunk 設定正確的 model ID
-                    chunk.model = originalBody.model || 'patcher-main';
-                  }
-                  res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-                } catch (e) {
-                  res.write(cleanLine + '\n\n');
-                }
-              } else {
-                // 忽略純空行以防止過多換行，對有內容的非 data 行則正常寫入並加 \n
-                if (trimmed !== '') {
-                  res.write(cleanLine + '\n');
-                }
-              }
-              if (typeof res.flush === 'function') res.flush();
-            };
-
-            function readChunk() {
-              reader.read().then(({ done, value }) => {
-                if (done) {
-                  if (buffer) {
-                    processLine(buffer);
-                  }
-                  res.end();
-                  return;
-                }
-                
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // 保留不完整的一行
-
-                for (const line of lines) {
-                  processLine(line);
-                }
-                readChunk();
-              }).catch(err => {
-                addLog('error', `Stream pipe broke mid-transit: ${err.message}`);
-                res.end();
-              });
-            }
-            readChunk();
-          } else {
-            // 非串流轉發 (並動態將 response 中的 model 欄位改回為客戶端請求的模型 ID)
-            const json = await response.json();
-            if (json && typeof json === 'object') {
-              json.model = originalBody.model || 'patcher-main';
-            }
-            res.json(json);
-          }
-          return;
+          addLog('success', `Request succeeded using [Priority ${model.priority}] ${modelId}`);
+          return { success: true, response, shouldFallbackModel: false };
         }
 
-        // B. 處理 429 速率限制響應
-        if (response.status === 429) {
-          addLog('warning', `Received 429 Rate Limit on Key ID ${selectedKey.id}. Entering 30s Cooldown.`);
-          apiKeys.recordCooldown(selectedKey.id, 30, '429 Rate Limit Exceeded');
-          
-          // 重試當前模型，但換下一個 Key
-          return attemptRequest(modelIndex, keyIndexOffset + 1, retryCount + 1);
-        }
-
-        // C. 處理 5xx 伺服器錯誤 或 404 找不到模型錯誤
-        if (response.status >= 500 || response.status === 404) {
+        // B. 處理 503 Service Unavailable - 模型暫時不可用
+        if (response.status === 503) {
           const errText = await response.text();
-          addLog('warning', `Received HTTP ${response.status} from NVIDIA for model ${modelId}. Error: ${errText.substring(0, 100)}`);
-          if (response.status >= 500) {
-            apiKeys.recordFailure(selectedKey.id, `HTTP ${response.status}: ${errText.substring(0, 50)}`);
-          } else {
-            addLog('warning', `Model ${modelId} returned HTTP 404. Model may be deprecated or account lacks access.`);
-          }
-
-          // 切換至「下一順位模型」，並且重設 Key 索引從 0 開始嘗試
-          addLog('info', `Initiating model fallback due to NVIDIA HTTP ${response.status} error...`);
-          return attemptRequest(modelIndex + 1, 0, retryCount + 1);
+          addLog('warning', `Received HTTP 503 from NVIDIA for model ${modelId} with Key ID ${key.id}. Model temporarily unavailable. Error: ${errText.substring(0, 100)}`);
+          apiKeys.recordFailure(key.id, `HTTP 503: ${errText.substring(0, 50)}`);
+          // 503 代表模型有問題，需要切換模型，但先繼續試下一把 key
+          return { success: false, shouldFallbackModel: true, statusCode: 503, errorText: errText };
         }
 
-        // D. 處理 401/403 憑證無效錯誤
+        // C. 處理 429 速率限制響應
+        if (response.status === 429) {
+          addLog('warning', `Received 429 Rate Limit on Key ID ${key.id}. Entering 30s Cooldown.`);
+          apiKeys.recordCooldown(key.id, 30, '429 Rate Limit Exceeded');
+          // 換下一把 key，繼續當前模型
+          return { success: false, shouldFallbackModel: false, statusCode: 429, errorText: '' };
+        }
+
+        // D. 處理 5xx 伺服器錯誤（不含 503，503 已在前面處理）
+        if (response.status >= 500) {
+          const errText = await response.text();
+          addLog('warning', `Received HTTP ${response.status} from NVIDIA for model ${modelId} with Key ID ${key.id}. Error: ${errText.substring(0, 100)}`);
+          apiKeys.recordFailure(key.id, `HTTP ${response.status}: ${errText.substring(0, 50)}`);
+          // 5xx 也視為模型問題，需要模型順位替換
+          return { success: false, shouldFallbackModel: true, statusCode: response.status, errorText: errText };
+        }
+
+        // E. 處理 404 找不到模型
+        if (response.status === 404) {
+          const errText = await response.text();
+          addLog('warning', `Received HTTP 404 from NVIDIA for model ${modelId}. Model may be deprecated or account lacks access. Error: ${errText.substring(0, 100)}`);
+          // 404 表示模型不存在，應該直接切換到下一個模型
+          return { success: false, shouldFallbackModel: true, statusCode: 404, errorText: errText };
+        }
+
+        // F. 處理 401/403 憑證無效錯誤
         if (response.status === 401 || response.status === 403) {
           const errText = await response.text();
-          addLog('error', `Invalid Key error (HTTP ${response.status}) on Key ID ${selectedKey.id}. Key is now set to Inactive.`);
-          apiKeys.updateStatus(selectedKey.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
-
-          // 重試當前模型，更換下一個 Key
-          return attemptRequest(modelIndex, keyIndexOffset + 1, retryCount + 1);
+          addLog('error', `Invalid Key error (HTTP ${response.status}) on Key ID ${key.id}. Key is now set to Inactive.`);
+          apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
+          // 換下一把 key
+          return { success: false, shouldFallbackModel: false, statusCode: response.status, errorText: errText };
         }
 
-        // E. 處理其他 4xx 錯誤 (400 Bad Request 等) - 直接報錯
+        // G. 處理其他 4xx 錯誤 (400 Bad Request 等) - 直接報錯
         const errText = await response.text();
         addLog('error', `Non-retryable client error (HTTP ${response.status}): ${errText}`);
         stats.recordRequest(false);
-        return res.status(response.status).send(errText);
+        return { success: false, fatal: true, statusCode: response.status, errorText: errText, response };
 
       } catch (err) {
         clearTimeout(timeoutId);
         
         // 捕捉 Timeout / Network Abort 錯誤
         if (err.name === 'AbortError') {
-          addLog('warning', `NVIDIA request timed out (120s) for model ${modelId} with Key ID ${selectedKey.id}`);
-          apiKeys.recordFailure(selectedKey.id, 'Request timeout (120s)');
-          
-          // 超時視同 5xx，切換至「下一順位模型」
-          addLog('info', `Initiating model fallback due to timeout...`);
-          return attemptRequest(modelIndex + 1, 0, retryCount + 1);
+          addLog('warning', `NVIDIA request timed out (120s) for model ${modelId} with Key ID ${key.id}`);
+          apiKeys.recordFailure(key.id, 'Request timeout (120s)');
+          // 超時視同模型問題
+          return { success: false, shouldFallbackModel: true, statusCode: 0, errorText: 'Request timeout (120s)' };
         }
 
         // 其他網路連線異常
-        addLog('warning', `Network/Connection error for model ${modelId} with Key ID ${selectedKey.id}: ${err.message}`);
-        apiKeys.recordFailure(selectedKey.id, `Network Error: ${err.message}`);
-        
-        // 網路異常通常也是 5xx 級別，切換下一順位模型
-        return attemptRequest(modelIndex + 1, 0, retryCount + 1);
+        addLog('warning', `Network/Connection error for model ${modelId} with Key ID ${key.id}: ${err.message}`);
+        apiKeys.recordFailure(key.id, `Network Error: ${err.message}`);
+        // 網路異常也視為需要模型順位替換
+        return { success: false, shouldFallbackModel: true, statusCode: 0, errorText: err.message };
       }
     }
 
-    // 每次請求都從 index 0 (第一順位模型) 開始
-    await attemptRequest(0, 0);
+    /**
+     * 嘗試使用所有 key 對當前模型進行一輪測試
+     * @param {object} model - 當前模型
+     * @param {number} roundNumber - 第幾輪 (1-based)
+     * @returns {Promise<object>} { success, response, forceFallbackModel }
+     */
+    async function tryModelWithAllKeys(model, roundNumber) {
+      const modelId = model.model_id;
+
+      // 取得目前所有可用的健康的 Key
+      const availableKeys = apiKeys.getActiveKeys();
+      if (availableKeys.length === 0) {
+        addLog('error', `[Round ${roundNumber}] Model: ${modelId} failed. No healthy API Keys available.`);
+        return { success: false, forceFallbackModel: true };
+      }
+
+      addLog('info', `[Round ${roundNumber}/${MAX_ROUNDS_PER_MODEL}] Trying model: [Priority ${model.priority}] ${modelId} with ${availableKeys.length} key(s)...`);
+
+      // 逐一嘗試所有 key
+      for (let keyIndex = 0; keyIndex < availableKeys.length; keyIndex++) {
+        const selectedKey = availableKeys[keyIndex];
+        addLog('info', `[Round ${roundNumber}] Attempting model: ${modelId} with Key: ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} (Key ${keyIndex + 1}/${availableKeys.length})`);
+
+        const result = await sendSingleRequest(model, selectedKey, keyIndex, availableKeys);
+
+        // 成功
+        if (result.success) {
+          // === 在回傳前檢查內容是否有未閉合的 HTML tag ===
+          // 對非串流模式：直接檢查 JSON 中的 content
+          // 對串流模式：需要先讀取完整串流內容再做檢查
+          const isStream = !!originalBody.stream;
+          
+          if (isStream) {
+            // 串流模式：緩衝所有內容，等完整收到後再校驗
+            try {
+              const reader = result.response.body.getReader();
+              const decoder = new TextDecoder();
+              let streamBuffer = '';
+              let fullContent = '';
+              const sseLines = [];
+              let streamDone = false;
+
+              function readStreamFully() {
+                return reader.read().then(({ done, value }) => {
+                  if (done) {
+                    streamDone = true;
+                    // 處理最後殘留的 buffer
+                    if (streamBuffer) {
+                      const lines = streamBuffer.split('\n');
+                      for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith('data:')) {
+                          const dataStr = trimmed.slice(5).trim();
+                          if (dataStr !== '[DONE]') {
+                            try {
+                              const chunk = JSON.parse(dataStr);
+                              if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+                                fullContent += chunk.choices[0].delta.content;
+                              }
+                            } catch (e) {
+                              // 忽略解析錯誤
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    // 對完整內容做校驗
+                    const validation = validateContent(fullContent);
+                    if (!validation.valid) {
+                      const unclosedStr = validation.unclosedTags.map(t => `<${t}>`).join(', ');
+                      addLog('error', `[Round ${roundNumber}] Content validation failed for stream response from model ${modelId}: unclosed HTML tags detected: ${unclosedStr}. Content length: ${fullContent.length}. Treating as key failure, will retry with next key/round.`);
+                      apiKeys.recordFailure(selectedKey.id, `ContentValidation: unclosed tags <${unclosedStr}>`);
+                      // 回傳失敗，讓外層繼續嘗試下一把 key 或下一輪
+                      return { success: false, shouldFallbackModel: false, statusCode: 0, errorText: `Content validation failed: unclosed HTML tags: ${unclosedStr}` };
+                    }
+
+                    // 校驗通過，回傳 success + 所有 SSE 行
+                    return { success: true, response: result.response, sseLines };
+                  }
+
+                  streamBuffer += decoder.decode(value, { stream: true });
+                  const lines = streamBuffer.split('\n');
+                  streamBuffer = lines.pop();
+
+                  for (const line of lines) {
+                    const trimmed = line.trim();
+                    sseLines.push(line.endsWith('\r') ? line.slice(0, -1) : line);
+                    if (trimmed.startsWith('data:')) {
+                      const dataStr = trimmed.slice(5).trim();
+                      if (dataStr !== '[DONE]') {
+                        try {
+                          const chunk = JSON.parse(dataStr);
+                          if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+                            fullContent += chunk.choices[0].delta.content;
+                          }
+                        } catch (e) {
+                          // 忽略解析錯誤
+                        }
+                      }
+                    }
+                  }
+
+                  return readStreamFully();
+                });
+              }
+
+              const streamResult = await readStreamFully();
+              
+              // 如果串流校驗失敗（包含未閉合 tag），streamResult 會是 { success: false, ... }
+              // 這裡繼續迭代下一把 key
+              if (!streamResult.success) {
+                continue;
+              }
+              
+              // 串流校驗通過，回傳 success 並附上 SSE lines 和原始 response
+              return { success: true, response: result.response, sseLines: streamResult.sseLines, streamContent: fullContent };
+            } catch (err) {
+              addLog('error', `[Round ${roundNumber}] Stream read/validation error for model ${modelId}: ${err.message}`);
+              apiKeys.recordFailure(selectedKey.id, `Stream validation error: ${err.message}`);
+              // 繼續嘗試下一把 key
+              continue;
+            }
+          } else {
+            // 非串流模式：直接解析 JSON 並檢查 content
+            try {
+              const json = await result.response.json();
+              let contentToCheck = '';
+              if (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) {
+                contentToCheck = json.choices[0].message.content;
+              }
+
+              const validation = validateContent(contentToCheck);
+              if (!validation.valid) {
+                const unclosedStr = validation.unclosedTags.map(t => `<${t}>`).join(', ');
+                addLog('error', `[Round ${roundNumber}] Content validation failed for model ${modelId}: unclosed HTML tags detected: ${unclosedStr}. Content length: ${contentToCheck.length}. Treating as key failure, will retry with next key/round.`);
+                apiKeys.recordFailure(selectedKey.id, `ContentValidation: unclosed tags <${unclosedStr}>`);
+                // 繼續嘗試下一把 key
+                continue;
+              }
+
+              // 校驗通過，回傳 success + json
+              return { success: true, response: result.response, jsonData: json };
+            } catch (err) {
+              if (err.message && err.message.includes('Content validation')) {
+                // 這已經是 validation error，繼續嘗試下一把 key
+                continue;
+              }
+              // 其他 JSON 解析錯誤
+              addLog('error', `[Round ${roundNumber}] JSON parse error for model ${modelId}: ${err.message}`);
+              apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
+              continue;
+            }
+          }
+        }
+
+        // 致命錯誤（非可重試的 4xx），直接回傳
+        if (result.fatal) {
+          return { success: false, fatal: true, statusCode: result.statusCode, errorText: result.errorText, response: result.response };
+        }
+
+        // shouldFallbackModel 為 true 表示這個 key 的錯誤顯示模型有問題
+        // 但我們還是要繼續試完剩下的 key，因為可能有 key-specific 的問題
+        // 如果所有 key 都返回 shouldFallbackModel，則表示模型確實有問題
+        
+        // 記錄最後一次錯誤資訊以便判斷
+        if (keyIndex === availableKeys.length - 1) {
+          // 這是最後一把 key 了
+        }
+      }
+
+      // 所有 key 都嘗試完畢，檢查是否需要切換模型
+      // 如果所有 key 都失敗，返回 forceFallbackModel = true 觸發模型切換
+      addLog('warning', `[Round ${roundNumber}] All ${availableKeys.length} key(s) failed for model ${modelId}.`);
+      return { success: false, forceFallbackModel: true };
+    }
+
+    /**
+     * 主要調度邏輯：模型順位替換 + 多輪重試
+     */
+    async function dispatchRequest() {
+      // 遍歷所有模型（按優先順序）
+      for (let modelIndex = 0; modelIndex < configuredModels.length; modelIndex++) {
+        const currentModel = configuredModels[modelIndex];
+        const modelId = currentModel.model_id;
+
+        addLog('info', `=== Starting dispatch for model: [Priority ${currentModel.priority}] ${modelId} ===`);
+
+        // 對此模型進行多輪測試
+        let anyKeyWasAvailable = false;
+        
+        for (let round = 1; round <= MAX_ROUNDS_PER_MODEL; round++) {
+          // 在開始新一輪前先檢查是否有可用的 key
+          const availableKeys = apiKeys.getActiveKeys();
+          if (availableKeys.length === 0) {
+            addLog('error', `Model ${modelId}: No healthy API Keys available in pool. Breaking out of rounds.`);
+            break; // 跳出 round 迴圈，嘗試下一個模型
+          }
+
+          // 如果不是第一輪，等待 15 秒
+          if (round > 1) {
+            addLog('info', `Model ${modelId}: Round ${round - 1} completed with all keys failed. Waiting ${ROUND_DELAY_MS / 1000}s before round ${round}...`);
+            await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
+          }
+
+          const result = await tryModelWithAllKeys(currentModel, round);
+
+          // 成功！（content validation 已在 tryModelWithAllKeys 中完成）
+          if (result.success) {
+            const stream = !!originalBody.stream;
+            
+            if (stream) {
+              // 串流模式：直接 flush 已校驗通過的 SSE lines
+              res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+              res.setHeader('Cache-Control', 'no-cache, no-transform');
+              res.setHeader('Connection', 'keep-alive');
+              res.setHeader('X-Accel-Buffering', 'no');
+              res.flushHeaders();
+
+              for (const line of result.sseLines) {
+                // 對每個 data line 添加 model 覆蓋
+                if (line.startsWith('data:') && !line.includes('[DONE]')) {
+                  try {
+                    const dataStr = line.slice(5).trim();
+                    const chunk = JSON.parse(dataStr);
+                    if (chunk && typeof chunk === 'object') {
+                      chunk.model = originalBody.model || 'patcher-main';
+                      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                      if (typeof res.flush === 'function') res.flush();
+                      continue;
+                    }
+                  } catch (e) {
+                    // 解析失敗，直接寫入原始行
+                  }
+                }
+                res.write(line + '\n');
+                if (typeof res.flush === 'function') res.flush();
+              }
+              res.write('data: [DONE]\n\n');
+              if (typeof res.flush === 'function') res.flush();
+              res.end();
+            } else {
+              // 非串流模式：直接回傳已校驗通過的 JSON
+              const json = result.jsonData;
+              if (json && typeof json === 'object') {
+                json.model = originalBody.model || 'patcher-main';
+              }
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.json(json);
+            }
+            return; // 成功，結束
+          }
+
+          // 致命錯誤
+          if (result.fatal) {
+            stats.recordRequest(false);
+            return res.status(result.statusCode).send(result.errorText);
+          }
+
+          // forceFallbackModel 表示所有 key 都失敗，需要切換模型或等待下一輪
+          if (result.forceFallbackModel) {
+            addLog('info', `Model ${modelId}: All keys exhausted in round ${round}.`);
+            
+            // 如果不是最後一輪，會繼續下一輪（先等待 15 秒）
+            if (round < MAX_ROUNDS_PER_MODEL) {
+              addLog('info', `Model ${modelId}: Will retry in next round (${round + 1}/${MAX_ROUNDS_PER_MODEL}) after delay.`);
+            }
+          }
+        }
+
+        // 此模型的所有輪數都消耗完畢且失敗，切換到下一個模型
+        addLog('warning', `Model ${modelId}: Exhausted all ${MAX_ROUNDS_PER_MODEL} rounds without success. Falling back to next model.`);
+      }
+
+      // 所有模型都失敗
+      addLog('error', 'All configured models exhausted all retry rounds. No model could fulfill the request.');
+      stats.recordRequest(false);
+      return res.status(503).json({
+        error: { message: 'All configured models exhausted all retry rounds. Check Gateway logs for details. Every model was tried for 10 rounds with 15s delays between rounds, but none succeeded.' }
+      });
+    }
+
+    // 開始調度（內容校驗已在 tryModelWithAllKeys 中處理，無需外層 try/catch）
+    await dispatchRequest();
   });
 
   // 7. 測試專用聊天端點 (繞過模型重寫與 Fallback，直接使用健康的金鑰對特定 NIM 模型發送對話)
@@ -506,29 +750,86 @@ function createGatewayApp() {
           return res.status(response.status).send(errText);
         }
 
-        // 轉發標頭
-        res.setHeader('Content-Type', response.headers.get('Content-Type'));
+        // === 串流模式：先 buffer 完整內容，校驗通過後再 flush ===
         if (stream) {
-          res.setHeader('Cache-Control', 'no-cache');
-          res.setHeader('Connection', 'keep-alive');
-
           const reader = response.body.getReader();
-          function readChunk() {
-            reader.read().then(({ done, value }) => {
+          let fullContent = '';
+          const contentBuffer = [];
+          let validationFailed = false;
+
+          function readTestChunk() {
+            return reader.read().then(({ done, value }) => {
               if (done) {
+                // 檢查完整內容是否有未閉合 tag
+                const validation = validateContent(fullContent);
+                if (!validation.valid) {
+                  validationFailed = true;
+                  addLog('error', `[Test Chat - Content Validation] Stream response rejected: unclosed HTML tags detected: <${validation.unclosedTags.join('>, <')}>.`);
+                  // 不發送任何內容，直接拋錯
+                  throw new ContentValidationError(fullContent);
+                }
+                // 校驗通過，flush 所有緩衝內容
+                for (const chunk of contentBuffer) {
+                  res.write(chunk);
+                }
                 res.end();
                 return;
               }
-              res.write(value);
-              readChunk();
-            }).catch(err => {
-              addLog('error', `[Test Chat] Stream read error: ${err.message}`);
-              res.end();
+              // 累積原始 bytes
+              const text = new TextDecoder().decode(value);
+              // 累積 content 用於校驗
+              const lines = text.split('\n');
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data:') && !trimmed.includes('[DONE]')) {
+                  try {
+                    const dataStr = trimmed.slice(5).trim();
+                    const parsed = JSON.parse(dataStr);
+                    if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) {
+                      fullContent += parsed.choices[0].delta.content;
+                    }
+                  } catch (e) {
+                    // 忽略解析錯誤
+                  }
+                }
+              }
+              contentBuffer.push(value);
+              return readTestChunk();
             });
           }
-          readChunk();
+
+          try {
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            await readTestChunk();
+            if (validationFailed) {
+              // 串流已 flush 完成或失敗，但我們不回傳錯誤資料
+            }
+          } catch (err) {
+            if (err.name === 'ContentValidationError') {
+              addLog('error', `[Test Chat] Content validation failed. Retrying with next key...`);
+              res.end();
+              return attemptTestChat(keyIndex + 1);
+            }
+            addLog('error', `[Test Chat] Stream read error: ${err.message}`);
+            res.end();
+          }
         } else {
+          // === 非串流模式：檢查內容是否有未閉合的 HTML tag ===
           const json = await response.json();
+          let contentToCheck = '';
+          if (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) {
+            contentToCheck = json.choices[0].message.content;
+          }
+          
+          const validation = validateContent(contentToCheck);
+          if (!validation.valid) {
+            const unclosedStr = validation.unclosedTags.map(t => `<${t}>`).join(', ');
+            addLog('error', `[Test Chat - Content Validation] Non-stream response rejected: unclosed HTML tags detected: ${unclosedStr}. Retrying with next key...`);
+            return attemptTestChat(keyIndex + 1);
+          }
+
           res.json(json);
         }
       } catch (err) {
@@ -542,6 +843,18 @@ function createGatewayApp() {
   });
 
   return app;
+}
+
+/**
+ * 自訂錯誤類型：內容校驗失敗
+ * 用於在 dispatch 機制中觸發重試
+ */
+class ContentValidationError extends Error {
+  constructor(content) {
+    super('Content validation failed: unclosed HTML tags detected');
+    this.name = 'ContentValidationError';
+    this.content = content;
+  }
 }
 
 module.exports = {
