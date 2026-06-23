@@ -26,6 +26,8 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [isSyncingModels, setIsSyncingModels] = useState(false);
   const [isTestingKeys, setIsTestingKeys] = useState(false);
+  const [keyTestNotice, setKeyTestNotice] = useState(null);
+  const keyTestNoticeTimerRef = useRef(null);
   const [copiedId, setCopiedId] = useState(null);
   const [apiError, setApiError] = useState('');
 
@@ -33,6 +35,10 @@ export default function App() {
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [lastSyncSource, setLastSyncSource] = useState(null);
   const [expectedModelCount, setExpectedModelCount] = useState(null);
+  const [lastParsedModelCount, setLastParsedModelCount] = useState(null);
+  const [lastSavedModelCount, setLastSavedModelCount] = useState(null);
+  const [syncNotice, setSyncNotice] = useState(null);
+  const syncNoticeTimerRef = useRef(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
 
@@ -57,6 +63,18 @@ export default function App() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatHistory]);
+
+  // 清理非阻塞提示的計時器
+  useEffect(() => {
+    return () => {
+      if (syncNoticeTimerRef.current) {
+        clearTimeout(syncNoticeTimerRef.current);
+      }
+      if (keyTestNoticeTimerRef.current) {
+        clearTimeout(keyTestNoticeTimerRef.current);
+      }
+    };
+  }, []);
 
   // 1. 定時輪詢 Log 與 Stats
   useEffect(() => {
@@ -107,6 +125,45 @@ export default function App() {
     } finally {
       setIsSyncingModels(false);
     }
+  };
+
+  const showSyncNotice = (type, message) => {
+    if (syncNoticeTimerRef.current) {
+      clearTimeout(syncNoticeTimerRef.current);
+    }
+    setSyncNotice({ type, message, createdAt: Date.now() });
+    syncNoticeTimerRef.current = setTimeout(() => {
+      setSyncNotice(null);
+      syncNoticeTimerRef.current = null;
+    }, type === 'error' ? 10000 : 7000);
+  };
+
+  const showKeyTestNotice = (type, message) => {
+    if (keyTestNoticeTimerRef.current) {
+      clearTimeout(keyTestNoticeTimerRef.current);
+    }
+    setKeyTestNotice({ type, message, createdAt: Date.now() });
+    keyTestNoticeTimerRef.current = setTimeout(() => {
+      setKeyTestNotice(null);
+      keyTestNoticeTimerRef.current = null;
+    }, type === 'error' ? 10000 : 7000);
+  };
+
+  const getSyncSourceLabel = (source) => {
+    if (!source) return '未知來源';
+    if (source.includes('build.nvidia.com')) return 'NVIDIA Build Free Endpoint';
+    if (source.includes('featured-models')) return 'Featured Catalog 備援';
+    if (source.includes('/v1/models')) return '/v1/models 備援';
+    return source;
+  };
+
+  const formatModelSyncSummary = ({ parsedCount, savedCount, expectedCount, source }) => {
+    const parts = [];
+    if (Number.isFinite(Number(parsedCount))) parts.push(`頁面解析 ${Number(parsedCount)} 個`);
+    if (Number.isFinite(Number(savedCount))) parts.push(`實際入庫 ${Number(savedCount)} 個`);
+    if (Number.isFinite(Number(expectedCount))) parts.push(`Build 標示 ${Number(expectedCount)} 個`);
+    if (source) parts.push(`來源：${getSyncSourceLabel(source)}`);
+    return parts.join('｜') || '同步完成';
   };
 
   const formatTaiwanParts = (value) => {
@@ -244,6 +301,8 @@ export default function App() {
         setLastSyncTime(data.lastSyncTime || null);
         setLastSyncSource(data.lastSyncSource || null);
         setExpectedModelCount(data.expectedCount || null);
+        setLastParsedModelCount(data.parsedCount ?? null);
+        setLastSavedModelCount(data.savedCount ?? null);
         if (data.models && data.models.length > 0) {
           setSelectedTestModel(prev => prev || data.models[0].id);
         }
@@ -317,22 +376,28 @@ export default function App() {
 
   const handleTestKeys = async () => {
     setIsTestingKeys(true);
+    showKeyTestNotice('info', '正在測試所有 API Key，測試期間不會鎖住輸入框。');
     try {
       const res = await fetch('http://localhost:4000/api/keys/test', { method: 'POST' });
       if (res.ok) {
         const results = await res.json();
         const failures = results.filter(r => !r.success);
+        const successCount = results.length - failures.length;
         if (failures.length > 0) {
-          alert(`一鍵測試完成！共有 ${failures.length} 把金鑰測試失敗 (非 401/403 會保留 Active，只有 429 會進入 Cooldown)，請檢查列表中的錯誤原因！`);
+          showKeyTestNotice(
+            'error',
+            `一鍵測試完成：${successCount}/${results.length} 把金鑰可用，${failures.length} 把測試失敗。非 401/403 會保留 Active，只有 429 會進入 Cooldown。`
+          );
         } else {
-          alert('一鍵測試完成！所有金鑰皆測試成功且健康運行！');
+          showKeyTestNotice('success', `一鍵測試完成：${results.length}/${results.length} 把金鑰皆健康運行。`);
         }
       } else {
-        alert('連線測試出錯');
+        const data = await res.json().catch(() => ({}));
+        showKeyTestNotice('error', `連線測試出錯：${data.error || '伺服器回應異常'}`);
       }
       fetchData();
     } catch (err) {
-      alert('連線測試出錯');
+      showKeyTestNotice('error', `連線測試出錯：${err.message}`);
     } finally {
       setIsTestingKeys(false);
     }
@@ -341,19 +406,28 @@ export default function App() {
   // --- 模型排序與同步 ---
   const handleSyncModels = async () => {
     setIsSyncingModels(true);
+    showSyncNotice('info', '正在同步 NVIDIA Build Free Endpoint 模型清單，不會鎖住搜尋輸入框。');
     try {
       const res = await fetch('http://localhost:4000/api/models/sync', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        const expectedText = data.expectedCount ? ` / NVIDIA Build 標示 ${data.expectedCount} 個` : '';
-        alert(`同步成功！已獲取 ${data.count}${expectedText} 個 Free Endpoint 模型。`);
+        setLastParsedModelCount(data.parsedCount ?? null);
+        setLastSavedModelCount(data.savedCount ?? data.count ?? null);
+        setExpectedModelCount(data.expectedCount || null);
+        setLastSyncSource(data.source || null);
+        showSyncNotice('success', `同步成功：${formatModelSyncSummary({
+          parsedCount: data.parsedCount,
+          savedCount: data.savedCount ?? data.count,
+          expectedCount: data.expectedCount,
+          source: data.source
+        })}`);
         fetchData();
       } else {
-        const data = await res.json();
-        alert(`同步失敗: ${data.error}`);
+        const data = await res.json().catch(() => ({}));
+        showSyncNotice('error', `同步失敗：${data.error || '未知錯誤'}`);
       }
     } catch (err) {
-      alert('同步模型時伺服器無回應');
+      showSyncNotice('error', `同步模型時伺服器無回應：${err.message}`);
     } finally {
       setIsSyncingModels(false);
     }
@@ -917,6 +991,17 @@ export default function App() {
               </div>
             </div>
 
+            {keyTestNotice && (
+              <div
+                className={`sync-notice sync-notice-${keyTestNotice.type}`}
+                role="status"
+                aria-live="polite"
+                style={{ alignSelf: 'flex-start' }}
+              >
+                {keyTestNotice.message}
+              </div>
+            )}
+
             {/* 新增 Key 表單 */}
             <form onSubmit={handleAddKey} style={{ display: 'flex', gap: '10px' }}>
               <input 
@@ -1019,9 +1104,23 @@ export default function App() {
                 </p>
                 {lastSyncTime && (
                   <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '600', marginTop: '6px', display: 'inline-block' }}>
-                    🔄 最後更新時間：{formatSyncTime(lastSyncTime)}｜目前 {availableModels.length}{expectedModelCount ? ` / ${expectedModelCount}` : ''} 個 Free Endpoint 模型
-                    {lastSyncSource ? `｜來源：${lastSyncSource.includes('build.nvidia.com') ? 'NVIDIA Build' : lastSyncSource.includes('featured-models') ? 'Featured Catalog 備援' : '/v1/models 備援'}` : ''}
+                    🔄 最後更新時間：{formatSyncTime(lastSyncTime)}｜{formatModelSyncSummary({
+                      parsedCount: lastParsedModelCount ?? availableModels.length,
+                      savedCount: lastSavedModelCount ?? availableModels.length,
+                      expectedCount: expectedModelCount,
+                      source: lastSyncSource
+                    })}
                   </span>
+                )}
+                {syncNotice && (
+                  <div
+                    className={`sync-notice sync-notice-${syncNotice.type}`}
+                    role="status"
+                    aria-live="polite"
+                    style={{ marginTop: '8px' }}
+                  >
+                    {syncNotice.message}
+                  </div>
                 )}
               </div>
               <button 
@@ -1030,7 +1129,7 @@ export default function App() {
                 disabled={isSyncingModels}
               >
                 <RefreshCw size={14} className={isSyncingModels ? 'animate-spin' : ''} />
-                <span>{isSyncingModels ? '正在同步 NVIDIA Build Free Endpoint...' : '同步 Build Free Endpoint 77 模型'}</span>
+                <span>{isSyncingModels ? '正在同步 NVIDIA Build Free Endpoint...' : '同步 Build Free Endpoint 模型'}</span>
               </button>
             </div>
 
