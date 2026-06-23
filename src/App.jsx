@@ -4,13 +4,15 @@ import {
   RotateCw, ShieldAlert, CheckCircle, AlertTriangle, ArrowUp, 
   ArrowDown, RefreshCw, X, Play, CopyCheck
 } from 'lucide-react';
-import packageJson from '../../package.json';
+import packageJson from '../package.json';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [keys, setKeys] = useState([]);
   const [newKey, setNewKey] = useState('');
   const [models, setModels] = useState([]);
+  const [activeModelGroup, setActiveModelGroup] = useState(1);
+  const [modelGroups, setModelGroups] = useState([]);
   const [availableModels, setAvailableModels] = useState([]);
   const [rules, setRules] = useState([]);
   const [newRuleTitle, setNewRuleTitle] = useState('');
@@ -29,6 +31,8 @@ export default function App() {
 
   // 擴充 state 用於模型同步時間、搜尋與篩選
   const [lastSyncTime, setLastSyncTime] = useState(null);
+  const [lastSyncSource, setLastSyncSource] = useState(null);
+  const [expectedModelCount, setExpectedModelCount] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
 
@@ -41,6 +45,11 @@ export default function App() {
 
   // 拖曳排序狀態
   const [draggedModelIndex, setDraggedModelIndex] = useState(null);
+
+  // Dashboard 子頁籤狀態
+  const [dashboardSubTab, setDashboardSubTab] = useState('overview');
+  const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
+  const [hoveredHourlyIndex, setHoveredHourlyIndex] = useState(null);
 
   // 自動捲動到聊天最下方
   useEffect(() => {
@@ -65,14 +74,26 @@ export default function App() {
     }
   }, [activeTab]);
 
-  // 3. 當切換至模型排序分頁，若列表為空且有 active 金鑰，自動在背景同步一次
+  // 2.5 金鑰冷卻倒數即時刷新；倒數結束後自動重新抓取，避免停在 0 秒。
   useEffect(() => {
-    const hasActiveKey = keys.some(k => k.status === 'active');
-    if (activeTab === 'models' && availableModels.length === 0 && hasActiveKey && !isSyncingModels) {
-      console.log('自動載入模型列表...');
+    if (activeTab !== 'keys') return undefined;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setCurrentTimeMs(now);
+      if (keys.some(k => k.status === 'cooldown' && k.cooldown_until && new Date(k.cooldown_until).getTime() <= now)) {
+        fetchKeys();
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [activeTab, keys]);
+
+  // 3. 當切換至模型排序分頁，若列表為空，直接從 NVIDIA Build Free Endpoint catalog 背景同步一次
+  useEffect(() => {
+    if (activeTab === 'models' && availableModels.length === 0 && !isSyncingModels) {
+      console.log('自動載入 NVIDIA Build Free Endpoint 模型列表...');
       handleSyncModelsSilently();
     }
-  }, [activeTab, availableModels.length, keys]);
+  }, [activeTab, availableModels.length]);
 
   const handleSyncModelsSilently = async () => {
     setIsSyncingModels(true);
@@ -88,15 +109,39 @@ export default function App() {
     }
   };
 
-  const formatSyncTime = (isoString) => {
-    if (!isoString) return '無';
-    try {
-      const date = new Date(isoString);
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
-    } catch (e) {
-      return '無';
-    }
+  const formatTaiwanParts = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Taipei',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23'
+    });
+    return formatter.formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
   };
+
+  const formatTaiwanTime = (value) => {
+    const parts = formatTaiwanParts(value);
+    if (!parts) return value ? String(value).substring(11, 19) : '--';
+    return `${parts.hour}:${parts.minute}:${parts.second}`;
+  };
+
+  const formatTaiwanDateTime = (value) => {
+    const parts = formatTaiwanParts(value);
+    if (!parts) return '無';
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+  };
+
+  const formatSyncTime = (isoString) => formatTaiwanDateTime(isoString);
 
   const handleSendTestMessage = async (e) => {
     if (e) e.preventDefault();
@@ -185,11 +230,20 @@ export default function App() {
       const modelsRes = await fetch('http://localhost:4000/api/models');
       if (modelsRes.ok) setModels(await modelsRes.json());
 
+      const modelGroupsRes = await fetch('http://localhost:4000/api/models/groups');
+      if (modelGroupsRes.ok) {
+        const data = await modelGroupsRes.json();
+        setActiveModelGroup(data.activeGroup || 1);
+        setModelGroups(data.groups || []);
+      }
+
       const availModelsRes = await fetch('http://localhost:4000/api/models/available');
       if (availModelsRes.ok) {
         const data = await availModelsRes.json();
         setAvailableModels(data.models || []);
         setLastSyncTime(data.lastSyncTime || null);
+        setLastSyncSource(data.lastSyncSource || null);
+        setExpectedModelCount(data.expectedCount || null);
         if (data.models && data.models.length > 0) {
           setSelectedTestModel(prev => prev || data.models[0].id);
         }
@@ -269,7 +323,7 @@ export default function App() {
         const results = await res.json();
         const failures = results.filter(r => !r.success);
         if (failures.length > 0) {
-          alert(`一鍵測試完成！共有 ${failures.length} 把金鑰測試失敗 (已自動設為 Inactive)，請檢查列表中的錯誤原因！`);
+          alert(`一鍵測試完成！共有 ${failures.length} 把金鑰測試失敗 (非 401/403 會保留 Active，只有 429 會進入 Cooldown)，請檢查列表中的錯誤原因！`);
         } else {
           alert('一鍵測試完成！所有金鑰皆測試成功且健康運行！');
         }
@@ -291,7 +345,8 @@ export default function App() {
       const res = await fetch('http://localhost:4000/api/models/sync', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        alert(`同步成功！已獲取 ${data.count} 個 NVIDIA NIM 模型。`);
+        const expectedText = data.expectedCount ? ` / NVIDIA Build 標示 ${data.expectedCount} 個` : '';
+        alert(`同步成功！已獲取 ${data.count}${expectedText} 個 Free Endpoint 模型。`);
         fetchData();
       } else {
         const data = await res.json();
@@ -329,16 +384,36 @@ export default function App() {
     saveModelPriorities(updated);
   };
 
-  const saveModelPriorities = async (modelIds) => {
+  const saveModelPriorities = async (modelIds, groupId = activeModelGroup) => {
     try {
       const res = await fetch('http://localhost:4000/api/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models: modelIds })
+        body: JSON.stringify({ models: modelIds, groupId })
       });
       if (res.ok) fetchData();
     } catch (err) {
       alert('儲存優先順序失敗');
+    }
+  };
+
+  const handleSwitchModelGroup = async (groupId) => {
+    if (groupId === activeModelGroup) return;
+    try {
+      const res = await fetch('http://localhost:4000/api/models/groups/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId })
+      });
+      if (res.ok) {
+        setActiveModelGroup(groupId);
+        fetchData();
+      } else {
+        const data = await res.json();
+        alert(`切換組別失敗: ${data.error || '未知錯誤'}`);
+      }
+    } catch (err) {
+      alert('切換模型組別時伺服器無回應');
     }
   };
 
@@ -498,6 +573,33 @@ export default function App() {
         {/* Dashboard 頁面 */}
         {activeTab === 'dashboard' && (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
+            {/* Dashboard 額外頁籤：總覽 / 即時日誌 */}
+            <div className="glass-panel" style={{ padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  className={`btn ${dashboardSubTab === 'overview' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '8px 14px', fontSize: '14px' }}
+                  onClick={() => setDashboardSubTab('overview')}
+                >
+                  <Activity size={14} />
+                  <span>總覽</span>
+                </button>
+                <button
+                  className={`btn ${dashboardSubTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '8px 14px', fontSize: '14px' }}
+                  onClick={() => setDashboardSubTab('logs')}
+                >
+                  <RefreshCw size={14} className={dashboardSubTab === 'logs' && logs.length > 0 ? 'animate-spin' : ''} />
+                  <span>即時日誌</span>
+                </button>
+              </div>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                運行狀態子頁籤，可快速切換總覽與 Gateway 即時轉發日誌
+              </span>
+            </div>
+
+            {dashboardSubTab === 'overview' && (
+            <>
             {/* 核心卡片欄 */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
               <div 
@@ -545,7 +647,7 @@ export default function App() {
                 <span style={{ fontSize: '26px', fontWeight: '800', fontFamily: 'Outfit' }}>
                   {getTotalRequests()} <span style={{ fontSize: '16px', color: '#10b981', fontWeight: '600' }}>({calculateSuccessRate()})</span>
                 </span>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>所有 5xx / 逾時皆觸發降級</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>僅 429 會讓 Key 進入冷卻</span>
               </div>
 
               <div className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -669,7 +771,7 @@ export default function App() {
                 <span style={{ fontSize: '16px', fontWeight: '700' }}>近 24 小時每小時流量分佈</span>
                 <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>資料庫存儲 (SQLite)</span>
               </div>
-              <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: '8px', padding: '10px 0' }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: '8px', padding: '42px 0 8px', overflow: 'visible' }}>
                 {stats.hourly.length === 0 ? (
                   <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'var(--text-muted)', fontSize: '15px' }}>
                     目前尚無請求數據
@@ -677,21 +779,53 @@ export default function App() {
                 ) : (
                   stats.hourly.map((h, i) => {
                     const maxRequests = Math.max(...stats.hourly.map(x => x.request_count), 1);
-                    const heightPercent = `${Math.max((h.request_count / maxRequests) * 100, 5)}`;
-                    const errorPercent = heightPercent > 0 ? `${Math.max((h.error_count / maxRequests) * 100, 5)}` : '0';
+                    const barHeightPercent = h.request_count > 0 ? Math.max((h.request_count / maxRequests) * 100, 5) : 0;
+                    const errorHeightPercent = h.request_count > 0 ? Math.min((h.error_count / h.request_count) * 100, 100) : 0;
                     const hourText = h.hour.split(' ')[1]; // 取出 HH:00
+                    const isHovered = hoveredHourlyIndex === i;
                     return (
-                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', height: '100%', minWidth: '28px' }}>
+                      <div 
+                        key={i} 
+                        style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', height: '100%', minWidth: '28px', position: 'relative' }}
+                        onMouseEnter={() => setHoveredHourlyIndex(i)}
+                        onMouseLeave={() => setHoveredHourlyIndex(null)}
+                      >
+                        <div 
+                          style={{
+                            position: 'absolute',
+                            top: '-36px',
+                            left: '50%',
+                            transform: `translateX(-50%) translateY(${isHovered ? '0' : '6px'})`,
+                            opacity: isHovered ? 1 : 0,
+                            pointerEvents: 'none',
+                            transition: 'opacity 180ms ease, transform 180ms ease',
+                            background: 'rgba(15, 23, 42, 0.96)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '8px',
+                            padding: '6px 8px',
+                            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                            fontSize: '12px',
+                            color: 'var(--text-primary)',
+                            whiteSpace: 'nowrap',
+                            zIndex: 5
+                          }}
+                        >
+                          {hourText}｜總 {h.request_count}｜成功 {h.success_count}｜失敗 {h.error_count}
+                        </div>
                         <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', position: 'relative' }}>
                           <div 
                             style={{ 
                               width: '100%', 
-                              height: `${heightPercent}%`, 
-                              background: 'linear-gradient(to top, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.8) 100%)', 
+                              height: `${barHeightPercent}%`, 
+                              background: 'linear-gradient(to top, rgba(16, 185, 129, 0.22) 0%, rgba(16, 185, 129, 0.82) 100%)', 
                               borderRadius: '4px 4px 0 0',
-                              transition: 'height 0.3s ease',
+                              transition: 'height 450ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms ease, box-shadow 180ms ease, filter 180ms ease',
+                              transform: isHovered ? 'translateY(-2px)' : 'translateY(0)',
+                              boxShadow: isHovered ? '0 0 18px rgba(16, 185, 129, 0.35)' : 'none',
+                              filter: isHovered ? 'brightness(1.12)' : 'brightness(1)',
                               position: 'relative',
-                              overflow: 'hidden'
+                              overflow: 'hidden',
+                              cursor: 'default'
                             }}
                             title={`時間: ${h.hour}\n總請求: ${h.request_count}\n成功: ${h.success_count}\n失敗: ${h.error_count}`}
                           >
@@ -702,19 +836,15 @@ export default function App() {
                                 bottom: 0, 
                                 left: 0, 
                                 width: '100%', 
-                                height: `${Math.min((h.error_count / h.request_count) * 100, 100)}%`, 
-                                background: 'rgba(239, 68, 68, 0.6)', 
-                                minHeight: h.error_count > 0 ? '2px' : '0' 
+                                height: `${errorHeightPercent}%`, 
+                                background: 'rgba(239, 68, 68, 0.62)', 
+                                minHeight: h.error_count > 0 ? '2px' : '0',
+                                transition: 'height 450ms cubic-bezier(0.22, 1, 0.36, 1)'
                               }}
                             />
                           </div>
                         </div>
-                        {/* 數值顯示 */}
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                          <span style={{ fontSize: '10px', fontWeight: '700', color: '#10b981' }}>{h.request_count}</span>
-                          {h.error_count > 0 && <span style={{ fontSize: '9px', color: '#f87171' }}>+{h.error_count}</span>}
-                        </div>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{hourText}</span>
+                        <span style={{ fontSize: '11px', color: isHovered ? '#10b981' : 'var(--text-muted)', transition: 'color 180ms ease' }}>{hourText}</span>
                       </div>
                     );
                   })
@@ -722,8 +852,12 @@ export default function App() {
               </div>
             </div>
 
+            </>
+            )}
+
             {/* Gateway 即時活動日誌 */}
-            <div className="glass-panel" style={{ flex: '1.5', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'hidden' }}>
+            {dashboardSubTab === 'logs' && (
+            <div className="glass-panel" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <RefreshCw size={14} className={logs.length > 0 ? 'animate-spin' : ''} style={{ animationDuration: '3s', color: '#10b981' }} />
@@ -749,7 +883,7 @@ export default function App() {
                       else if (log.type === 'error') { logColor = '#f87171'; icon = '❌'; }
                       return (
                         <div key={index} style={{ fontSize: '14px', display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px', lineHeight: '1.4' }}>
-                          <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>[{log.timestamp.substring(11, 19)}]</span>
+                          <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>[{formatTaiwanTime(log.timestamp)}]</span>
                           <span style={{ flexShrink: 0 }}>{icon}</span>
                           <span style={{ color: logColor, wordBreak: 'break-all' }}>{log.message}</span>
                         </div>
@@ -759,6 +893,7 @@ export default function App() {
                 )}
               </div>
             </div>
+            )}
           </div>
         )}
 
@@ -824,9 +959,15 @@ export default function App() {
                       let badgeClass = 'badge-active';
                       let statusText = '健康 (Active)';
                       if (k.status === 'cooldown') {
-                        badgeClass = 'badge-cooldown';
-                        const secLeft = Math.max(0, Math.round((new Date(k.cooldown_until) - new Date()) / 1000));
-                        statusText = `冷卻中 (${secLeft}s)`;
+                        const cooldownUntilMs = k.cooldown_until ? new Date(k.cooldown_until).getTime() : 0;
+                        const secLeft = Math.max(0, Math.ceil((cooldownUntilMs - currentTimeMs) / 1000));
+                        if (secLeft > 0) {
+                          badgeClass = 'badge-cooldown';
+                          statusText = `冷卻中 (${secLeft}s)`;
+                        } else {
+                          badgeClass = 'badge-active';
+                          statusText = '健康 (Active)';
+                        }
                       } else if (k.status === 'inactive') {
                         badgeClass = 'badge-inactive';
                         statusText = 'Revoked / 損壞';
@@ -847,7 +988,7 @@ export default function App() {
                             {k.total_errors}
                           </td>
                           <td style={{ padding: '12px', color: 'var(--text-secondary)' }}>
-                            {k.last_used_at ? k.last_used_at.substring(11, 19) : '未使用'}
+                            {k.last_used_at ? formatTaiwanTime(k.last_used_at) : '未使用'}
                           </td>
                           <td style={{ padding: '12px', color: '#f87171', fontSize: '13px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.last_error_message}>
                             {k.last_error_message || '--'}
@@ -872,13 +1013,14 @@ export default function App() {
           <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA Models 順位與自動偵測</h2>
+                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA Build Free Endpoint 模型順位</h2>
                 <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  對應 patcher-main，在 5xx 或 Timeout 時自動切換模型，且下次新請求永遠從順位 1 開始嘗試。
+                  同步來源改為 build.nvidia.com 的 Free Endpoint 篩選頁，不再把 /v1/models 當成可用免費模型清單；可保存三組模型順位並一鍵切換。
                 </p>
                 {lastSyncTime && (
                   <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '600', marginTop: '6px', display: 'inline-block' }}>
-                    🔄 最後更新時間：{formatSyncTime(lastSyncTime)}
+                    🔄 最後更新時間：{formatSyncTime(lastSyncTime)}｜目前 {availableModels.length}{expectedModelCount ? ` / ${expectedModelCount}` : ''} 個 Free Endpoint 模型
+                    {lastSyncSource ? `｜來源：${lastSyncSource.includes('build.nvidia.com') ? 'NVIDIA Build' : lastSyncSource.includes('featured-models') ? 'Featured Catalog 備援' : '/v1/models 備援'}` : ''}
                   </span>
                 )}
               </div>
@@ -888,14 +1030,35 @@ export default function App() {
                 disabled={isSyncingModels}
               >
                 <RefreshCw size={14} className={isSyncingModels ? 'animate-spin' : ''} />
-                <span>{isSyncingModels ? '正在向 NVIDIA NIM 同步...' : '同步 NVIDIA NIM 可用模型 (動態偵測)'}</span>
+                <span>{isSyncingModels ? '正在同步 NVIDIA Build Free Endpoint...' : '同步 Build Free Endpoint 77 模型'}</span>
               </button>
             </div>
 
             <div style={{ flex: 1, display: 'flex', gap: '20px', overflow: 'hidden' }}>
               {/* 左側：當前配置優先級 (Priority List) */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>⚙️ 當前模型順位 (1st &rarr; 2nd &rarr; 3rd)</h3>
+                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>⚙️ 當前模型順位｜第 {activeModelGroup} 組 (1st &rarr; 2nd &rarr; 3rd)</h3>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                  {[1, 2, 3].map((groupId) => {
+                    const groupInfo = modelGroups.find(g => g.group_id === groupId) || { count: groupId === activeModelGroup ? models.length : 0, primary_model: null };
+                    const primaryText = groupInfo.primary_model ? groupInfo.primary_model.split('/').pop() : '尚未設定';
+                    return (
+                      <button
+                        key={groupId}
+                        className={`btn ${activeModelGroup === groupId ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '8px 10px', fontSize: '13px', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
+                        onClick={() => handleSwitchModelGroup(groupId)}
+                        title={`切換到第 ${groupId} 組模型順位`}
+                      >
+                        <span style={{ fontWeight: '800' }}>第 {groupId} 組 {activeModelGroup === groupId ? '使用中' : '可切換'}</span>
+                        <span style={{ fontSize: '12px', opacity: 0.85, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {groupInfo.count || 0} 個模型｜{primaryText}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
                 
                 <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {models.length === 0 ? (
@@ -965,7 +1128,7 @@ export default function App() {
 
               {/* 右側：可用的 NVIDIA 模型庫 (Available Models) */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>🌐 NVIDIA NIM 雲端可用模型庫</h3>
+                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>🌐 NVIDIA Build Free Endpoint 模型庫</h3>
                 
                 {/* 搜尋與分類篩選 */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -994,7 +1157,7 @@ export default function App() {
                 <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {availableModels.length === 0 ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px', textAlign: 'center', padding: '20px' }}>
-                      目前沒有同步下來的模型。請確認有 active 金鑰，並點擊右上方「同步」按鈕。
+                      目前沒有同步下來的模型。請點擊右上方「同步」按鈕，系統會從 NVIDIA Build Free Endpoint 篩選頁抓取模型。
                     </div>
                   ) : (
                     (() => {
