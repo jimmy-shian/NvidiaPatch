@@ -230,7 +230,9 @@ function createGatewayApp() {
       models: modelsConfig.getAvailable(),
       lastSyncTime: modelsConfig.getLastSyncTime(),
       lastSyncSource: modelsConfig.getLastSyncSource(),
-      expectedCount: modelsConfig.getLastSyncExpectedCount()
+      expectedCount: modelsConfig.getLastSyncExpectedCount(),
+      parsedCount: modelsConfig.getLastSyncParsedCount(),
+      savedCount: modelsConfig.getLastSyncSavedCount()
     });
   });
 
@@ -244,8 +246,15 @@ function createGatewayApp() {
     const result = await modelsConfig.syncFromNvidia(fallbackKey);
     if (result.success) {
       const expectedText = result.expectedCount ? ` / NVIDIA Build expected ${result.expectedCount}` : '';
-      addLog('success', `Successfully synced ${result.count}${expectedText} Free Endpoint models. Source: ${result.source || 'NVIDIA Build catalog'}`);
-      res.json({ success: true, count: result.count, expectedCount: result.expectedCount || null, source: result.source || null });
+      addLog('success', `Free Endpoint model sync complete. Parsed ${result.parsedCount}, saved ${result.savedCount}${expectedText}. Source: ${result.source || 'NVIDIA Build catalog'}`);
+      res.json({
+        success: true,
+        count: result.savedCount,
+        parsedCount: result.parsedCount,
+        savedCount: result.savedCount,
+        expectedCount: result.expectedCount || null,
+        source: result.source || null
+      });
     } else {
       addLog('error', `Sync models failed: ${result.error}`);
       res.status(500).json({ error: result.error });
