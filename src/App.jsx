@@ -109,6 +109,9 @@ export default function App() {
     modelsCount: 0
   });
   const [logs, setLogs] = useState([]);
+  const logsContainerRef = useRef(null);
+  const shouldAutoFollowLogsRef = useRef(true);
+
   const [isSyncingModels, setIsSyncingModels] = useState(false);
   const [isTestingKeys, setIsTestingKeys] = useState(false);
   const [keyTestNotice, setKeyTestNotice] = useState(null);
@@ -133,29 +136,16 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef(null);
-  const logsEndRef = useRef(null);
 
   // 拖曳排序狀態
   const [draggedModelIndex, setDraggedModelIndex] = useState(null);
+  const [draggedAvailableModelId, setDraggedAvailableModelId] = useState(null);
+  const [isPriorityDropActive, setIsPriorityDropActive] = useState(false);
 
   // Dashboard 子頁籤狀態
   const [dashboardSubTab, setDashboardSubTab] = useState('overview');
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [hoveredHourlyIndex, setHoveredHourlyIndex] = useState(null);
-
-  // 自動捲動到聊天最下方
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [chatHistory]);
-
-  // 即時日誌採用終端機風格：舊訊息在上、新訊息往下追加，並自動跟隨最新一行。
-  useEffect(() => {
-    if (dashboardSubTab === 'logs' && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [logs, dashboardSubTab]);
 
   // 清理非阻塞提示的計時器
   useEffect(() => {
@@ -205,6 +195,17 @@ export default function App() {
       handleSyncModelsSilently();
     }
   }, [activeTab, availableModels.length]);
+
+   // 4. 當 logs 更新時，若使用者仍停在底部，才自動跟隨最新一行。
+  // 使用者往上捲查看紀錄時，不會強制拉回底部。
+  useEffect(() => {
+    if (dashboardSubTab !== 'logs') return;
+    if (!shouldAutoFollowLogsRef.current) return;
+
+    requestAnimationFrame(() => {
+      scrollLogsToBottom('auto');
+    });
+  }, [logs, dashboardSubTab]);
 
   const handleSyncModelsSilently = async () => {
     setIsSyncingModels(true);
@@ -410,6 +411,32 @@ export default function App() {
     }
   };
 
+  const isLogPanelNearBottom = () => {
+  const el = logsContainerRef.current;
+    if (!el) return true;
+
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+
+    // 允許一點誤差，避免剛好差 1~2px 時判斷錯誤
+    return distanceFromBottom <= 24;
+  };
+
+  const handleLogsScroll = () => {
+    // 只有捲動容器本身位於底部時，才繼續自動跟隨新日誌。
+    // 使用者往上捲查看舊紀錄時，不會再被強制拉回最後一行。
+    shouldAutoFollowLogsRef.current = isLogPanelNearBottom();
+  };
+
+  const scrollLogsToBottom = (behavior = 'auto') => {
+    const el = logsContainerRef.current;
+    if (!el) return;
+
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior
+    });
+  };
+
   const fetchLogsAndStats = async () => {
     try {
       const statsRes = await fetch('http://localhost:4000/api/stats');
@@ -530,6 +557,46 @@ export default function App() {
     if (models.some(m => m.model_id === modelId)) return;
     const updated = [...models.map(m => m.model_id), modelId];
     saveModelPriorities(updated);
+  };
+
+  const handleAvailableModelDragStart = (e, modelId) => {
+    if (!modelId || models.some(m => m.model_id === modelId)) return;
+    setDraggedAvailableModelId(modelId);
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('application/x-nvidia-model-id', modelId);
+    e.dataTransfer.setData('text/plain', modelId);
+  };
+
+  const handleAvailableModelDragEnd = () => {
+    setDraggedAvailableModelId(null);
+    setIsPriorityDropActive(false);
+  };
+
+  const handlePriorityDragOver = (e) => {
+    const hasAvailableModel = draggedAvailableModelId || Array.from(e.dataTransfer.types || []).includes('application/x-nvidia-model-id');
+    if (!hasAvailableModel) return;
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setIsPriorityDropActive(true);
+  };
+
+  const handlePriorityDragLeave = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsPriorityDropActive(false);
+  };
+
+  const handlePriorityDrop = (e) => {
+    const modelId = e.dataTransfer.getData('application/x-nvidia-model-id') || draggedAvailableModelId;
+    if (!modelId) return;
+
+    e.preventDefault();
+    setIsPriorityDropActive(false);
+    setDraggedAvailableModelId(null);
+
+    if (!models.some(m => m.model_id === modelId)) {
+      handleAddModelToPriority(modelId);
+    }
   };
 
   const handleRemoveModelFromPriority = (modelId) => {
@@ -862,13 +929,14 @@ export default function App() {
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
                   }}
-                  onClick={() => copyToClipboard('any-key', 'prov_key')}
+                  onClick={() => copyToClipboard(String(activeModelGroup), 'prov_key')}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
-                  title="點擊複製金鑰"
+                  title="點擊複製目前使用中的模型組別 Key"
                 >
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>API 金鑰 (API Key)</div>
-                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>any-key</div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>API 金鑰 / 模型組別 Key</div>
+                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>1 / 2 / 3</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>點擊複製目前第 {activeModelGroup} 組</div>
                   <div 
                     className="btn btn-secondary" 
                     style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -902,7 +970,7 @@ export default function App() {
                 </div>
               </div>
               <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                💡 註：於編輯器自訂提供商填入上方數值。模型 ID 可任意填寫，Gateway 將自動重寫為排序第一順位之 NVIDIA NIM 模型。
+                💡 註：於編輯器自訂提供商填入上方數值。API Key 欄位可直接填 1 / 2 / 3 來指定第 1 / 2 / 3 組模型順位；若填 any-key 或其他值，則使用 UI 目前啟用中的模型組。模型 ID 可任意填寫，Gateway 會自動重寫為所選組別的第一順位 NVIDIA NIM 模型。
               </span>
             </div>
 
@@ -1015,22 +1083,45 @@ export default function App() {
                     等待 Cline/OpenCode 連線請求，或目前無轉發日誌。
                   </div>
                 ) : (
-                  <div className="terminal-log-lines">
+                  <div
+                    ref={logsContainerRef}
+                    className="terminal-log-lines"
+                    onScroll={handleLogsScroll}
+                  >
                     {logs.map((log, index) => {
                       let logColor = '#dbeafe';
                       let icon = 'ℹ️';
-                      if (log.type === 'success') { logColor = '#34d399'; icon = '✅'; }
-                      else if (log.type === 'warning') { logColor = '#fbbf24'; icon = '⚠️'; }
-                      else if (log.type === 'error') { logColor = '#f87171'; icon = '❌'; }
+
+                      if (log.type === 'success') {
+                        logColor = '#34d399';
+                        icon = '✅';
+                      } else if (log.type === 'warning') {
+                        logColor = '#fbbf24';
+                        icon = '⚠️';
+                      } else if (log.type === 'error') {
+                        logColor = '#f87171';
+                        icon = '❌';
+                      }
+
                       return (
                         <div key={`${log.timestamp}-${index}`} className="terminal-log-line">
-                          <span className="terminal-log-time">[{formatTaiwanTime(log.timestamp)}]</span>
-                          <span className="terminal-log-icon">{icon}</span>
-                          <span className="terminal-log-message" style={{ color: logColor }}>{log.message}</span>
+                          <span className="terminal-log-time">
+                            [{formatTaiwanTime(log.timestamp)}]
+                          </span>
+
+                          <span className="terminal-log-icon">
+                            {icon}
+                          </span>
+
+                          <span
+                            className="terminal-log-message"
+                            style={{ color: logColor }}
+                          >
+                            {log.message}
+                          </span>
                         </div>
                       );
                     })}
-                    <div ref={logsEndRef} />
                   </div>
                 )}
               </div>
@@ -1203,10 +1294,10 @@ export default function App() {
 
             <div style={{ flex: 1, display: 'flex', gap: '20px', overflow: 'hidden' }}>
               {/* 左側：當前配置優先級 (Priority List) */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: '700' }}>⚙️ 當前模型順位｜第 {activeModelGroup} 組 (1st &rarr; 2nd &rarr; 3rd)</h3>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', minWidth: 0 }}>
                   {[1, 2, 3].map((groupId) => {
                     const groupInfo = modelGroups.find(g => g.group_id === groupId) || { count: groupId === activeModelGroup ? models.length : 0, primary_model: null };
                     const primaryText = groupInfo.primary_model ? groupInfo.primary_model.split('/').pop() : '尚未設定';
@@ -1214,23 +1305,36 @@ export default function App() {
                       <button
                         key={groupId}
                         className={`btn ${activeModelGroup === groupId ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ padding: '8px 10px', fontSize: '13px', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
+                        style={{ padding: '8px 10px', fontSize: '13px', flexDirection: 'column', alignItems: 'flex-start', gap: '4px', minWidth: 0, overflow: 'hidden' }}
                         onClick={() => handleSwitchModelGroup(groupId)}
                         title={`切換到第 ${groupId} 組模型順位`}
                       >
                         <span style={{ fontWeight: '800' }}>第 {groupId} 組 {activeModelGroup === groupId ? '使用中' : '可切換'}</span>
-                        <span style={{ fontSize: '12px', opacity: 0.85, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {groupInfo.count || 0} 個模型｜{primaryText}
+                        <span className="model-group-summary-line">
+                          <span className="model-group-count">{groupInfo.count || 0} 個模型｜</span>
+                          <span className="model-group-marquee" title={primaryText}>
+                            <span className="model-group-marquee-track">
+                              <span>{primaryText}</span>
+                              <span className="model-group-marquee-spacer">　　</span>
+                              <span aria-hidden="true">{primaryText}</span>
+                            </span>
+                          </span>
                         </span>
                       </button>
                     );
                   })}
                 </div>
                 
-                <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div
+                  className={`priority-drop-zone ${isPriorityDropActive ? 'is-drag-over' : ''}`}
+                  style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}
+                  onDragOver={handlePriorityDragOver}
+                  onDragLeave={handlePriorityDragLeave}
+                  onDrop={handlePriorityDrop}
+                >
                   {models.length === 0 ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px' }}>
-                      尚未配置任何模型。請從右側可用列表中點擊「+」新增。
+                      尚未配置任何模型。請從右側可用列表中點擊「新增」或直接拖曳模型到這裡。
                     </div>
                   ) : (
                     models.map((m, index) => (
@@ -1294,7 +1398,7 @@ export default function App() {
               </div>
 
               {/* 右側：可用的 NVIDIA 模型庫 (Available Models) */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: '700' }}>🌐 NVIDIA Build Free Endpoint 模型庫</h3>
                 
                 {/* 搜尋與分類篩選 */}
@@ -1363,8 +1467,16 @@ export default function App() {
                       return filtered.map((am) => {
                         const isAdded = models.some(m => m.model_id === am.id);
                         return (
-                          <div key={am.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '6px' }}>
-                            <div style={{ display: 'flex', flexDirection: 'column', maxWidth: '80%' }}>
+                          <div
+                            key={am.id}
+                            className={`available-model-card ${isAdded ? 'is-added' : ''}`}
+                            draggable={!isAdded}
+                            onDragStart={(e) => handleAvailableModelDragStart(e, am.id)}
+                            onDragEnd={handleAvailableModelDragEnd}
+                            title={isAdded ? '此模型已在目前順位組中' : '可拖曳到左側模型順位區新增'}
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '6px', opacity: draggedAvailableModelId === am.id ? 0.55 : 1 }}
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column', maxWidth: '80%', minWidth: 0 }}>
                               <span style={{ fontSize: '14px', fontWeight: '600' }}>{am.name}</span>
                               <span style={{ fontSize: '12px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{am.id}</span>
                             </div>
