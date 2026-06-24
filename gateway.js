@@ -72,6 +72,107 @@ function markModelFailureCooldown(modelId, reason = '模型層級失敗') {
   addLog('warning', `模型「${modelId}」已進入 ${Math.round(MODEL_FAILURE_COOLDOWN_MS / 1000)} 秒暫時跳過狀態；原因：${reason}`);
 }
 
+
+function parseModelGroupValue(value) {
+  if (value === undefined || value === null) return null;
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  // 最常用：在 Cline / OpenCode 的 API Key 欄位直接輸入 1、2、3。
+  if (/^[123]$/.test(raw)) {
+    return Number(raw);
+  }
+
+  const normalized = raw.toLowerCase();
+
+  // 也支援 group-1、group_2、group:3、group=2、model-group-1、g2 等較好辨識的格式。
+  const exactMatch = normalized.match(/^(?:group|model-group|model_group|modelgroup|g)[\s:_=-]*([123])$/);
+  if (exactMatch) {
+    return Number(exactMatch[1]);
+  }
+
+  const prefixMatch = normalized.match(/^(?:group|model-group|model_group|modelgroup|g)[\s:_=-]*([123])(?:[\s,;|:/-].*)$/);
+  if (prefixMatch) {
+    return Number(prefixMatch[1]);
+  }
+
+  return null;
+}
+
+function getBearerTokenFromRequest(req) {
+  const authorization = req.headers.authorization || '';
+  const match = String(authorization).match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : '';
+}
+
+function resolveModelGroupFromRequest(req) {
+  const headerGroup = parseModelGroupValue(req.headers['x-model-group'])
+    || parseModelGroupValue(req.headers['x-gateway-model-group']);
+
+  if (headerGroup) {
+    return {
+      groupId: headerGroup,
+      fromClientKey: true,
+      source: 'header'
+    };
+  }
+
+  const queryGroup = parseModelGroupValue(req.query && (req.query.groupId || req.query.modelGroup || req.query.group));
+  if (queryGroup) {
+    return {
+      groupId: queryGroup,
+      fromClientKey: true,
+      source: 'query'
+    };
+  }
+
+  const bearerGroup = parseModelGroupValue(getBearerTokenFromRequest(req));
+  if (bearerGroup) {
+    return {
+      groupId: bearerGroup,
+      fromClientKey: true,
+      source: 'api-key'
+    };
+  }
+
+  return {
+    groupId: modelsConfig.getActiveGroup(),
+    fromClientKey: false,
+    source: 'active-group'
+  };
+}
+
+function buildOpenAiModelsListForGroup(groupId) {
+  const configuredModels = modelsConfig.getAll(groupId).filter(m => m.is_active === 1);
+  const modelsData = [
+    {
+      id: 'patcher-main',
+      object: 'model',
+      created: 1718925400,
+      owned_by: `gateway-group-${groupId}`
+    }
+  ];
+
+  configuredModels.forEach(m => {
+    if (m.model_id !== 'patcher-main') {
+      modelsData.push({
+        id: m.model_id,
+        object: 'model',
+        created: 1718925400,
+        owned_by: 'nvidia'
+      });
+    }
+  });
+
+  return {
+    object: 'list',
+    data: modelsData,
+    gateway_model_group: groupId
+  };
+}
+
+
 /**
  * 檢查內容中是否有未閉合或格式不完整的 HTML/XML tag
  * @param {string} content - 要檢查的字串
@@ -344,59 +445,13 @@ function createGatewayApp() {
 
   // 5.5 OpenAI 相容的 Models 列表端點 (供 Cline / OpenCode 驗證連線與取得可用模型)
   app.get('/v1/models', (req, res) => {
-    const configuredModels = modelsConfig.getAll().filter(m => m.is_active === 1);
-    const modelsData = [
-      {
-        id: 'patcher-main',
-        object: 'model',
-        created: 1718925400,
-        owned_by: 'myself'
-      }
-    ];
-    
-    configuredModels.forEach(m => {
-      if (m.model_id !== 'patcher-main') {
-        modelsData.push({
-          id: m.model_id,
-          object: 'model',
-          created: 1718925400,
-          owned_by: 'nvidia'
-        });
-      }
-    });
-
-    res.json({
-      object: 'list',
-      data: modelsData
-    });
+    const groupSelection = resolveModelGroupFromRequest(req);
+    res.json(buildOpenAiModelsListForGroup(groupSelection.groupId));
   });
 
   app.get('/models', (req, res) => {
-    const configuredModels = modelsConfig.getAll().filter(m => m.is_active === 1);
-    const modelsData = [
-      {
-        id: 'patcher-main',
-        object: 'model',
-        created: 1718925400,
-        owned_by: 'myself'
-      }
-    ];
-    
-    configuredModels.forEach(m => {
-      if (m.model_id !== 'patcher-main') {
-        modelsData.push({
-          id: m.model_id,
-          object: 'model',
-          created: 1718925400,
-          owned_by: 'nvidia'
-        });
-      }
-    });
-
-    res.json({
-      object: 'list',
-      data: modelsData
-    });
+    const groupSelection = resolveModelGroupFromRequest(req);
+    res.json(buildOpenAiModelsListForGroup(groupSelection.groupId));
   });
 
   // 6. OpenAI 相容的 Chat Completions Gateway 中介核心
@@ -426,14 +481,28 @@ function createGatewayApp() {
     // 支援 Mock 測試環境變數
     const nvidiaBaseUrl = process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
 
-    // 撈出排序好的模型；若某模型剛發生逾時 / 5xx / 串流錯誤，會先暫時略過，避免並行請求繼續打同一顆壞模型。
-    const configuredModels = modelsConfig.getAll().filter(m => m.is_active === 1);
+    // 撈出排序好的模型；若客戶端在 API Key 欄位輸入 1 / 2 / 3，會直接指定使用第 1 / 2 / 3 組模型。
+    // 若沒有指定，則沿用 UI 目前啟用中的模型組別。
+    const groupSelection = resolveModelGroupFromRequest(req);
+    const configuredModels = modelsConfig.getAll(groupSelection.groupId).filter(m => m.is_active === 1);
     if (configuredModels.length === 0) {
-      addLog('error', `請求 #${requestId} 已拒絕：目前沒有任何啟用中的模型順位。`);
-      return res.status(500).json({ error: { message: 'No active models configured in the Gateway' } });
+      const detail = groupSelection.fromClientKey
+        ? `客戶端指定第 ${groupSelection.groupId} 組，但該組沒有任何啟用中的模型順位。`
+        : `目前啟用的第 ${groupSelection.groupId} 組沒有任何啟用中的模型順位。`;
+      addLog('error', `請求 #${requestId} 已拒絕：${detail}`);
+      return res.status(500).json({
+        error: {
+          message: 'No active models configured in the selected Gateway model group',
+          detail,
+          modelGroup: groupSelection.groupId
+        }
+      });
     }
 
-    addLog('info', `請求 #${requestId} 已收到（stream=${stream}），開始依模型順位調度。`);
+    const groupSourceText = groupSelection.fromClientKey
+      ? `由客戶端 API Key/Header 指定第 ${groupSelection.groupId} 組`
+      : `使用目前啟用的第 ${groupSelection.groupId} 組`;
+    addLog('info', `請求 #${requestId} 已收到（stream=${stream}），${groupSourceText}模型順位，開始調度。`);
 
     res.once('finish', () => {
       if (res.statusCode >= 400) {
