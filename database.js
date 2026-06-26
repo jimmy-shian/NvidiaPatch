@@ -391,6 +391,28 @@ function initDatabase(dbPath) {
     )
   `);
 
+  // 7. 建立 token_usage 表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT,
+      timestamp TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      prompt_tokens INTEGER DEFAULT 0,
+      completion_tokens INTEGER DEFAULT 0,
+      total_tokens INTEGER DEFAULT 0
+    )
+  `);
+
+  // 確保初始設定參數存在於 metadata 中
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('ROUND_DELAY_MS', '15000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('REQUEST_TIMEOUT_MS', '120000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('STREAM_READ_TIMEOUT_MS', '120000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('NVIDIA_API_URL', 'https://integrate.api.nvidia.com/v1')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PORT', '4000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', '2')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', '60000')").run();
+
   // 確保舊版資料庫可平滑升級到三組模型順位 schema
   ensureModelsConfigSchema();
 
@@ -1001,11 +1023,93 @@ function closeDatabase() {
   }
 }
 
+const settings = {
+  get() {
+    const roundDelay = db.prepare("SELECT value FROM metadata WHERE key = 'ROUND_DELAY_MS'").get();
+    const reqTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'REQUEST_TIMEOUT_MS'").get();
+    const streamTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'STREAM_READ_TIMEOUT_MS'").get();
+    const nvidiaUrl = db.prepare("SELECT value FROM metadata WHERE key = 'NVIDIA_API_URL'").get();
+    const port = db.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
+    const maxRounds = db.prepare("SELECT value FROM metadata WHERE key = 'MAX_ROUNDS_PER_MODEL'").get();
+    const testTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'TEST_TIMEOUT_MS'").get();
+    return {
+      ROUND_DELAY_MS: Number(roundDelay?.value || 15000),
+      REQUEST_TIMEOUT_MS: Number(reqTimeout?.value || 120000),
+      STREAM_READ_TIMEOUT_MS: Number(streamTimeout?.value || 120000),
+      NVIDIA_API_URL: nvidiaUrl?.value || 'https://integrate.api.nvidia.com/v1',
+      PORT: Number(port?.value || 4000),
+      MAX_ROUNDS_PER_MODEL: Number(maxRounds?.value || 2),
+      TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000)
+    };
+  },
+  save(config) {
+    if (config.ROUND_DELAY_MS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('ROUND_DELAY_MS', ?)").run(String(config.ROUND_DELAY_MS));
+    }
+    if (config.REQUEST_TIMEOUT_MS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('REQUEST_TIMEOUT_MS', ?)").run(String(config.REQUEST_TIMEOUT_MS));
+    }
+    if (config.STREAM_READ_TIMEOUT_MS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('STREAM_READ_TIMEOUT_MS', ?)").run(String(config.STREAM_READ_TIMEOUT_MS));
+    }
+    if (config.NVIDIA_API_URL !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('NVIDIA_API_URL', ?)").run(String(config.NVIDIA_API_URL));
+    }
+    if (config.PORT !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PORT', ?)").run(String(config.PORT));
+    }
+    if (config.MAX_ROUNDS_PER_MODEL !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', ?)").run(String(config.MAX_ROUNDS_PER_MODEL));
+    }
+    if (config.TEST_TIMEOUT_MS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', ?)").run(String(config.TEST_TIMEOUT_MS));
+    }
+    return this.get();
+  }
+};
+
+const tokenUsage = {
+  addRecord(requestId, modelId, promptTokens, completionTokens) {
+    const timestamp = getTaiwanISOString();
+    const total = (promptTokens || 0) + (completionTokens || 0);
+    db.prepare(`
+      INSERT INTO token_usage (request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(requestId || null, timestamp, modelId, promptTokens || 0, completionTokens || 0, total);
+  },
+  getStats() {
+    return db.prepare(`
+      SELECT 
+        model_id,
+        SUM(prompt_tokens) as total_prompt_tokens,
+        SUM(completion_tokens) as total_completion_tokens,
+        SUM(total_tokens) as total_total_tokens,
+        COUNT(id) as request_count
+      FROM token_usage
+      GROUP BY model_id
+      ORDER BY total_total_tokens DESC
+    `).all();
+  },
+  getLogs(limit = 100) {
+    return db.prepare(`
+      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens
+      FROM token_usage
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(limit);
+  },
+  clear() {
+    db.exec("DELETE FROM token_usage");
+  }
+};
+
 module.exports = {
   initDatabase,
   closeDatabase,
   apiKeys,
   modelsConfig,
   rules,
-  stats
+  stats,
+  settings,
+  tokenUsage
 };

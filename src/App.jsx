@@ -92,7 +92,28 @@ function MarkdownContent({ children }) {
 }
 
 export default function App() {
+  const getGatewayUrl = () => {
+    if (window.electronAPI && window.electronAPI.getGatewayPort) {
+      try {
+        const port = window.electronAPI.getGatewayPort();
+        return `http://localhost:${port}`;
+      } catch (e) {
+        console.error('Failed to get gateway port via IPC:', e);
+      }
+    }
+    return `http://localhost:4000`; // fallback
+  };
+  const GATEWAY_URL = getGatewayUrl();
+
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'theme-dark');
+  const [settingsData, setSettingsData] = useState({
+    ROUND_DELAY_MS: 15000,
+    REQUEST_TIMEOUT_MS: 120000,
+    STREAM_READ_TIMEOUT_MS: 120000
+  });
+  const [tokenUsageData, setTokenUsageData] = useState({ stats: [], logs: [] });
+
   const [keys, setKeys] = useState([]);
   const [newKey, setNewKey] = useState('');
   const [models, setModels] = useState([]);
@@ -118,6 +139,13 @@ export default function App() {
   const keyTestNoticeTimerRef = useRef(null);
   const [copiedId, setCopiedId] = useState(null);
   const [apiError, setApiError] = useState('');
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [tempSettings, setTempSettings] = useState(null);
+
+  useEffect(() => {
+    document.documentElement.className = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   // 擴充 state 用於模型同步時間、搜尋與篩選
   const [lastSyncTime, setLastSyncTime] = useState(null);
@@ -210,7 +238,7 @@ export default function App() {
   const handleSyncModelsSilently = async () => {
     setIsSyncingModels(true);
     try {
-      const res = await fetch('http://localhost:4000/api/models/sync', { method: 'POST' });
+      const res = await fetch(GATEWAY_URL + '/api/models/sync', { method: 'POST' });
       if (res.ok) {
         fetchData();
       }
@@ -308,7 +336,7 @@ export default function App() {
     setIsChatting(true);
 
     try {
-      const res = await fetch('http://localhost:4000/api/test/chat', {
+      const res = await fetch(GATEWAY_URL + '/api/test/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -373,22 +401,63 @@ export default function App() {
     }
   };
 
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(GATEWAY_URL + '/api/settings');
+      if (res.ok) setSettingsData(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const saveSettings = async (updated) => {
+    try {
+      const res = await fetch(GATEWAY_URL + '/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      });
+      if (res.ok) setSettingsData(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchTokenUsage = async () => {
+    try {
+      const res = await fetch(GATEWAY_URL + '/api/token-usage');
+      if (res.ok) setTokenUsageData(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const clearTokenUsage = async () => {
+    if (!window.confirm('確定要清除所有 Token 使用記錄與統計嗎？')) return;
+    try {
+      const res = await fetch(GATEWAY_URL + '/api/token-usage/clear', { method: 'POST' });
+      if (res.ok) fetchTokenUsage();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const fetchData = async () => {
     try {
-      const keysRes = await fetch('http://localhost:4000/api/keys');
+      const keysRes = await fetch(GATEWAY_URL + '/api/keys');
       if (keysRes.ok) setKeys(await keysRes.json());
 
-      const modelsRes = await fetch('http://localhost:4000/api/models');
+      const modelsRes = await fetch(GATEWAY_URL + '/api/models');
       if (modelsRes.ok) setModels(await modelsRes.json());
 
-      const modelGroupsRes = await fetch('http://localhost:4000/api/models/groups');
+      const modelGroupsRes = await fetch(GATEWAY_URL + '/api/models/groups');
       if (modelGroupsRes.ok) {
         const data = await modelGroupsRes.json();
         setActiveModelGroup(data.activeGroup || 1);
         setModelGroups(data.groups || []);
       }
 
-      const availModelsRes = await fetch('http://localhost:4000/api/models/available');
+      const availModelsRes = await fetch(GATEWAY_URL + '/api/models/available');
       if (availModelsRes.ok) {
         const data = await availModelsRes.json();
         setAvailableModels(data.models || []);
@@ -402,9 +471,11 @@ export default function App() {
         }
       }
 
-      const rulesRes = await fetch('http://localhost:4000/api/rules');
+      const rulesRes = await fetch(GATEWAY_URL + '/api/rules');
       if (rulesRes.ok) setRules(await rulesRes.json());
 
+      await fetchSettings();
+      await fetchTokenUsage();
       fetchLogsAndStats();
     } catch (err) {
       setApiError('無法連接到 Gateway 服務。請確保 Electron 背景服務已成功啟動！');
@@ -439,12 +510,13 @@ export default function App() {
 
   const fetchLogsAndStats = async () => {
     try {
-      const statsRes = await fetch('http://localhost:4000/api/stats');
+      const statsRes = await fetch(GATEWAY_URL + '/api/stats');
       if (statsRes.ok) setStats(await statsRes.json());
 
-      const logsRes = await fetch('http://localhost:4000/api/logs');
+      const logsRes = await fetch(GATEWAY_URL + '/api/logs');
       if (logsRes.ok) setLogs(await logsRes.json());
       
+      fetchTokenUsage();
       setApiError(''); // 成功連線，清除錯誤
     } catch (err) {
       // 避免頻繁報錯
@@ -453,7 +525,7 @@ export default function App() {
 
   const fetchKeys = async () => {
     try {
-      const keysRes = await fetch('http://localhost:4000/api/keys');
+      const keysRes = await fetch(GATEWAY_URL + '/api/keys');
       if (keysRes.ok) setKeys(await keysRes.json());
     } catch (err) {
       console.error('取得金鑰資料失敗:', err);
@@ -465,7 +537,7 @@ export default function App() {
     e.preventDefault();
     if (!newKey.trim()) return;
     try {
-      const res = await fetch('http://localhost:4000/api/keys', {
+      const res = await fetch(GATEWAY_URL + '/api/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: newKey.trim() })
@@ -485,7 +557,7 @@ export default function App() {
   const handleDeleteKey = async (id) => {
     if (!confirm('確認要刪除此 API Key？')) return;
     try {
-      const res = await fetch(`http://localhost:4000/api/keys/${id}`, {
+      const res = await fetch(`${GATEWAY_URL}/api/keys/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) fetchData();
@@ -498,7 +570,7 @@ export default function App() {
     setIsTestingKeys(true);
     showKeyTestNotice('info', '正在測試所有 API Key，測試期間不會鎖住輸入框。');
     try {
-      const res = await fetch('http://localhost:4000/api/keys/test', { method: 'POST' });
+      const res = await fetch(GATEWAY_URL + '/api/keys/test', { method: 'POST' });
       if (res.ok) {
         const results = await res.json();
         const failures = results.filter(r => !r.success);
@@ -528,7 +600,7 @@ export default function App() {
     setIsSyncingModels(true);
     showSyncNotice('info', '正在同步 NVIDIA Build Free Endpoint 模型清單，不會鎖住搜尋輸入框。');
     try {
-      const res = await fetch('http://localhost:4000/api/models/sync', { method: 'POST' });
+      const res = await fetch(GATEWAY_URL + '/api/models/sync', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setLastParsedModelCount(data.parsedCount ?? null);
@@ -620,7 +692,7 @@ export default function App() {
 
   const saveModelPriorities = async (modelIds, groupId = activeModelGroup) => {
     try {
-      const res = await fetch('http://localhost:4000/api/models', {
+      const res = await fetch(GATEWAY_URL + '/api/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ models: modelIds, groupId })
@@ -634,7 +706,7 @@ export default function App() {
   const handleSwitchModelGroup = async (groupId) => {
     if (groupId === activeModelGroup) return;
     try {
-      const res = await fetch('http://localhost:4000/api/models/groups/active', {
+      const res = await fetch(GATEWAY_URL + '/api/models/groups/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId })
@@ -656,7 +728,7 @@ export default function App() {
     e.preventDefault();
     if (!newRuleTitle.trim() || !newRuleContent.trim()) return;
     try {
-      const res = await fetch('http://localhost:4000/api/rules', {
+      const res = await fetch(GATEWAY_URL + '/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: newRuleTitle.trim(), content: newRuleContent.trim() })
@@ -677,7 +749,7 @@ export default function App() {
   const handleDeleteRule = async (id) => {
     if (!confirm('確認要刪除此規則？')) return;
     try {
-      const res = await fetch(`http://localhost:4000/api/rules/${id}`, {
+      const res = await fetch(`${GATEWAY_URL}/api/rules/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -767,6 +839,30 @@ export default function App() {
           </button>
         </nav>
 
+        {/* 系統設定按鈕區 */}
+        <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => {
+                setTempSettings({ ...settingsData });
+                setIsSettingsModalOpen(true);
+              }}
+              className="btn btn-secondary"
+              style={{ flex: 1, padding: '8px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            >
+              ⚙️ 系統設定
+            </button>
+            <button
+              onClick={() => setTheme(prev => prev === 'theme-dark' ? 'theme-light' : 'theme-dark')}
+              className="btn btn-secondary"
+              style={{ padding: '8px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              title="切換深淺色模式"
+            >
+              {theme === 'theme-dark' ? '☀️ 淺色' : '🌙 深色'}
+            </button>
+          </div>
+        </div>
+
         {apiError && (
           <div className="glass-panel badge-inactive" style={{ padding: '12px', fontSize: '13px', borderRadius: '8px', marginTop: '12px', whiteSpace: 'normal', lineHeight: '1.4' }}>
             <ShieldAlert size={14} style={{ marginRight: '6px', flexShrink: 0 }} />
@@ -799,6 +895,14 @@ export default function App() {
                 >
                   <RefreshCw size={14} className={dashboardSubTab === 'logs' && logs.length > 0 ? 'animate-spin' : ''} />
                   <span>即時日誌</span>
+                </button>
+                <button
+                  className={`btn ${dashboardSubTab === 'tokens' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '8px 14px', fontSize: '14px' }}
+                  onClick={() => setDashboardSubTab('tokens')}
+                >
+                  <Cpu size={14} />
+                  <span>Token 記數</span>
                 </button>
               </div>
               <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
@@ -873,11 +977,11 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
                 <div 
                   style={{ 
-                    background: 'rgba(0,0,0,0.2)', 
+                    background: 'var(--bg-tertiary)', 
                     padding: '12px', 
                     borderRadius: '8px', 
                     position: 'relative', 
-                    border: '1px solid rgba(255,255,255,0.03)',
+                    border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
                   }}
@@ -897,21 +1001,21 @@ export default function App() {
                 </div>
                 <div 
                   style={{ 
-                    background: 'rgba(0,0,0,0.2)', 
+                    background: 'var(--bg-tertiary)', 
                     padding: '12px', 
                     borderRadius: '8px', 
                     position: 'relative', 
-                    border: '1px solid rgba(255,255,255,0.03)',
+                    border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
                   }}
-                  onClick={() => copyToClipboard('http://127.0.0.1:4000/v1', 'prov_url')}
+                  onClick={() => copyToClipboard(getGatewayUrl() + '/v1', 'prov_url')}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
                   title="點擊複製基礎 URL"
                 >
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>基礎 URL (Base URL)</div>
-                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>http://127.0.0.1:4000/v1</div>
+                  <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>{getGatewayUrl()}/v1</div>
                   <div 
                     className="btn btn-secondary" 
                     style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -921,11 +1025,11 @@ export default function App() {
                 </div>
                 <div 
                   style={{ 
-                    background: 'rgba(0,0,0,0.2)', 
+                    background: 'var(--bg-tertiary)', 
                     padding: '12px', 
                     borderRadius: '8px', 
                     position: 'relative', 
-                    border: '1px solid rgba(255,255,255,0.03)',
+                    border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
                   }}
@@ -946,11 +1050,11 @@ export default function App() {
                 </div>
                 <div 
                   style={{ 
-                    background: 'rgba(0,0,0,0.2)', 
+                    background: 'var(--bg-tertiary)', 
                     padding: '12px', 
                     borderRadius: '8px', 
                     position: 'relative', 
-                    border: '1px solid rgba(255,255,255,0.03)',
+                    border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
                   }}
@@ -1003,16 +1107,19 @@ export default function App() {
                           style={{
                             position: 'absolute',
                             top: '-36px',
-                            left: '50%',
-                            transform: `translateX(-50%) translateY(${isHovered ? '0' : '6px'})`,
+                            left: i < 3 ? '0' : (i > stats.hourly.length - 3 ? 'auto' : '50%'),
+                            right: i > stats.hourly.length - 3 ? '0' : 'auto',
+                            transform: i < 3 || i > stats.hourly.length - 3 
+                              ? `translateY(${isHovered ? '0' : '6px'})` 
+                              : `translateX(-50%) translateY(${isHovered ? '0' : '6px'})`,
                             opacity: isHovered ? 1 : 0,
                             pointerEvents: 'none',
                             transition: 'opacity 180ms ease, transform 180ms ease',
-                            background: 'rgba(15, 23, 42, 0.96)',
-                            border: '1px solid rgba(255,255,255,0.12)',
+                            background: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-color)',
                             borderRadius: '8px',
                             padding: '6px 8px',
-                            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                            boxShadow: 'var(--card-shadow)',
                             fontSize: '12px',
                             color: 'var(--text-primary)',
                             whiteSpace: 'nowrap',
@@ -1089,17 +1196,18 @@ export default function App() {
                     onScroll={handleLogsScroll}
                   >
                     {logs.map((log, index) => {
-                      let logColor = '#dbeafe';
+                      const isLight = theme === 'theme-light';
+                      let logColor = isLight ? '#1e3a8a' : '#dbeafe';
                       let icon = 'ℹ️';
 
                       if (log.type === 'success') {
-                        logColor = '#34d399';
+                        logColor = isLight ? '#047857' : '#34d399';
                         icon = '✅';
                       } else if (log.type === 'warning') {
-                        logColor = '#fbbf24';
+                        logColor = isLight ? '#b45309' : '#fbbf24';
                         icon = '⚠️';
                       } else if (log.type === 'error') {
-                        logColor = '#f87171';
+                        logColor = isLight ? '#b91c1c' : '#f87171';
                         icon = '❌';
                       }
 
@@ -1124,6 +1232,98 @@ export default function App() {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+            )}
+
+            {/* Token 記數頁籤 */}
+            {dashboardSubTab === 'tokens' && (
+            <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '16px', fontWeight: '700' }}>📊 Token 記數與使用量統計</span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={fetchTokenUsage}>
+                    重新載入
+                  </button>
+                  <button className="btn btn-danger" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={clearTokenUsage}>
+                    清空記錄
+                  </button>
+                </div>
+              </div>
+
+              {/* 滾動容器 */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', paddingRight: '4px' }}>
+                {/* 1. 累加統計 */}
+                <div>
+                  <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>模型累計 Token 統計</h3>
+                  {tokenUsageData.stats.length === 0 ? (
+                    <div style={{ padding: '16px', textAlign: 'center', background: 'var(--bg-tertiary)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '14px' }}>
+                      尚無統計資料。請先使用 Gateway 發送請求。
+                    </div>
+                  ) : (
+                    <div className="markdown-body" style={{ overflowX: 'auto' }}>
+                      <table className="md-table" style={{ width: '100%' }}>
+                        <thead>
+                          <tr>
+                            <th>模型 ID</th>
+                            <th>Prompt Tokens</th>
+                            <th>Completion Tokens</th>
+                            <th>Total Tokens</th>
+                            <th>調用次數</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tokenUsageData.stats.map((stat, idx) => (
+                            <tr key={idx}>
+                              <td style={{ fontFamily: 'ui-monospace, monospace', fontWeight: '600' }}>{stat.model_id}</td>
+                              <td>{stat.total_prompt_tokens.toLocaleString()}</td>
+                              <td>{stat.total_completion_tokens.toLocaleString()}</td>
+                              <td style={{ color: 'var(--accent-color)', fontWeight: '700' }}>{stat.total_total_tokens.toLocaleString()}</td>
+                              <td>{stat.request_count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. 即時日誌 */}
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '300px' }}>
+                  <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>每次回應 Token 用量明細</h3>
+                  {tokenUsageData.logs.length === 0 ? (
+                    <div style={{ padding: '16px', textAlign: 'center', background: 'var(--bg-tertiary)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '14px', flex: 1 }}>
+                      尚無詳細使用記錄。
+                    </div>
+                  ) : (
+                    <div className="markdown-body" style={{ overflowX: 'auto', flex: 1 }}>
+                      <table className="md-table" style={{ width: '100%' }}>
+                        <thead>
+                          <tr>
+                            <th>時間</th>
+                            <th>請求 ID</th>
+                            <th>模型</th>
+                            <th>Prompt</th>
+                            <th>Completion</th>
+                            <th>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tokenUsageData.logs.map((log, idx) => (
+                            <tr key={idx}>
+                              <td style={{ whiteSpace: 'nowrap' }}>{formatTaiwanTime(log.timestamp)}</td>
+                              <td style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>#{log.request_id || 'test-chat'}</td>
+                              <td style={{ fontFamily: 'ui-monospace, monospace' }}>{log.model_id.split('/').pop()}</td>
+                              <td>{log.prompt_tokens}</td>
+                              <td>{log.completion_tokens}</td>
+                              <td style={{ fontWeight: '600', color: 'var(--accent-color)' }}>{log.total_tokens}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             )}
@@ -1218,7 +1418,7 @@ export default function App() {
                       }
 
                       return (
-                        <tr key={k.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <tr key={k.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                           <td style={{ padding: '12px', fontFamily: 'monospace' }}>
                             nvapi-...{k.key_value.substring(k.key_value.length - 12)}
                           </td>
@@ -1342,14 +1542,18 @@ export default function App() {
                         key={m.id} 
                         className="glass-panel" 
                         style={{ 
-                          padding: '10px 14px', 
+                          padding: '12px 16px', 
                           display: 'flex', 
                           alignItems: 'center', 
                           justifyContent: 'space-between', 
-                          borderLeft: `4px solid ${index === 0 ? '#10b981' : '#3b82f6'}`,
+                          border: '1px solid var(--border-color)',
+                          borderLeft: `5px solid ${index === 0 ? 'var(--status-active)' : 'var(--status-cooldown)'}`,
+                          borderRadius: '8px',
                           cursor: 'move',
                           opacity: draggedModelIndex === index ? 0.5 : 1,
-                          transition: 'opacity 0.2s'
+                          transition: 'opacity 0.2s',
+                          background: 'var(--bg-secondary)',
+                          marginBottom: '4px'
                         }}
                         draggable
                         onDragStart={(e) => {
@@ -1374,11 +1578,20 @@ export default function App() {
                         onDragEnd={() => setDraggedModelIndex(null)}
                         title="可拖曳排序"
                       >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '70%' }}>
-                          <span style={{ fontSize: '13px', color: index === 0 ? '#10b981' : 'var(--text-secondary)', fontWeight: '700' }}>
-                            第 {m.priority} 順位 {index === 0 ? '【主要 Primary】' : '【備用 Fallback】'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', maxWidth: '75%', minWidth: 0 }}>
+                          <span style={{ 
+                            fontSize: '11px', 
+                            padding: '3px 8px', 
+                            borderRadius: '4px',
+                            background: index === 0 ? 'var(--bg-active)' : 'var(--bg-cooldown)',
+                            color: index === 0 ? 'var(--text-active)' : 'var(--text-cooldown)',
+                            border: `1px solid ${index === 0 ? 'var(--border-active)' : 'var(--border-cooldown)'}`,
+                            fontWeight: 'bold',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            #{m.priority} {index === 0 ? '主要' : '備用'}
                           </span>
-                          <span style={{ fontSize: '15px', fontWeight: '600', wordBreak: 'break-all' }}>{m.model_id}</span>
+                          <span style={{ fontSize: '14px', fontWeight: '600', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{m.model_id}</span>
                         </div>
                         <div style={{ display: 'flex', gap: '4px' }}>
                           <button className="btn btn-secondary" style={{ padding: '6px' }} disabled={index === 0} onClick={() => handleMovePriority(index, 'up')}>
@@ -1474,15 +1687,26 @@ export default function App() {
                             onDragStart={(e) => handleAvailableModelDragStart(e, am.id)}
                             onDragEnd={handleAvailableModelDragEnd}
                             title={isAdded ? '此模型已在目前順位組中' : '可拖曳到左側模型順位區新增'}
-                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '6px', opacity: draggedAvailableModelId === am.id ? 0.55 : 1 }}
+                            style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'space-between', 
+                              padding: '12px 14px', 
+                              background: isAdded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)', 
+                              border: '1px solid var(--border-color)', 
+                              borderRadius: '8px', 
+                              opacity: draggedAvailableModelId === am.id ? 0.55 : 1,
+                              boxShadow: 'var(--card-shadow)',
+                              marginBottom: '2px'
+                            }}
                           >
-                            <div style={{ display: 'flex', flexDirection: 'column', maxWidth: '80%', minWidth: 0 }}>
-                              <span style={{ fontSize: '14px', fontWeight: '600' }}>{am.name}</span>
-                              <span style={{ fontSize: '12px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{am.id}</span>
+                            <div style={{ display: 'flex', flexDirection: 'column', maxWidth: '80%', minWidth: 0, gap: '2px' }}>
+                              <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>{am.name}</span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{am.id}</span>
                             </div>
                             <button 
                               className={isAdded ? 'btn btn-secondary' : 'btn btn-primary'} 
-                              style={{ padding: '4px 8px', fontSize: '13px', opacity: isAdded ? 0.7 : 1 }}
+                              style={{ padding: '6px 12px', fontSize: '13px', opacity: isAdded ? 0.7 : 1 }}
                               disabled={isAdded}
                               onClick={() => !isAdded && handleAddModelToPriority(am.id)}
                             >
@@ -1617,7 +1841,7 @@ export default function App() {
                 <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-secondary)' }}>選擇測試模型:</span>
                 <select 
                   className="input" 
-                  style={{ minWidth: '320px', fontSize: '15px', padding: '8px 12px', background: 'rgba(15, 23, 42, 0.8)', cursor: 'pointer' }}
+                  style={{ minWidth: '320px', fontSize: '15px', padding: '8px 12px', background: 'var(--bg-tertiary)', color: 'var(--text-primary)', cursor: 'pointer' }}
                   value={selectedTestModel}
                   onChange={(e) => setSelectedTestModel(e.target.value)}
                   disabled={isChatting}
@@ -1760,6 +1984,142 @@ export default function App() {
         )}
 
       </div>
+
+      {/* 系統詳細設定對話框 (Modal Card) */}
+      {isSettingsModalOpen && tempSettings && (
+        <div 
+          onClick={() => setIsSettingsModalOpen(false)}
+          style={{
+            position: 'fixed',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            backdropFilter: 'blur(2px)'
+          }}
+        >
+          <div 
+            className="glass-panel" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '500px',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+              maxHeight: '90vh',
+              overflowY: 'auto'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: '800', fontFamily: 'Outfit' }}>⚙️ 系統詳細設定</h3>
+              <button className="btn btn-secondary" style={{ padding: '4px 8px' }} onClick={() => setIsSettingsModalOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>NVIDIA API Base URL</label>
+                <input
+                  className="input"
+                  type="text"
+                  value={tempSettings.NVIDIA_API_URL}
+                  onChange={(e) => setTempSettings({ ...tempSettings, NVIDIA_API_URL: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>Gateway 埠號 (PORT)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    value={tempSettings.PORT}
+                    onChange={(e) => setTempSettings({ ...tempSettings, PORT: Number(e.target.value) })}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>最大重試輪數</label>
+                  <input
+                    className="input"
+                    type="number"
+                    value={tempSettings.MAX_ROUNDS_PER_MODEL}
+                    onChange={(e) => setTempSettings({ ...tempSettings, MAX_ROUNDS_PER_MODEL: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>每輪重試等待 (秒 / S)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    value={tempSettings.ROUND_DELAY_MS}
+                    onChange={(e) => setTempSettings({ ...tempSettings, ROUND_DELAY_MS: Number(e.target.value) })}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>模型請求逾時 (秒 / S)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    value={tempSettings.REQUEST_TIMEOUT_MS}
+                    onChange={(e) => setTempSettings({ ...tempSettings, REQUEST_TIMEOUT_MS: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>串流讀取逾時 (秒 / S)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    value={tempSettings.STREAM_READ_TIMEOUT_MS}
+                    onChange={(e) => setTempSettings({ ...tempSettings, STREAM_READ_TIMEOUT_MS: Number(e.target.value) })}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>模型測試逾時 (秒 / S)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    value={tempSettings.TEST_TIMEOUT_MS}
+                    onChange={(e) => setTempSettings({ ...tempSettings, TEST_TIMEOUT_MS: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+              
+              {tempSettings.PORT !== settingsData.PORT && (
+                <div style={{ fontSize: '12px', color: 'var(--status-cooldown)', marginTop: '4px', fontWeight: '500' }}>
+                  ⚠️ 提示：變更連接埠 (PORT) 需要重啟 Electron 應用程式才會生效。
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+              <button className="btn btn-secondary" onClick={() => setIsSettingsModalOpen(false)}>
+                取消
+              </button>
+              <button className="btn btn-primary" onClick={async () => {
+                await saveSettings(tempSettings);
+                setIsSettingsModalOpen(false);
+                if (tempSettings.PORT !== settingsData.PORT) {
+                  alert('系統設定已儲存！由於您變更了連接埠 (PORT)，請重啟應用程式以套用新連接埠。');
+                } else {
+                  alert('系統設定已儲存！');
+                }
+              }}>
+                儲存設定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

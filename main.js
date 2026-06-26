@@ -16,10 +16,19 @@ const trayIcon = nativeImage.createFromBuffer(Buffer.from(iconBase64, 'base64'))
 
 // 2. 初始化資料庫 (存放在 AppData/Roaming 目錄下)
 const dbPath = path.join(app.getPath('userData'), 'gateway.db');
-initDatabase(dbPath);
+const dbInstance = initDatabase(dbPath);
 
 // 3. 啟動 Gateway Express 伺服器
-const PORT = 4000;
+let portValue = 4000;
+try {
+  const row = dbInstance.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
+  if (row && row.value) {
+    portValue = Number(row.value) || 4000;
+  }
+} catch (e) {
+  console.error('Failed to read PORT from metadata, using 4000:', e);
+}
+const PORT = portValue;
 const gatewayApp = createGatewayApp();
 
 function startServer() {
@@ -153,6 +162,10 @@ function createTray() {
 ipcMain.on('rules-updated', () => {
   console.log('[Tray] Rules database updated. Rebuilding Tray context menu...');
   updateTrayMenu();
+});
+
+ipcMain.on('get-gateway-port', (event) => {
+  event.returnValue = PORT;
 });
 
 ipcMain.on('window-minimize', () => {

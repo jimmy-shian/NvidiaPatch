@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { apiKeys, modelsConfig, stats, rules } = require('./database');
+const { apiKeys, modelsConfig, stats, rules, settings, tokenUsage } = require('./database');
 
 // Windows CMD 若不是 UTF-8 code page，中文 console 可能會顯示亂碼。
 // 這裡先要求 Node 以 UTF-8 寫出；若終端仍亂碼，請在 CMD 先執行 chcp 65001。
@@ -301,6 +301,58 @@ function createGatewayApp() {
     res.json(activeLogs);
   });
 
+  // 1.5 參數設定 API
+  app.get('/api/settings', (req, res) => {
+    const raw = settings.get();
+    res.json({
+      ...raw,
+      ROUND_DELAY_MS: raw.ROUND_DELAY_MS / 1000,
+      REQUEST_TIMEOUT_MS: raw.REQUEST_TIMEOUT_MS / 1000,
+      STREAM_READ_TIMEOUT_MS: raw.STREAM_READ_TIMEOUT_MS / 1000,
+      TEST_TIMEOUT_MS: raw.TEST_TIMEOUT_MS / 1000
+    });
+  });
+
+  app.post('/api/settings', (req, res) => {
+    const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS } = req.body;
+    const current = settings.get();
+    
+    // 傳入的數值單位為「秒」，後端乘上 1000 轉換為毫秒儲存至資料庫
+    const updated = settings.save({
+      ROUND_DELAY_MS: ROUND_DELAY_MS !== undefined ? Math.round(Number(ROUND_DELAY_MS) * 1000) : current.ROUND_DELAY_MS,
+      REQUEST_TIMEOUT_MS: REQUEST_TIMEOUT_MS !== undefined ? Math.round(Number(REQUEST_TIMEOUT_MS) * 1000) : current.REQUEST_TIMEOUT_MS,
+      STREAM_READ_TIMEOUT_MS: STREAM_READ_TIMEOUT_MS !== undefined ? Math.round(Number(STREAM_READ_TIMEOUT_MS) * 1000) : current.STREAM_READ_TIMEOUT_MS,
+      NVIDIA_API_URL: NVIDIA_API_URL !== undefined ? String(NVIDIA_API_URL).trim() : current.NVIDIA_API_URL,
+      PORT: PORT !== undefined ? Number(PORT) : current.PORT,
+      MAX_ROUNDS_PER_MODEL: MAX_ROUNDS_PER_MODEL !== undefined ? Number(MAX_ROUNDS_PER_MODEL) : current.MAX_ROUNDS_PER_MODEL,
+      TEST_TIMEOUT_MS: TEST_TIMEOUT_MS !== undefined ? Math.round(Number(TEST_TIMEOUT_MS) * 1000) : current.TEST_TIMEOUT_MS
+    });
+    
+    addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪`);
+    
+    res.json({
+      ...updated,
+      ROUND_DELAY_MS: updated.ROUND_DELAY_MS / 1000,
+      REQUEST_TIMEOUT_MS: updated.REQUEST_TIMEOUT_MS / 1000,
+      STREAM_READ_TIMEOUT_MS: updated.STREAM_READ_TIMEOUT_MS / 1000,
+      TEST_TIMEOUT_MS: updated.TEST_TIMEOUT_MS / 1000
+    });
+  });
+
+  // 1.6 Token 使用量統計 API
+  app.get('/api/token-usage', (req, res) => {
+    res.json({
+      stats: tokenUsage.getStats(),
+      logs: tokenUsage.getLogs(100)
+    });
+  });
+
+  app.post('/api/token-usage/clear', (req, res) => {
+    tokenUsage.clear();
+    addLog('info', `已清空 Token 累加計數與使用量日誌。`);
+    res.json({ success: true });
+  });
+
   // 2. API Keys 管理
   app.get('/api/keys', (req, res) => {
     res.json(apiKeys.getAll());
@@ -517,11 +569,10 @@ function createGatewayApp() {
     // - 【特別例外】回傳格式失敗（JSON 解析錯 / 串流讀取錯 / 內容校驗失敗）：重試當前模型（換 Key），而非跳下一個模型。
     // - 只有全部 Key 都是 Key 層級錯誤時，才允許同一模型進入下一輪。
     const MAX_ROUNDS_PER_MODEL = 2;
-    const ROUND_DELAY_MS = Number(process.env.GATEWAY_ROUND_DELAY_MS || 15000);
-    // Cline/OpenAI 相容客戶端通常會在長時間沒有任何回應時自行判定失敗。
-    // 因為 Gateway 會先完整校驗串流內容再回傳，模型層級逾時必須比客戶端逾時更短，避免「後端成功、前端已放棄」的假成功。
-    const REQUEST_TIMEOUT_MS = Number(process.env.GATEWAY_MODEL_TIMEOUT_MS || 120000);
-    const STREAM_READ_TIMEOUT_MS = Number(process.env.GATEWAY_STREAM_READ_TIMEOUT_MS || 120000);
+    const activeConfig = settings.get();
+    const ROUND_DELAY_MS = activeConfig.ROUND_DELAY_MS;
+    const REQUEST_TIMEOUT_MS = activeConfig.REQUEST_TIMEOUT_MS;
+    const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
 
     function getMaskedKey(keyValue) {
       const value = String(keyValue || '');
@@ -687,6 +738,7 @@ function createGatewayApp() {
         let streamBuffer = '';
         let fullContent = '';
         const sseLines = [];
+        let streamUsage = null;
 
         const consumeLine = (rawLine) => {
           const cleanLine = String(rawLine || '').endsWith('\r')
@@ -694,7 +746,22 @@ function createGatewayApp() {
             : String(rawLine || '');
 
           sseLines.push(cleanLine);
-          fullContent += extractContentFromSseLine(cleanLine);
+          
+          const trimmed = cleanLine.trim();
+          if (trimmed.startsWith('data:') && !trimmed.includes('[DONE]')) {
+            try {
+              const dataStr = trimmed.slice(5).trim();
+              const chunk = JSON.parse(dataStr);
+              if (chunk?.choices?.[0]?.delta?.content) {
+                fullContent += chunk.choices[0].delta.content;
+              }
+              if (chunk?.usage) {
+                streamUsage = chunk.usage;
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
         };
 
         try {
@@ -729,7 +796,18 @@ function createGatewayApp() {
             return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
           }
 
-          return { success: true, response: result.response, sseLines, streamContent: fullContent };
+          if (!streamUsage) {
+            const promptText = JSON.stringify(originalBody.messages || '');
+            const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+            const estimatedCompletion = Math.max(1, Math.round(fullContent.length / 3.2));
+            streamUsage = {
+              prompt_tokens: estimatedPrompt,
+              completion_tokens: estimatedCompletion,
+              total_tokens: estimatedPrompt + estimatedCompletion
+            };
+          }
+
+          return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
         } catch (err) {
           try {
             await reader.cancel();
@@ -750,18 +828,30 @@ function createGatewayApp() {
         const json = await result.response.json();
         const contentToCheck = json?.choices?.[0]?.message?.content || '';
 
-          const validation = validateContent(contentToCheck);
-          if (!validation.valid) {
-            const validationIssue = formatValidationIssue(validation);
-            addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
-            apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-            // 每次執行失敗（含重試）都算一次錯誤
-            stats.recordRequest(false);
-            // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
-            return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
-          }
+        const validation = validateContent(contentToCheck);
+        if (!validation.valid) {
+          const validationIssue = formatValidationIssue(validation);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
+          apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+          // 每次執行失敗（含重試）都算一次錯誤
+          stats.recordRequest(false);
+          // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
+          return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
+        }
 
-        return { success: true, response: result.response, jsonData: json };
+        let usage = json?.usage;
+        if (!usage) {
+          const promptText = JSON.stringify(originalBody.messages || '');
+          const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+          const estimatedCompletion = Math.max(1, Math.round(contentToCheck.length / 3.2));
+          usage = {
+            prompt_tokens: estimatedPrompt,
+            completion_tokens: estimatedCompletion,
+            total_tokens: estimatedPrompt + estimatedCompletion
+          };
+        }
+
+        return { success: true, response: result.response, jsonData: json, usage };
       } catch (err) {
         addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 解析失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
         apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
@@ -971,7 +1061,16 @@ function createGatewayApp() {
 
       stats.recordRequest(true);
       const durationMs = Date.now() - requestStartedAt;
-      addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。`);
+      
+      // 記錄 Token 使用量
+      try {
+        const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens);
+        addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
+      } catch (tokenErr) {
+        console.error('Failed to record token usage:', tokenErr);
+        addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。`);
+      }
     }
 
     async function dispatchRequest() {

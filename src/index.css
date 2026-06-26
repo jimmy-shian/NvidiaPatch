@@ -1,18 +1,93 @@
-:root {
-  --bg-primary: #0b0f17;
-  --bg-secondary: rgba(18, 24, 38, 0.65);
-  --bg-tertiary: rgba(30, 41, 59, 0.8);
-  --accent-color: #10b981; /* NVIDIA Green */
-  --accent-glow: rgba(16, 185, 129, 0.15);
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+:root,
+:root.theme-dark {
+  --bg-primary: #09090b; /* Zinc 950 */
+  --bg-secondary: #18181b; /* Zinc 900 */
+  --bg-tertiary: #27272a; /* Zinc 800 */
+  --accent-color: #10b981; /* NVIDIA Green / Emerald */
+  --accent-glow: rgba(16, 185, 129, 0.08);
+  --text-primary: #fafafa; /* Zinc 50 */
+  --text-secondary: #d4d4d8; /* Zinc 300 */
+  --text-muted: #71717a; /* Zinc 500 */
   --border-color: rgba(255, 255, 255, 0.08);
-  --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
   
+  --bg-active: rgba(16, 185, 129, 0.1);
+  --text-active: #34d399;
+  --border-active: rgba(16, 185, 129, 0.2);
+  
+  --bg-cooldown: rgba(245, 158, 11, 0.1);
+  --text-cooldown: #fbbf24;
+  --border-cooldown: rgba(245, 158, 11, 0.2);
+  
+  --bg-inactive: rgba(239, 68, 68, 0.1);
+  --text-inactive: #f87171;
+  --border-inactive: rgba(239, 68, 68, 0.2);
+
   --status-active: #10b981;
   --status-cooldown: #f59e0b;
   --status-inactive: #ef4444;
+  
+  --terminal-bg: #18181b;
+  --scrollbar-track: rgba(255, 255, 255, 0.01);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+}
+
+:root.theme-light {
+  --bg-primary: #fafafa; /* Zinc 50 */
+  --bg-secondary: #ffffff; /* White */
+  --bg-tertiary: #f4f4f5; /* Zinc 100 */
+  --accent-color: #059669; /* Emerald 600 */
+  --accent-glow: rgba(5, 150, 105, 0.08);
+  --text-primary: #09090b; /* Zinc 950 */
+  --text-secondary: #3f3f46; /* Zinc 700 */
+  --text-muted: #a1a1aa; /* Zinc 400 */
+  --border-color: rgba(0, 0, 0, 0.06);
+  --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  
+  --bg-active: rgba(5, 150, 105, 0.08);
+  --text-active: #047857;
+  --border-active: rgba(5, 150, 105, 0.15);
+  
+  --bg-cooldown: rgba(217, 119, 6, 0.08);
+  --text-cooldown: #b45309;
+  --border-cooldown: rgba(217, 119, 6, 0.15);
+  
+  --bg-inactive: rgba(220, 38, 38, 0.08);
+  --text-inactive: #b91c1c;
+  --border-inactive: rgba(220, 38, 38, 0.15);
+
+  --status-active: #059669;
+  --status-cooldown: #d97706;
+  --status-inactive: #dc2626;
+  
+  --terminal-bg: #f4f4f5;
+  --scrollbar-track: rgba(0, 0, 0, 0.01);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.1);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
+}
+
+/* 確保主題切換時的所有主要容器都有平滑漸變，避免閃爍 */
+body, 
+.glass-panel, 
+.btn, 
+.input, 
+.terminal-log-panel, 
+.available-model-card, 
+nav button, 
+div, 
+span, 
+h1, 
+h2, 
+h3, 
+h4, 
+section, 
+p, 
+table, 
+th, 
+td,
+a {
+  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
 }
 
 * {
@@ -24,9 +99,6 @@
 
 body {
   background-color: var(--bg-primary);
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.05) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
   color: var(--text-primary);
   height: 100vh;
   overflow: hidden;
@@ -39,14 +111,14 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--scrollbar-track);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--scrollbar-thumb-hover);
 }
 
 #root {
@@ -55,11 +127,9 @@ body {
   flex-direction: column;
 }
 
-/* 磨砂玻璃卡片 */
+/* 改為純色與邊框構成的扁平專業卡片面板，去除了毛玻璃特效 */
 .glass-panel {
   background: var(--bg-secondary);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   box-shadow: var(--card-shadow);
@@ -76,60 +146,56 @@ body {
   font-weight: 500;
   font-size: 16px;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid transparent;
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  background: var(--accent-color);
   color: white;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 .btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+  filter: brightness(1.08);
 }
 .btn-primary:active {
-  transform: translateY(0);
+  filter: brightness(0.95);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
 }
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.15);
+  background: var(--bg-secondary);
+  border-color: var(--text-muted);
 }
 
 .btn-danger {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  color: #f87171;
+  background: var(--bg-inactive);
+  border: 1px solid var(--border-inactive);
+  color: var(--text-inactive);
 }
 .btn-danger:hover {
-  background: rgba(239, 68, 68, 0.2);
-  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--bg-inactive);
+  filter: brightness(1.05);
 }
 
 /* 輸入框 */
 .input {
-  background: rgba(15, 23, 42, 0.6);
+  background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 10px 14px;
   color: var(--text-primary);
   font-size: 16px;
   outline: none;
-  transition: all 0.2s;
 }
 .input:focus {
   border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* 狀態微標章 */
+/* 狀態微標章 - 使用自適應語意色彩 */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -142,21 +208,21 @@ body {
 }
 
 .badge-active {
-  background: rgba(16, 185, 129, 0.1);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  background: var(--bg-active);
+  color: var(--text-active);
+  border: 1px solid var(--border-active);
 }
 
 .badge-cooldown {
-  background: rgba(245, 158, 11, 0.1);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.2);
+  background: var(--bg-cooldown);
+  color: var(--text-cooldown);
+  border: 1px solid var(--border-cooldown);
 }
 
 .badge-inactive {
-  background: rgba(239, 68, 68, 0.1);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: var(--bg-inactive);
+  color: var(--text-inactive);
+  border: 1px solid var(--border-inactive);
 }
 
 /* 簡單動畫 */
@@ -400,7 +466,7 @@ input, textarea, pre, code, [contenteditable="true"] {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: rgba(2, 6, 23, 0.72);
+  background: var(--terminal-bg);
   border-radius: 8px;
   border: 1px solid var(--border-color);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -429,14 +495,14 @@ input, textarea, pre, code, [contenteditable="true"] {
   min-height: auto;
   height: auto;
   padding: 4px 4px 5px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid var(--border-color);
   font-size: 14px;
   line-height: 1.6;
   overflow: visible;
 }
 
 .terminal-log-line:hover {
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(128, 128, 128, 0.08);
 }
 
 .terminal-log-time {
