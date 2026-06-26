@@ -513,14 +513,15 @@ function createGatewayApp() {
     // ========== 調度規則 ==========
     // - 429：Key 層級問題，只換 Key，同模型繼續。
     // - 401 / 403：Key 層級問題，停用該 Key 後換 Key。
-    // - timeout / network / 404 / 5xx / 503 / JSON 解析錯 / 串流讀取錯 / 內容校驗失敗：模型層級問題，立即切下一個模型。
+    // - timeout / network / 404 / 5xx / 503：模型層級問題，立即切下一個模型。
+    // - 【特別例外】回傳格式失敗（JSON 解析錯 / 串流讀取錯 / 內容校驗失敗）：重試當前模型（換 Key），而非跳下一個模型。
     // - 只有全部 Key 都是 Key 層級錯誤時，才允許同一模型進入下一輪。
     const MAX_ROUNDS_PER_MODEL = 2;
     const ROUND_DELAY_MS = Number(process.env.GATEWAY_ROUND_DELAY_MS || 15000);
     // Cline/OpenAI 相容客戶端通常會在長時間沒有任何回應時自行判定失敗。
     // 因為 Gateway 會先完整校驗串流內容再回傳，模型層級逾時必須比客戶端逾時更短，避免「後端成功、前端已放棄」的假成功。
-    const REQUEST_TIMEOUT_MS = Number(process.env.GATEWAY_MODEL_TIMEOUT_MS || 12000);
-    const STREAM_READ_TIMEOUT_MS = Number(process.env.GATEWAY_STREAM_READ_TIMEOUT_MS || 12000);
+    const REQUEST_TIMEOUT_MS = Number(process.env.GATEWAY_MODEL_TIMEOUT_MS || 120000);
+    const STREAM_READ_TIMEOUT_MS = Number(process.env.GATEWAY_STREAM_READ_TIMEOUT_MS || 120000);
 
     function getMaskedKey(keyValue) {
       const value = String(keyValue || '');
@@ -578,6 +579,8 @@ function createGatewayApp() {
           const errText = await readTextSafely(response);
           addLog('warning', `請求 #${requestId}：Key ID ${key.id} 遇到 429 速率限制，該 Key 進入 30 秒冷卻，改用下一把 Key 繼續同一模型「${modelId}」。`);
           apiKeys.recordCooldown(key.id, 30, errText || '429 Rate Limit Exceeded');
+          // 每次呼叫失敗都算一次錯誤（含重試）
+          stats.recordRequest(false);
           return { success: false, retryScope: 'key', statusCode: 429, errorText: errText || '429 Rate Limit Exceeded' };
         }
 
@@ -585,6 +588,8 @@ function createGatewayApp() {
           const errText = await readTextSafely(response);
           addLog('error', `請求 #${requestId}：Key ID ${key.id} 回傳 HTTP ${response.status}，已設為停用，改用下一把 Key 繼續同一模型「${modelId}」。`);
           apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
+          // 每次呼叫失敗都算一次錯誤（含重試）
+          stats.recordRequest(false);
           return { success: false, retryScope: 'key', statusCode: response.status, errorText: errText };
         }
 
@@ -592,6 +597,8 @@ function createGatewayApp() {
           const errText = await readTextSafely(response);
           addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 404，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
           apiKeys.recordFailure(key.id, `ModelNotFound HTTP 404: ${errText.substring(0, 80)}`);
+          // 每次呼叫失敗都算一次錯誤（含重試）
+          stats.recordRequest(false);
           return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 404, errorText: errText || 'HTTP 404' };
         }
 
@@ -599,32 +606,42 @@ function createGatewayApp() {
           const errText = await readTextSafely(response);
           addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP ${response.status}，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
           apiKeys.recordFailure(key.id, `ModelServerError HTTP ${response.status}: ${errText.substring(0, 80)}`);
+          // 每次呼叫失敗都算一次錯誤（含重試）
+          stats.recordRequest(false);
           return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText || `HTTP ${response.status}` };
         }
 
         const errText = await readTextSafely(response);
         addLog('error', `請求 #${requestId}：NVIDIA 回傳不可重試的 HTTP ${response.status}，停止本次調度。錯誤：${errText.substring(0, 200)}`);
+        // 每次呼叫失敗都算一次錯誤（含重試）
+        stats.recordRequest(false);
         return { success: false, retryScope: 'fatal', fatal: true, statusCode: response.status, errorText: errText, response };
 
-      } catch (err) {
-        clearTimeout(timeoutId);
-        res.off('close', abortOnClientDisconnect);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      res.off('close', abortOnClientDisconnect);
 
-        if (err.name === 'AbortError') {
-          if (abortReason === 'client_disconnected' || isClientGone()) {
-            addLog('warning', `請求 #${requestId}：客戶端已中斷連線，取消模型「${modelId}」的 NVIDIA 請求。`);
-            return { success: false, clientGone: true, retryScope: 'client', errorText: '客戶端已中斷連線' };
-          }
-          const msg = `請求逾時 ${REQUEST_TIMEOUT_MS / 1000} 秒`;
-          addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生逾時，立即切換下一個模型，不再測試此模型的其他 Key。`);
-          apiKeys.recordFailure(key.id, msg);
-          return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: msg };
+      if (err.name === 'AbortError') {
+        if (abortReason === 'client_disconnected' || isClientGone()) {
+          addLog('warning', `請求 #${requestId}：客戶端已中斷連線，取消模型「${modelId}」的 NVIDIA 請求。`);
+          // 記錄模型層級的錯誤計數 - 客戶端中斷屬於請求失敗
+          stats.recordRequest(false);
+          return { success: false, clientGone: true, retryScope: 'client', errorText: '客戶端已中斷連線' };
         }
-
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生網路或連線錯誤，立即切換下一個模型。錯誤：${err.message}`);
-        apiKeys.recordFailure(key.id, `Network Error: ${err.message}`);
-        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: err.message };
+        const msg = `請求逾時 ${REQUEST_TIMEOUT_MS / 1000} 秒`;
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生逾時，立即切換下一個模型，不再測試此模型的其他 Key。`);
+        apiKeys.recordFailure(key.id, msg);
+        // 記錄模型層級的錯誤計數 - 超時屬於請求失敗
+        stats.recordRequest(false);
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: msg };
       }
+
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生網路或連線錯誤，立即切換下一個模型。錯誤：${err.message}`);
+      apiKeys.recordFailure(key.id, `Network Error: ${err.message}`);
+      // 記錄模型層級的錯誤計數 - 網路錯誤屬於請求失敗
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: err.message };
+    }
     }
 
     function readStreamChunkWithTimeout(reader) {
@@ -704,9 +721,12 @@ function createGatewayApp() {
           const validation = validateContent(fullContent);
           if (!validation.valid) {
             const validationIssue = formatValidationIssue(validation);
-            addLog('error', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
             apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-            return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: `內容校驗失敗：${validationIssue}` };
+            // 每次執行失敗（含重試）都算一次錯誤
+            stats.recordRequest(false);
+            // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
+            return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
           }
 
           return { success: true, response: result.response, sseLines, streamContent: fullContent };
@@ -717,9 +737,12 @@ function createGatewayApp() {
             // ignore
           }
 
-          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
           apiKeys.recordFailure(selectedKey.id, `串流讀取錯誤：${err.message}`);
-          return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: err.message };
+          // 每次執行失敗（含重試）都算一次錯誤
+          stats.recordRequest(false);
+          // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
+          return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: err.message };
         }
       }
 
@@ -727,19 +750,25 @@ function createGatewayApp() {
         const json = await result.response.json();
         const contentToCheck = json?.choices?.[0]?.message?.content || '';
 
-        const validation = validateContent(contentToCheck);
-        if (!validation.valid) {
-          const validationIssue = formatValidationIssue(validation);
-          addLog('error', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
-          apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-          return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: `內容校驗失敗：${validationIssue}` };
-        }
+          const validation = validateContent(contentToCheck);
+          if (!validation.valid) {
+            const validationIssue = formatValidationIssue(validation);
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
+            apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+            // 每次執行失敗（含重試）都算一次錯誤
+            stats.recordRequest(false);
+            // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
+            return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
+          }
 
         return { success: true, response: result.response, jsonData: json };
       } catch (err) {
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 解析失敗（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 解析失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
         apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
-        return { success: false, retryScope: 'model', forceFallbackModel: true, errorText: err.message };
+        // 每次執行失敗（含重試）都算一次錯誤
+        stats.recordRequest(false);
+        // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
+        return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: err.message };
       }
     }
 
@@ -767,6 +796,17 @@ function createGatewayApp() {
         if (result.success) {
           const validated = await validateSuccessfulResponse(model, selectedKey, result, roundNumber);
           if (validated.success) return validated;
+
+          // 【特別例外】回傳格式失敗（內容校驗/JSON 解析/串流讀取錯誤）時，重試當前模型，而非跳下一個模型
+          if (validated.contentValidationFailed) {
+            addLog('info', `請求 #${requestId}：模型「${modelId}」回傳格式失敗（${validated.errorText}），觸發同模型重試。`);
+            return {
+              success: false,
+              forceRetrySameModel: true,
+              contentValidationFailed: true,
+              errorText: validated.errorText || '回傳格式失敗'
+            };
+          }
 
           if (validated.forceFallbackModel || validated.retryScope === 'model') {
             return {
@@ -954,13 +994,21 @@ function createGatewayApp() {
 
         addLog('info', `請求 #${requestId}：開始調度模型「${modelId}」（順位 ${currentModel.priority}）。`);
 
+        // 【特別例外】回傳格式失敗時標記立即重試，跳過 ROUND_DELAY_MS 等待
+        let lastResultContentValidationFailed = false;
+
         for (let round = 1; round <= MAX_ROUNDS_PER_MODEL; round += 1) {
           if (round > 1) {
-            addLog('info', `請求 #${requestId}：模型「${modelId}」只有 Key 層級錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪。`);
-            await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
+            if (lastResultContentValidationFailed) {
+              addLog('info', `請求 #${requestId}：模型「${modelId}」因回傳格式失敗立即重試，不等待。`);
+            } else {
+              addLog('info', `請求 #${requestId}：模型「${modelId}」只有 Key 層級錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪。`);
+              await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
+            }
           }
 
           const result = await tryModelWithKeys(currentModel, round);
+          lastResultContentValidationFailed = !!(result && result.contentValidationFailed);
 
           if (result.clientGone) {
             addLog('warning', `請求 #${requestId}：客戶端已中斷，停止後續模型調度。`);
@@ -987,7 +1035,6 @@ function createGatewayApp() {
           }
 
           if (result.noHealthyKeys) {
-            stats.recordRequest(false);
             addLog('error', `請求 #${requestId}：目前沒有健康的 API Key，停止模型切換。`);
             return res.status(503).json({
               error: {
@@ -998,7 +1045,6 @@ function createGatewayApp() {
           }
 
           if (result.fatal) {
-            stats.recordRequest(false);
             addLog('error', `請求 #${requestId}：遇到不可重試錯誤 HTTP ${result.statusCode}，停止調度。`);
             return res.status(result.statusCode || 400).send(result.errorText || '不可重試錯誤');
           }
@@ -1010,6 +1056,13 @@ function createGatewayApp() {
           }
 
           if (result.forceRetrySameModel) {
+            // 【特別例外】回傳格式失敗：立即重試當前模型，不等待 ROUND_DELAY_MS
+            if (result.contentValidationFailed) {
+              addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪回傳格式失敗，立即重試同一模型。`);
+              if (round < MAX_ROUNDS_PER_MODEL) {
+                continue;
+              }
+            }
             addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪僅發生 Key 層級錯誤。`);
             if (round < MAX_ROUNDS_PER_MODEL) {
               continue;
@@ -1020,7 +1073,7 @@ function createGatewayApp() {
         addLog('warning', `請求 #${requestId}：模型「${modelId}」未能完成本次請求，嘗試下一個模型。`);
       }
 
-      stats.recordRequest(false);
+      // 不再重複記錄 error_count：每次中間呼叫失敗已在 sendSingleRequest / validateSuccessfulResponse 中逐次記錄。
       const cooldownText = skippedByCooldown > 0 ? `，其中 ${skippedByCooldown} 個模型因近期模型層級失敗被暫時跳過` : '';
       addLog('error', `請求 #${requestId}：所有模型都無法完成請求${cooldownText}。`);
       return res.status(503).json({
