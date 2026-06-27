@@ -47,30 +47,7 @@ NVIDIA NIM Models (integrate.api.nvidia.com)
 
 ---
 
-## 3. 安裝與執行
-
-### 開發模式啟動
-1. 確保已安裝 Node.js (建議 v22.5.0 以上以支援 `node:sqlite` 內建資料庫)。
-2. 在專案目錄下執行安裝依賴：
-   ```powershell
-   npm install
-   ```
-3. 執行開發指令：
-   ```powershell
-   npm run dev
-   ```
-   此指令會自動啟動 Vite 前端服務並載入 Electron 視窗，並於背景啟動 Port 4000 的 Gateway API。
-
-### 生產模式啟動 (已 Build 靜態檔)
-若要直接載入已打包好的前端 React 代碼，可以執行：
-```powershell
-npm run build
-npm start
-```
-
----
-
-## 4. 編輯器設定指引
+## 3. 編輯器設定指引
 
 ### Cline 設定
 在 Cline 的 Provider 中選擇 `OpenAI Compatible`：
@@ -103,44 +80,87 @@ npm start
 
 ---
 
-## 5. 測試與驗證
+## 4. 開發與發布指引 (Details Toggle)
 
-### A. 自動化本地 Mock 整合測試
-本專案內建一個獨立的整合測試腳本 `verify-gateway.js`，它會自動在本地啟動 Mock NVIDIA 伺服器，模擬健康/429/503/401 等各種網路狀況，並自動驗證 Gateway 的對應機制是否正確。
-請在終端機中執行：
+請展開下方折疊區塊以查看詳細內容：
+
+<details>
+<summary><b>🛠️ Tab 1: Engineer/Developer Guide (開發人員與工程師指南)</b></summary>
+
+詳細內容請參閱：[docs/developer_guide.md](docs/developer_guide.md)
+
+### 1. 開發模式啟動
+1. 確保已安裝 Node.js (建議 v22.5.0 以上)。
+2. 安裝依賴：
+   ```powershell
+   npm install
+   ```
+3. 執行開發指令：
+   ```powershell
+   npm run dev
+   ```
+
+### 2. 生產模式啟動 (已 Build 靜態檔)
+```powershell
+npm run build
+npm start
+```
+
+### 3. 測試與驗證
+
+#### A. 自動化本地 Mock 整合測試
 ```powershell
 node verify-gateway.js
 ```
-*預期輸出：All integration tests passed successfully!*
 
-### B. Python 測試套件
-測試架構遵循規範，整合在單一 Python 檔案中。當 Gateway 服務在背景運行時，可以使用 Python 虛擬環境執行該測試，它會向運作中的 Gateway 真正發送一個非串流與一個 SSE 串流請求，驗證轉發正確性：
+#### B. Python 測試套件
 ```powershell
 C:\Users\user\venv\Scripts\python.exe test_gateway.py
 ```
-*註：執行前請先在 UI 中新增至少一把有效的 NVIDIA NIM API Key，並點擊同步模型將優先順序設好。*
 
----
+### 4. 應用程式打包 (Distribution)
 
-## 6. 應用程式打包 (Distribution)
-
-本專案使用 `electron-builder` 進行跨平台打包。所有的建置設定都已經在 `package.json` 中配置妥當。
-
-由於跨平台打包的安全與簽章限制，**請在您要產出安裝檔的對應平台上執行打包指令**：
-
-### 📦 Windows 安裝檔打包 (NSIS Installer)
-在 Windows 電腦的終端機執行：
+#### 📦 Windows 安裝檔打包 (NSIS Installer)
 ```powershell
 npm run dist:win
 ```
-- **產出格式**：可在 `release/` 資料夾下找到 `NvidiaGateway Setup 1.0.0.exe`。
-- **安裝體驗**：點擊兩下安裝，支持自訂安裝路徑、自動建立桌面與開始功能表捷徑，極易使用。
 
-### 📦 macOS 安裝檔打包 (DMG Image)
-在 Mac 電腦的終端機執行：
+#### 📦 macOS 安裝檔打包 (DMG Image)
 ```bash
 npm run dist:mac
 ```
-- **產出格式**：可在 `release/` 資料夾下找到 `NvidiaGateway-1.0.0.dmg`。
-- **安裝體驗**：點擊兩下開啟，直接將圖示拖曳到「Applications」即可完成安裝。
+</details>
 
+<details>
+<summary><b>🚀 Tab 2: Git tag vXXX release steps (自動化發布與建置指南)</b></summary>
+
+詳細內容請參閱：[docs/release_guide.md](docs/release_guide.md)
+
+### 🛠️ 發布新版本步驟 (Release Steps)
+
+當您需要發布一個新版本時，請遵循以下步驟：
+
+#### 1. 更新 `package.json` 中的版本號
+確認 `package.json` 中的 `"version"` 欄位符合您要發布的新版本（例如 `1.0.1`）。
+
+#### 2. 提交代碼並推送到 Git
+```powershell
+git add package.json
+git commit -m "bump: version 1.0.1"
+git push origin master
+```
+
+#### 3. 建立並推送 Git 標籤 (Tag)
+標籤格式**必須**以 `v` 開頭（例如 `v1.0.1`）：
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+#### 4. 前往 GitHub 檢查進度
+前往 GitHub Actions 頁面確認 **Build and Release** 工作流順利執行完成，並於 Releases 頁面下載打包好的 `.exe` 安裝檔。
+
+#### ⚠️ 注意事項與權限設定
+1. **GitHub 寫入權限 (Workflow Permissions)**：確認 Repo 的 Actions 設定已啟用 **Read and write permissions**。
+2. **版本號同步**：確保 `package.json` 中的版本與 Git 標籤版本一致。
+</details>

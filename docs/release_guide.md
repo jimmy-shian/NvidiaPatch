@@ -1,6 +1,6 @@
-# Application Release Guide (自動化發布與建置指南)
+# Release Guide (版本發布指南)
 
-本專案已整合 GitHub Actions 自動化 CI/CD 發布流程。每當您推送特定版本標籤（例如 `v1.0.0`），GitHub 會自動在背景啟動 Windows 建置流程，並在 GitHub Releases 頁面建立該版本的下載連結，內含自動編譯好的 Windows 安裝檔 (`.exe`)。
+本專案整合了 GitHub Actions，當您推送符合格式的 Git tag 時，將自動觸發 Windows 安裝檔的建置與 release 發布流程。
 
 ---
 
