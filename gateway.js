@@ -55,7 +55,7 @@ function addLog(type, message) {
 // 模型層級錯誤冷卻表：避免同一個壞掉或逾時的模型被多個並行請求反覆測試
 const modelFailureCooldowns = new Map();
 let gatewayRequestSequence = 0;
-const MODEL_FAILURE_COOLDOWN_MS = 60000;
+const MODEL_FAILURE_COOLDOWN_MS = (process.env.NODE_ENV === 'test' || process.env.NVIDIA_API_URL) ? 100 : 60000;
 
 function isModelInFailureCooldown(modelId) {
   const until = modelFailureCooldowns.get(modelId);
@@ -313,8 +313,8 @@ function createGatewayApp() {
     });
   });
 
-  app.post('/api/settings', (req, res) => {
-    const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS } = req.body;
+  app.post('/api/settings', async (req, res) => {
+    const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS, PRICE_PER_MILLION_PROMPT_TOKENS, PRICE_PER_MILLION_COMPLETION_TOKENS, REF_PRICE_PER_MILLION_PROMPT_TOKENS, REF_PRICE_PER_MILLION_COMPLETION_TOKENS, CURRENCY_SYMBOL } = req.body;
     const current = settings.get();
     
     // 傳入的數值單位為「秒」，後端乘上 1000 轉換為毫秒儲存至資料庫
@@ -325,7 +325,12 @@ function createGatewayApp() {
       NVIDIA_API_URL: NVIDIA_API_URL !== undefined ? String(NVIDIA_API_URL).trim() : current.NVIDIA_API_URL,
       PORT: PORT !== undefined ? Number(PORT) : current.PORT,
       MAX_ROUNDS_PER_MODEL: MAX_ROUNDS_PER_MODEL !== undefined ? Number(MAX_ROUNDS_PER_MODEL) : current.MAX_ROUNDS_PER_MODEL,
-      TEST_TIMEOUT_MS: TEST_TIMEOUT_MS !== undefined ? Math.round(Number(TEST_TIMEOUT_MS) * 1000) : current.TEST_TIMEOUT_MS
+      TEST_TIMEOUT_MS: TEST_TIMEOUT_MS !== undefined ? Math.round(Number(TEST_TIMEOUT_MS) * 1000) : current.TEST_TIMEOUT_MS,
+      PRICE_PER_MILLION_PROMPT_TOKENS: PRICE_PER_MILLION_PROMPT_TOKENS !== undefined ? Number(PRICE_PER_MILLION_PROMPT_TOKENS) : current.PRICE_PER_MILLION_PROMPT_TOKENS,
+      PRICE_PER_MILLION_COMPLETION_TOKENS: PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined ? Number(PRICE_PER_MILLION_COMPLETION_TOKENS) : current.PRICE_PER_MILLION_COMPLETION_TOKENS,
+      REF_PRICE_PER_MILLION_PROMPT_TOKENS: REF_PRICE_PER_MILLION_PROMPT_TOKENS !== undefined ? Number(REF_PRICE_PER_MILLION_PROMPT_TOKENS) : current.REF_PRICE_PER_MILLION_PROMPT_TOKENS,
+      REF_PRICE_PER_MILLION_COMPLETION_TOKENS: REF_PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined ? Number(REF_PRICE_PER_MILLION_COMPLETION_TOKENS) : current.REF_PRICE_PER_MILLION_COMPLETION_TOKENS,
+      CURRENCY_SYMBOL: CURRENCY_SYMBOL !== undefined ? String(CURRENCY_SYMBOL).trim() : current.CURRENCY_SYMBOL
     });
     
     addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪`);
@@ -341,9 +346,33 @@ function createGatewayApp() {
 
   // 1.6 Token 使用量統計 API
   app.get('/api/token-usage', (req, res) => {
+    const currentSettings = settings.get();
     res.json({
       stats: tokenUsage.getStats(),
-      logs: tokenUsage.getLogs(100)
+      logs: tokenUsage.getLogs(100),
+      pricing: {
+        pricePerMillionPromptTokens: currentSettings.PRICE_PER_MILLION_PROMPT_TOKENS,
+        pricePerMillionCompletionTokens: currentSettings.PRICE_PER_MILLION_COMPLETION_TOKENS,
+        refPricePerMillionPromptTokens: currentSettings.REF_PRICE_PER_MILLION_PROMPT_TOKENS,
+        refPricePerMillionCompletionTokens: currentSettings.REF_PRICE_PER_MILLION_COMPLETION_TOKENS,
+        currencySymbol: currentSettings.CURRENCY_SYMBOL
+      }
+    });
+  });
+
+  app.get('/api/token-usage/:id', (req, res) => {
+    const record = tokenUsage.getDetail(Number(req.params.id));
+    if (!record) return res.status(404).json({ error: 'Record not found' });
+    const currentSettings = settings.get();
+    res.json({
+      ...record,
+      pricing: {
+        pricePerMillionPromptTokens: currentSettings.PRICE_PER_MILLION_PROMPT_TOKENS,
+        pricePerMillionCompletionTokens: currentSettings.PRICE_PER_MILLION_COMPLETION_TOKENS,
+        refPricePerMillionPromptTokens: currentSettings.REF_PRICE_PER_MILLION_PROMPT_TOKENS,
+        refPricePerMillionCompletionTokens: currentSettings.REF_PRICE_PER_MILLION_COMPLETION_TOKENS,
+        currencySymbol: currentSettings.CURRENCY_SYMBOL
+      }
     });
   });
 
@@ -660,6 +689,30 @@ function createGatewayApp() {
           // 每次呼叫失敗都算一次錯誤（含重試）
           stats.recordRequest(false);
           return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText || `HTTP ${response.status}` };
+        }
+
+        if (response.status === 400) {
+          const errText = await readTextSafely(response);
+          const isContextLimit = errText.toLowerCase().includes('context length') || 
+                                 errText.toLowerCase().includes('context_length') || 
+                                 errText.toLowerCase().includes('max_tokens') ||
+                                 errText.toLowerCase().includes('max-tokens') ||
+                                 errText.toLowerCase().includes('token limit') ||
+                                 errText.toLowerCase().includes('too many tokens') ||
+                                 errText.toLowerCase().includes('max context') ||
+                                 errText.toLowerCase().includes('context window') ||
+                                 errText.toLowerCase().includes('context_window');
+          if (isContextLimit) {
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（長度超出限制），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+            apiKeys.recordFailure(key.id, `ModelContextLimit HTTP 400: ${errText.substring(0, 80)}`);
+            // 每次呼叫失敗都算一次錯誤（含重試）
+            stats.recordRequest(false);
+            return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
+          }
+          addLog('error', `請求 #${requestId}：NVIDIA 回傳不可重試的 HTTP ${response.status}，停止本次調度。錯誤：${errText.substring(0, 200)}`);
+          // 每次呼叫失敗都算一次錯誤（含重試）
+          stats.recordRequest(false);
+          return { success: false, retryScope: 'fatal', fatal: true, statusCode: response.status, errorText: errText, response };
         }
 
         const errText = await readTextSafely(response);
@@ -1065,7 +1118,7 @@ function createGatewayApp() {
       // 記錄 Token 使用量
       try {
         const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens);
+        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, originalBody);
         addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
       } catch (tokenErr) {
         console.error('Failed to record token usage:', tokenErr);

@@ -42,7 +42,7 @@
   --text-primary: #09090b; /* Zinc 950 */
   --text-secondary: #3f3f46; /* Zinc 700 */
   --text-muted: #a1a1aa; /* Zinc 400 */
-  --border-color: rgba(0, 0, 0, 0.06);
+  --border-color: rgba(0, 0, 0, 0.12);
   --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
   
   --bg-active: rgba(5, 150, 105, 0.08);
@@ -190,6 +190,8 @@ body {
   color: var(--text-primary);
   font-size: 16px;
   outline: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 .input:focus {
   border-color: var(--accent-color);
@@ -293,9 +295,9 @@ input, textarea, pre, code, [contenteditable="true"] {
   width: 100%;
   overflow-x: auto;
   margin: 12px 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-color);
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--bg-tertiary);
 }
 
 .markdown-body .md-table {
@@ -309,8 +311,8 @@ input, textarea, pre, code, [contenteditable="true"] {
 .markdown-body .md-table th,
 .markdown-body .md-table td {
   padding: 9px 11px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
   vertical-align: top;
 }
 
@@ -330,7 +332,7 @@ input, textarea, pre, code, [contenteditable="true"] {
 }
 
 .markdown-body .md-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(16, 185, 129, 0.04);
 }
 
 .markdown-body .md-inline-code {
@@ -526,3 +528,210 @@ input, textarea, pre, code, [contenteditable="true"] {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+/* Token 使用量專用表格樣式 — 可點擊列、展開詳情面板 */
+.token-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: normal;
+  font-size: 13px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.token-usage-table th,
+.token-usage-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  vertical-align: middle;
+  text-align: left;
+}
+
+.token-usage-table th:last-child,
+.token-usage-table td:last-child {
+  border-right: none;
+}
+
+.token-usage-table tr:last-child td {
+  border-bottom: none;
+}
+
+.token-usage-table thead th {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-weight: 700;
+  border-bottom: 2px solid var(--border-color);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.token-usage-table tbody tr {
+  cursor: pointer;
+  transition: background 150ms ease;
+  background: var(--bg-secondary);
+}
+
+.token-usage-table tbody tr:hover {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.token-usage-table tbody tr.token-row-expanded {
+  background: rgba(16, 185, 129, 0.06);
+}
+
+/* Token 明細日誌標題列 */
+.token-log-header {
+  display: grid;
+  grid-template-columns: 72px 70px 1fr 70px 90px 70px 80px;
+  gap: 0;
+  align-items: center;
+  padding: 10px 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-bottom: 2px solid var(--accent-color);
+  border-radius: 8px 8px 0 0;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* Token 詳情展開面板 */
+.token-detail-panel {
+  animation: fadeIn 0.2s ease-out forwards;
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+  margin-bottom: 6px;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.token-detail-panel pre {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  max-height: 400px;
+}
+
+/* Model Card 在 Token 詳情面板中 */
+.token-model-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+}
+
+.token-model-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* Token 花費金額樣式 */
+.token-cost {
+  color: var(--text-cooldown);
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, sans-serif;
+}
+
+.token-cost-total {
+  color: var(--accent-color);
+  font-weight: 700;
+  font-family: 'Outfit', system-ui, sans-serif;
+}
+
+/* 詳情頁籤導覽列 */
+.token-detail-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 12px;
+  gap: 4px;
+}
+.token-detail-tab {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 150ms ease;
+}
+.token-detail-tab:hover {
+  color: var(--text-primary);
+}
+.token-detail-tab.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}
+
+/* 對話泡泡視覺化樣式 */
+.chat-bubble-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.chat-bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
+  max-width: 85%;
+  font-size: 13px;
+  line-height: 1.5;
+  position: relative;
+  word-break: break-word;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.chat-bubble.system {
+  align-self: flex-start;
+  background: rgba(113, 113, 122, 0.12);
+  border: 1px dashed var(--text-muted);
+  color: var(--text-secondary);
+  border-bottom-left-radius: 2px;
+}
+.chat-bubble.user {
+  align-self: flex-end;
+  background: var(--accent-glow);
+  border: 1px solid var(--accent-color);
+  color: var(--text-primary);
+  border-bottom-right-radius: 2px;
+}
+.chat-bubble.assistant {
+  align-self: flex-start;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-bottom-left-radius: 2px;
+}
+.chat-bubble-role {
+  font-size: 10px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+

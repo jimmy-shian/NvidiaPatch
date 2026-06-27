@@ -400,9 +400,18 @@ function initDatabase(dbPath) {
       model_id TEXT NOT NULL,
       prompt_tokens INTEGER DEFAULT 0,
       completion_tokens INTEGER DEFAULT 0,
-      total_tokens INTEGER DEFAULT 0
+      total_tokens INTEGER DEFAULT 0,
+      request_body TEXT DEFAULT ''
     )
   `);
+
+  // 7.1 確保舊表缺少 request_body 欄位時自動補上
+  try {
+    const tokenUsageCols = db.prepare("PRAGMA table_info(token_usage)").all();
+    if (!tokenUsageCols.some(c => c.name === 'request_body')) {
+      db.exec("ALTER TABLE token_usage ADD COLUMN request_body TEXT DEFAULT ''");
+    }
+  } catch (_) { /* ignore */ }
 
   // 確保初始設定參數存在於 metadata 中
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('ROUND_DELAY_MS', '15000')").run();
@@ -412,6 +421,11 @@ function initDatabase(dbPath) {
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PORT', '4000')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', '2')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', '60000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_PROMPT_TOKENS', '0.30')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_COMPLETION_TOKENS', '0.60')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('CURRENCY_SYMBOL', 'USD')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('REF_PRICE_PER_MILLION_PROMPT_TOKENS', '5.00')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('REF_PRICE_PER_MILLION_COMPLETION_TOKENS', '15.00')").run();
 
   // 確保舊版資料庫可平滑升級到三組模型順位 schema
   ensureModelsConfigSchema();
@@ -1039,7 +1053,12 @@ const settings = {
       NVIDIA_API_URL: nvidiaUrl?.value || 'https://integrate.api.nvidia.com/v1',
       PORT: Number(port?.value || 4000),
       MAX_ROUNDS_PER_MODEL: Number(maxRounds?.value || 2),
-      TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000)
+      TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000),
+      PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 0.30),
+      PRICE_PER_MILLION_COMPLETION_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_COMPLETION_TOKENS'").get()?.value || 0.60),
+      REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'REF_PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 5.00),
+      REF_PRICE_PER_MILLION_COMPLETION_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'REF_PRICE_PER_MILLION_COMPLETION_TOKENS'").get()?.value || 15.00),
+      CURRENCY_SYMBOL: db.prepare("SELECT value FROM metadata WHERE key = 'CURRENCY_SYMBOL'").get()?.value || 'USD'
     };
   },
   save(config) {
@@ -1064,18 +1083,34 @@ const settings = {
     if (config.TEST_TIMEOUT_MS !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', ?)").run(String(config.TEST_TIMEOUT_MS));
     }
+    if (config.PRICE_PER_MILLION_PROMPT_TOKENS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_PROMPT_TOKENS', ?)").run(String(config.PRICE_PER_MILLION_PROMPT_TOKENS));
+    }
+    if (config.PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_COMPLETION_TOKENS', ?)").run(String(config.PRICE_PER_MILLION_COMPLETION_TOKENS));
+    }
+    if (config.REF_PRICE_PER_MILLION_PROMPT_TOKENS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('REF_PRICE_PER_MILLION_PROMPT_TOKENS', ?)").run(String(config.REF_PRICE_PER_MILLION_PROMPT_TOKENS));
+    }
+    if (config.REF_PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('REF_PRICE_PER_MILLION_COMPLETION_TOKENS', ?)").run(String(config.REF_PRICE_PER_MILLION_COMPLETION_TOKENS));
+    }
+    if (config.CURRENCY_SYMBOL !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('CURRENCY_SYMBOL', ?)").run(String(config.CURRENCY_SYMBOL));
+    }
     return this.get();
   }
 };
 
 const tokenUsage = {
-  addRecord(requestId, modelId, promptTokens, completionTokens) {
+  addRecord(requestId, modelId, promptTokens, completionTokens, requestBody) {
     const timestamp = getTaiwanISOString();
     const total = (promptTokens || 0) + (completionTokens || 0);
+    const bodyStr = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody || {});
     db.prepare(`
-      INSERT INTO token_usage (request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(requestId || null, timestamp, modelId, promptTokens || 0, completionTokens || 0, total);
+      INSERT INTO token_usage (request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(requestId || null, timestamp, modelId, promptTokens || 0, completionTokens || 0, total, bodyStr);
   },
   getStats() {
     return db.prepare(`
@@ -1092,11 +1127,18 @@ const tokenUsage = {
   },
   getLogs(limit = 100) {
     return db.prepare(`
-      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens
+      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body
       FROM token_usage
       ORDER BY id DESC
       LIMIT ?
     `).all(limit);
+  },
+  getDetail(id) {
+    return db.prepare(`
+      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body
+      FROM token_usage
+      WHERE id = ?
+    `).get(id);
   },
   clear() {
     db.exec("DELETE FROM token_usage");

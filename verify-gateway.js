@@ -53,6 +53,17 @@ function startMockNvidiaServer() {
           return;
         }
 
+        // F. 模擬 400 Context Limit 錯誤 (只在模型為 70b 時觸發，用以測試 fallback)
+        if (model === 'meta/llama3-70b-instruct' && key === 'key-trigger-400-context') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            message: "This model's maximum context length is 202752 tokens. However, your messages resulted in 206517 tokens. Please reduce the length of the messages.",
+            type: "Bad Request",
+            code: 400
+          }));
+          return;
+        }
+
         // D. 正常回應
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -310,6 +321,34 @@ async function runTests() {
       console.log('=> TEST 8 PASSED (successfully returned status: running for /v1)');
     } else {
       throw new Error('TEST 8 FAILED');
+    }
+
+    // --- 測試 9: 400 Context Limit Fallback 模型降級 ---
+    console.log('\n--- Test 9: 400 Context Limit Fallback ---');
+    // 清空 Key，加入會對 70b 觸發 400 context limit 的 key，以及一個正常的 key-healthy
+    apiKeys.getAll().forEach(k => apiKeys.delete(k.id));
+    apiKeys.add('key-trigger-400-context');
+
+    // 設定兩台模型順位 (70b 第一順位, 8b 第二順位)
+    modelsConfig.savePriorityList(['meta/llama3-70b-instruct', 'meta/llama3-8b-instruct']);
+
+    res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'patcher-main',
+        messages: [{ role: 'user', content: 'trigger 400 context limit fallback' }]
+      })
+    });
+
+    data = await res.json();
+    console.log('Response Status:', res.status);
+    console.log('Response Model returned:', data.model);
+
+    if (res.status === 200 && data.model === 'patcher-main') {
+      console.log('=> TEST 9 PASSED (successfully degraded to 2nd priority model on 400 context limit)');
+    } else {
+      throw new Error('TEST 9 FAILED');
     }
 
     console.log('\n>>> ALL INTEGRATION TESTS PASSED SUCCESSFULLY! <<<\n');

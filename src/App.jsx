@@ -175,6 +175,10 @@ export default function App() {
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [hoveredHourlyIndex, setHoveredHourlyIndex] = useState(null);
 
+  // Token 記錄展開狀態
+  const [expandedTokenLogId, setExpandedTokenLogId] = useState(null);
+  const [expandedTokenLogTabs, setExpandedTokenLogTabs] = useState({});
+
   // 清理非阻塞提示的計時器
   useEffect(() => {
     return () => {
@@ -1237,7 +1241,73 @@ export default function App() {
             )}
 
             {/* Token 記數頁籤 */}
-            {dashboardSubTab === 'tokens' && (
+            {dashboardSubTab === 'tokens' && (() => {
+              const pricing = tokenUsageData.pricing || {};
+              const pPrice = Number(pricing.pricePerMillionPromptTokens) || 0;
+              const cPrice = Number(pricing.pricePerMillionCompletionTokens) || 0;
+              const refPPrice = Number(pricing.refPricePerMillionPromptTokens) || 0;
+              const refCPrice = Number(pricing.refPricePerMillionCompletionTokens) || 0;
+              const curSym = pricing.currencySymbol || 'USD';
+
+              // 計算實際花費與商業參考花費
+              const totalPromptCost = tokenUsageData.stats.reduce((acc, s) => acc + (s.total_prompt_tokens / 1_000_000) * pPrice, 0);
+              const totalCompletionCost = tokenUsageData.stats.reduce((acc, s) => acc + (s.total_completion_tokens / 1_000_000) * cPrice, 0);
+              const totalActualCost = totalPromptCost + totalCompletionCost;
+
+              const totalRefPromptCost = tokenUsageData.stats.reduce((acc, s) => acc + (s.total_prompt_tokens / 1_000_000) * refPPrice, 0);
+              const totalRefCompletionCost = tokenUsageData.stats.reduce((acc, s) => acc + (s.total_completion_tokens / 1_000_000) * refCPrice, 0);
+              const totalRefCost = totalRefPromptCost + totalRefCompletionCost;
+
+              const totalSavings = Math.max(0, totalRefCost - totalActualCost);
+
+              const formatCost = (val) => {
+                if (val < 0.01 && val > 0) return `<${(0.01).toFixed(2)}`;
+                return val.toFixed(4);
+              };
+
+              const getModelEmoji = (modelId) => {
+                const id = modelId.toLowerCase();
+                if (id.includes('llama')) return '🦙';
+                if (id.includes('gpt')) return '🤖';
+                if (id.includes('mistral') || id.includes('mixtral')) return '🌀';
+                if (id.includes('gemma')) return '💎';
+                if (id.includes('nemotron')) return '🧠';
+                if (id.includes('phi')) return '🔤';
+                if (id.includes('minimax') || id.includes('minimaxai')) return '🔲';
+                if (id.includes('step')) return '🪜';
+                if (id.includes('nvidia')) return '💚';
+                if (id.includes('deepseek')) return '🔍';
+                if (id.includes('qwen')) return '🐼';
+                return '⚡';
+              };
+
+              const parseRequestBody = (bodyStr) => {
+                if (!bodyStr) return null;
+                try {
+                  return JSON.parse(bodyStr);
+                } catch {
+                  return bodyStr;
+                }
+              };
+
+              const handleFieldClick = (logId, fieldTab) => {
+                const isCurrentlyExpanded = expandedTokenLogId === logId;
+                const currentTab = expandedTokenLogTabs[logId];
+                
+                if (isCurrentlyExpanded && currentTab === fieldTab) {
+                  // 收合
+                  setExpandedTokenLogId(null);
+                } else {
+                  // 展開並設定分頁
+                  setExpandedTokenLogId(logId);
+                  setExpandedTokenLogTabs({
+                    ...expandedTokenLogTabs,
+                    [logId]: fieldTab
+                  });
+                }
+              };
+
+              return (
             <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: '16px', fontWeight: '700' }}>📊 Token 記數與使用量統計</span>
@@ -1251,6 +1321,33 @@ export default function App() {
                 </div>
               </div>
 
+              {/* 費用與節省統計卡片 */}
+              {tokenUsageData.stats.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>實際估計花費 ({curSym})</div>
+                    <div className="token-cost" style={{ fontSize: '18px', fontWeight: '700' }}>{curSym} {formatCost(totalActualCost)}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      P: {formatCost(totalPromptCost)} | C: {formatCost(totalCompletionCost)}
+                    </div>
+                  </div>
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>商業 API 參考花費 ({curSym})</div>
+                    <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-secondary)' }}>{curSym} {formatCost(totalRefCost)}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      基於參考單價計算
+                    </div>
+                  </div>
+                  <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid var(--accent-color)', borderRadius: '8px', padding: '12px 14px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '4px', fontWeight: '600' }}>💰 累計節省金額 ({curSym})</div>
+                    <div className="token-cost-total" style={{ fontSize: '20px', fontWeight: '800' }}>{curSym} {formatCost(totalSavings)}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-active)', marginTop: '4px', fontWeight: '500' }}>
+                      使用 NIM 替代付費商業 API 節省
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* 滾動容器 */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', paddingRight: '4px' }}>
                 {/* 1. 累加統計 */}
@@ -1261,8 +1358,8 @@ export default function App() {
                       尚無統計資料。請先使用 Gateway 發送請求。
                     </div>
                   ) : (
-                    <div className="markdown-body" style={{ overflowX: 'auto' }}>
-                      <table className="md-table" style={{ width: '100%' }}>
+                    <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                      <table className="token-usage-table">
                         <thead>
                           <tr>
                             <th>模型 ID</th>
@@ -1270,18 +1367,28 @@ export default function App() {
                             <th>Completion Tokens</th>
                             <th>Total Tokens</th>
                             <th>調用次數</th>
+                            <th>預估花費 ({curSym})</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {tokenUsageData.stats.map((stat, idx) => (
+                          {tokenUsageData.stats.map((stat, idx) => {
+                            const statCost = (stat.total_prompt_tokens / 1_000_000) * pPrice + (stat.total_completion_tokens / 1_000_000) * cPrice;
+                            return (
                             <tr key={idx}>
-                              <td style={{ fontFamily: 'ui-monospace, monospace', fontWeight: '600' }}>{stat.model_id}</td>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span>{getModelEmoji(stat.model_id)}</span>
+                                  <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: '600' }}>{stat.model_id}</span>
+                                </div>
+                              </td>
                               <td>{stat.total_prompt_tokens.toLocaleString()}</td>
                               <td>{stat.total_completion_tokens.toLocaleString()}</td>
                               <td style={{ color: 'var(--accent-color)', fontWeight: '700' }}>{stat.total_total_tokens.toLocaleString()}</td>
                               <td>{stat.request_count}</td>
+                              <td className="token-cost">{formatCost(statCost)}</td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1289,44 +1396,179 @@ export default function App() {
                 </div>
 
                 {/* 2. 即時日誌 */}
-                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '300px' }}>
-                  <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>每次回應 Token 用量明細</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '350px' }}>
+                  <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>
+                    每次回應 Token 用量明細
+                    <span style={{ fontSize: '11px', fontWeight: '400', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                      💡 提示：點擊「模型」開模型卡；點擊「Token 數」看 Prompts 對話；點擊「其他」看原始 JSON
+                    </span>
+                  </h3>
                   {tokenUsageData.logs.length === 0 ? (
                     <div style={{ padding: '16px', textAlign: 'center', background: 'var(--bg-tertiary)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '14px', flex: 1 }}>
                       尚無詳細使用記錄。
                     </div>
                   ) : (
-                    <div className="markdown-body" style={{ overflowX: 'auto', flex: 1 }}>
-                      <table className="md-table" style={{ width: '100%' }}>
-                        <thead>
-                          <tr>
-                            <th>時間</th>
-                            <th>請求 ID</th>
-                            <th>模型</th>
-                            <th>Prompt</th>
-                            <th>Completion</th>
-                            <th>Total</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {tokenUsageData.logs.map((log, idx) => (
-                            <tr key={idx}>
-                              <td style={{ whiteSpace: 'nowrap' }}>{formatTaiwanTime(log.timestamp)}</td>
-                              <td style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>#{log.request_id || 'test-chat'}</td>
-                              <td style={{ fontFamily: 'ui-monospace, monospace' }}>{log.model_id.split('/').pop()}</td>
-                              <td>{log.prompt_tokens}</td>
-                              <td>{log.completion_tokens}</td>
-                              <td style={{ fontWeight: '600', color: 'var(--accent-color)' }}>{log.total_tokens}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      {/* 明細標題列 */}
+                      <div className="token-log-header">
+                        <span>時間</span>
+                        <span>請求 ID</span>
+                        <span>模型名稱 (點擊看 ModelCard)</span>
+                        <span>Prompt</span>
+                        <span>Complet.</span>
+                        <span>Total</span>
+                        <span style={{ textAlign: 'right', paddingRight: '4px' }}>預估花費</span>
+                      </div>
+                      
+                      {tokenUsageData.logs.map((log, idx) => {
+                        const isExpanded = expandedTokenLogId === log.id;
+                        const activeDetailTab = expandedTokenLogTabs[log.id] || 'prompt';
+                        const logCost = (log.prompt_tokens / 1_000_000) * pPrice + (log.completion_tokens / 1_000_000) * cPrice;
+                        const parsedBody = parseRequestBody(log.request_body);
+                        const modelInfo = availableModels.find(m => m.id === log.model_id);
+
+                        return (
+                          <div key={log.id || idx} style={{ marginBottom: '2px' }}>
+                            {/* 表格資料行 */}
+                            <div
+                              className={isExpanded ? 'token-row-expanded' : ''}
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: '72px 70px 1fr 70px 90px 70px 80px',
+                                gap: '0',
+                                alignItems: 'center',
+                                padding: '10px 11px',
+                                background: isExpanded ? 'rgba(16, 185, 129, 0.06)' : 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
+                                borderTop: 'none',
+                                cursor: 'pointer',
+                                fontSize: '13px',
+                                transition: 'background 150ms ease'
+                              }}
+                            >
+                              <span onClick={() => handleFieldClick(log.id, 'raw')} style={{ color: 'var(--text-muted)' }}>
+                                {formatTaiwanTime(log.timestamp)}
+                              </span>
+                              <span onClick={() => handleFieldClick(log.id, 'raw')} style={{ fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                #{log.request_id || 'test'}
+                              </span>
+                              <span onClick={() => handleFieldClick(log.id, 'model')} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: '600' }} title="點擊檢視模型 Model Card">
+                                <span>{getModelEmoji(log.model_id)}</span>
+                                <span style={{ fontFamily: 'ui-monospace, monospace', textDecoration: 'underline', textDecorationStyle: 'dotted' }}>
+                                  {log.model_id.split('/').pop()}
+                                </span>
+                              </span>
+                              <span onClick={() => handleFieldClick(log.id, 'prompt')} style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="點擊檢視輸入提示對話內容">
+                                {log.prompt_tokens.toLocaleString()}
+                              </span>
+                              <span onClick={() => handleFieldClick(log.id, 'prompt')} style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="點擊檢視輸入提示對話內容">
+                                {log.completion_tokens.toLocaleString()}
+                              </span>
+                              <span onClick={() => handleFieldClick(log.id, 'prompt')} style={{ fontWeight: '700', color: 'var(--accent-color)', textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="點擊檢視輸入提示對話內容">
+                                {log.total_tokens.toLocaleString()}
+                              </span>
+                              <span onClick={() => handleFieldClick(log.id, 'raw')} className="token-cost" style={{ textAlign: 'right', fontSize: '12px' }}>
+                                {formatCost(logCost)}
+                              </span>
+                            </div>
+
+                            {/* 展開詳情面板 */}
+                            {isExpanded && (
+                              <div className="token-detail-panel" style={{ padding: '16px' }}>
+                                {/* 頁籤切換 */}
+                                <div className="token-detail-tabs">
+                                  <div 
+                                    className={`token-detail-tab ${activeDetailTab === 'prompt' ? 'active' : ''}`}
+                                    onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'prompt' })}
+                                  >
+                                    💬 對話內容 (Prompt)
+                                  </div>
+                                  <div 
+                                    className={`token-detail-tab ${activeDetailTab === 'model' ? 'active' : ''}`}
+                                    onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'model' })}
+                                  >
+                                    🎴 Model Card
+                                  </div>
+                                  <div 
+                                    className={`token-detail-tab ${activeDetailTab === 'raw' ? 'active' : ''}`}
+                                    onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'raw' })}
+                                  >
+                                    ⚙️ 原始請求 (Raw JSON)
+                                  </div>
+                                </div>
+
+                                {/* 頁籤 1: 對話內容 */}
+                                {activeDetailTab === 'prompt' && (() => {
+                                  const msgs = parsedBody?.messages;
+                                  return (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                      {msgs && Array.isArray(msgs) ? (
+                                        <div className="chat-bubble-container">
+                                          {msgs.map((m, mIdx) => (
+                                            <div key={mIdx} className={`chat-bubble ${m.role}`}>
+                                              <div className="chat-bubble-role">{m.role}</div>
+                                              <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <pre style={{ padding: '10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                                          {parsedBody ? (typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody, null, 2)) : '無請求內容'}
+                                        </pre>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* 頁籤 2: Model Card */}
+                                {activeDetailTab === 'model' && (
+                                  <div className="token-model-card">
+                                    <div className="token-model-card-icon" style={{ background: 'rgba(16, 185, 129, 0.12)' }}>
+                                      {getModelEmoji(log.model_id)}
+                                    </div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                                        {modelInfo?.name || log.model_id.split('/').pop()}
+                                      </div>
+                                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace', wordBreak: 'break-all', marginTop: '2px' }}>
+                                        {log.model_id}
+                                      </div>
+                                      <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '12px', flexWrap: 'wrap' }}>
+                                        <span style={{ color: 'var(--text-secondary)' }}>NIM 實際價格: Prompt <strong>${pPrice}</strong> / Completion <strong>${cPrice}</strong> (每百萬)</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>對比參考價格: Prompt <strong>${refPPrice}</strong> / Completion <strong>${refCPrice}</strong> (每百萬)</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 頁籤 3: 原始請求 */}
+                                {activeDetailTab === 'raw' && (
+                                  <div>
+                                    <pre style={{
+                                      background: 'var(--bg-primary)',
+                                      border: '1px solid var(--border-color)',
+                                      borderRadius: '8px',
+                                      padding: '12px',
+                                      fontSize: '12px',
+                                      overflow: 'auto',
+                                      maxHeight: '300px'
+                                    }}>
+                                      {JSON.stringify(parsedBody || { raw: log.request_body }, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               </div>
             </div>
-            )}
+            );
+          })()}
           </div>
         )}
 
@@ -2005,12 +2247,15 @@ export default function App() {
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '500px',
+              maxWidth: '95vw',
+              boxSizing: 'border-box',
               padding: '24px',
               display: 'flex',
               flexDirection: 'column',
               gap: '16px',
               maxHeight: '90vh',
-              overflowY: 'auto'
+              overflowY: 'auto',
+              overflowX: 'hidden'
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
@@ -2026,7 +2271,7 @@ export default function App() {
                 <input
                   className="input"
                   type="text"
-                  value={tempSettings.NVIDIA_API_URL}
+                  value={tempSettings.NVIDIA_API_URL || ''}
                   onChange={(e) => setTempSettings({ ...tempSettings, NVIDIA_API_URL: e.target.value })}
                 />
               </div>
@@ -2037,7 +2282,7 @@ export default function App() {
                   <input
                     className="input"
                     type="number"
-                    value={tempSettings.PORT}
+                    value={tempSettings.PORT || ''}
                     onChange={(e) => setTempSettings({ ...tempSettings, PORT: Number(e.target.value) })}
                   />
                 </div>
@@ -2046,7 +2291,7 @@ export default function App() {
                   <input
                     className="input"
                     type="number"
-                    value={tempSettings.MAX_ROUNDS_PER_MODEL}
+                    value={tempSettings.MAX_ROUNDS_PER_MODEL || ''}
                     onChange={(e) => setTempSettings({ ...tempSettings, MAX_ROUNDS_PER_MODEL: Number(e.target.value) })}
                   />
                 </div>
@@ -2058,7 +2303,7 @@ export default function App() {
                   <input
                     className="input"
                     type="number"
-                    value={tempSettings.ROUND_DELAY_MS}
+                    value={tempSettings.ROUND_DELAY_MS || ''}
                     onChange={(e) => setTempSettings({ ...tempSettings, ROUND_DELAY_MS: Number(e.target.value) })}
                   />
                 </div>
@@ -2067,7 +2312,7 @@ export default function App() {
                   <input
                     className="input"
                     type="number"
-                    value={tempSettings.REQUEST_TIMEOUT_MS}
+                    value={tempSettings.REQUEST_TIMEOUT_MS || ''}
                     onChange={(e) => setTempSettings({ ...tempSettings, REQUEST_TIMEOUT_MS: Number(e.target.value) })}
                   />
                 </div>
@@ -2079,7 +2324,7 @@ export default function App() {
                   <input
                     className="input"
                     type="number"
-                    value={tempSettings.STREAM_READ_TIMEOUT_MS}
+                    value={tempSettings.STREAM_READ_TIMEOUT_MS || ''}
                     onChange={(e) => setTempSettings({ ...tempSettings, STREAM_READ_TIMEOUT_MS: Number(e.target.value) })}
                   />
                 </div>
@@ -2088,12 +2333,63 @@ export default function App() {
                   <input
                     className="input"
                     type="number"
-                    value={tempSettings.TEST_TIMEOUT_MS}
+                    value={tempSettings.TEST_TIMEOUT_MS || ''}
                     onChange={(e) => setTempSettings({ ...tempSettings, TEST_TIMEOUT_MS: Number(e.target.value) })}
                   />
                 </div>
               </div>
               
+              <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontWeight: '700', color: 'var(--accent-color)', fontSize: '15px' }}>
+                💰 NVIDIA NIM 實際單價 (每百萬 tokens)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Prompt 實際價</label>
+                  <input className="input" type="number" step="0.01"
+                    value={tempSettings.PRICE_PER_MILLION_PROMPT_TOKENS || 0}
+                    onChange={(e) => setTempSettings({ ...tempSettings, PRICE_PER_MILLION_PROMPT_TOKENS: Number(e.target.value) })}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Completion 實際價</label>
+                  <input className="input" type="number" step="0.01"
+                    value={tempSettings.PRICE_PER_MILLION_COMPLETION_TOKENS || 0}
+                    onChange={(e) => setTempSettings({ ...tempSettings, PRICE_PER_MILLION_COMPLETION_TOKENS: Number(e.target.value) })}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>貨幣單位</label>
+                  <input className="input" type="text"
+                    value={tempSettings.CURRENCY_SYMBOL || 'USD'}
+                    onChange={(e) => setTempSettings({ ...tempSettings, CURRENCY_SYMBOL: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: '8px', fontWeight: '700', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                ⚖️ 對照商業 API 參考單價 (如 GPT-4o 類別)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Prompt 參考價 (百萬 tokens)</label>
+                  <input className="input" type="number" step="0.01"
+                    value={tempSettings.REF_PRICE_PER_MILLION_PROMPT_TOKENS || 0}
+                    onChange={(e) => setTempSettings({ ...tempSettings, REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(e.target.value) })}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Completion 參考價 (百萬 tokens)</label>
+                  <input className="input" type="number" step="0.01"
+                    value={tempSettings.REF_PRICE_PER_MILLION_COMPLETION_TOKENS || 0}
+                    onChange={(e) => setTempSettings({ ...tempSettings, REF_PRICE_PER_MILLION_COMPLETION_TOKENS: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+              
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                💡 說明：系統會基於商業 API 參考單價與實際單價之差額，為您計算透過此 Gateway 所省下的估計費用。
+              </div>
+
               {tempSettings.PORT !== settingsData.PORT && (
                 <div style={{ fontSize: '12px', color: 'var(--status-cooldown)', marginTop: '4px', fontWeight: '500' }}>
                   ⚠️ 提示：變更連接埠 (PORT) 需要重啟 Electron 應用程式才會生效。
