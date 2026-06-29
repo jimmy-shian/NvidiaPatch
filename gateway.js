@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const { apiKeys, modelsConfig, stats, rules, settings, tokenUsage } = require('./database');
@@ -11,28 +12,29 @@ try {
   // ignore
 }
 
-function getTaiwanDateParts(date = new Date()) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23'
-  });
+const { getTaiwanDateParts, getTaiwanISOString } = require('./utils/date');
 
-  return formatter.formatToParts(date).reduce((acc, part) => {
-    if (part.type !== 'literal') acc[part.type] = part.value;
-    return acc;
-  }, {});
-}
-
-function getTaiwanISOString(date = new Date()) {
-  const parts = getTaiwanDateParts(date);
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+08:00`;
-}
+// ============ SSE 事件管理器 ============
+// 管理 /api/events SSE 連線並在狀態變更時推送事件
+const eventManager = {
+  clients: new Set(),
+  subscribe(res) {
+    this.clients.add(res);
+    res.on('close', () => {
+      this.clients.delete(res);
+    });
+  },
+  broadcast(eventType, data) {
+    const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of this.clients) {
+      try {
+        client.write(payload);
+      } catch (_) {
+        this.clients.delete(client);
+      }
+    }
+  }
+};
 
 const activeLogs = [];
 function addLog(type, message) {
@@ -50,6 +52,9 @@ function addLog(type, message) {
   }
 
   console.log(`[Gateway Log] [${type.toUpperCase()}] ${message}`);
+
+  // 透過 SSE 推送新日誌給所有已連線前端
+  eventManager.broadcast('logs', logEntry);
 }
 
 // 模型層級錯誤冷卻表：避免同一個壞掉或逾時的模型被多個並行請求反覆測試
@@ -287,6 +292,49 @@ function createGatewayApp() {
   app.use(cors());
   app.use(express.json({ limit: '1gb' }));
 
+  // ============ 管理 API 認證保護 ============
+  // 將 admin token 存入 metadata 表；首次啟動會自動生成。
+  function getOrCreateAdminToken() {
+    const db = require('./database');
+    try {
+      const row = db.initDatabase().prepare("SELECT value FROM metadata WHERE key = 'ADMIN_TOKEN'").get();
+      if (row && row.value && row.value.length >= 32) return row.value;
+    } catch (_) { /* fall through */ }
+    const token = crypto.randomBytes(32).toString('hex');
+    db.initDatabase().prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('ADMIN_TOKEN', ?)").run(token);
+    console.log(`[Gateway] Admin token generated: ${token}`);
+    return token;
+  }
+
+  const ADMIN_TOKEN = getOrCreateAdminToken();
+
+  function requireAdminAuth(req, res, next) {
+    const authorization = req.headers.authorization || '';
+    if (!authorization) {
+      return res.status(401).json({ error: 'Unauthorized', message: '缺少 Authorization header。請在請求中帶入 Bearer Token。' });
+    }
+    const match = String(authorization).match(/^Bearer\s+(.+)$/i);
+    if (!match || !match[1]) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Authorization header 格式錯誤。請使用 Bearer <token> 格式。' });
+    }
+    if (match[1] !== ADMIN_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized', message: '無效的 Bearer Token。' });
+    }
+    next();
+  }
+
+  // SSE 連線透過 query parameter 傳遞 token，因為瀏覽器 EventSource 不支援自訂 header
+  function requireSseAuth(req, res, next) {
+    const token = req.query.token || '';
+    if (!token) {
+      return res.status(401).json({ error: 'Unauthorized', message: '缺少 token query 參數。' });
+    }
+    if (token !== ADMIN_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized', message: '無效的 token。' });
+    }
+    next();
+  }
+
   // 0. 基礎狀態檢查與歡迎頁面 (防止連線測試出現 Cannot GET /v1 錯誤)
   app.get('/', (req, res) => {
     res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: "1.0.1" });
@@ -296,13 +344,47 @@ function createGatewayApp() {
     res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: "1.0.1" });
   });
 
-  // 1. 取得日誌
-  app.get('/api/logs', (req, res) => {
+  // 管理端點登入：驗證前端傳來的 token 是否匹配
+  app.post('/api/auth/login', requireAdminAuth, (req, res) => {
+    res.json({ success: true });
+  });
+
+  // SSE 即時事件推送端點
+  // 使用 EventSource 連線並以 query parameter 傳遞 admin token
+  app.get('/api/events', requireSseAuth, (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+
+    // 發送連線成功事件
+    res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: getTaiwanISOString() })}\n\n`);
+
+    eventManager.subscribe(res);
+
+    // 30 秒心跳，避免中間 proxy 切斷閒置連線
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(`:heartbeat\n\n`);
+      } catch (_) {
+        clearInterval(heartbeat);
+      }
+    }, 30000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+    });
+  });
+
+  // 1. 取得日誌 (需 admin auth)
+  app.get('/api/logs', requireAdminAuth, (req, res) => {
     res.json(activeLogs);
   });
 
-  // 1.5 參數設定 API
-  app.get('/api/settings', (req, res) => {
+  // 1.5 參數設定 API (需 admin auth)
+  app.get('/api/settings', requireAdminAuth, (req, res) => {
     const raw = settings.get();
     res.json({
       ...raw,
@@ -313,9 +395,63 @@ function createGatewayApp() {
     });
   });
 
-  app.post('/api/settings', async (req, res) => {
+  app.post('/api/settings', requireAdminAuth, (req, res) => {
     const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS, PRICE_PER_MILLION_PROMPT_TOKENS, PRICE_PER_MILLION_COMPLETION_TOKENS, REF_PRICE_PER_MILLION_PROMPT_TOKENS, REF_PRICE_PER_MILLION_COMPLETION_TOKENS, CURRENCY_SYMBOL } = req.body;
     const current = settings.get();
+
+    // 後端設定值驗證
+    const validationErrors = [];
+    if (PORT !== undefined) {
+      const portNum = Number(PORT);
+      if (!Number.isFinite(portNum) || portNum < 1 || portNum > 65535 || !Number.isInteger(portNum)) {
+        validationErrors.push('PORT 必須是 1～65535 之間的整數。');
+      }
+    }
+    if (ROUND_DELAY_MS !== undefined) {
+      const val = Number(ROUND_DELAY_MS);
+      if (!Number.isFinite(val) || val < 1) {
+        validationErrors.push('每輪重試等待時間必須至少 1 秒。');
+      }
+    }
+    if (REQUEST_TIMEOUT_MS !== undefined) {
+      const val = Number(REQUEST_TIMEOUT_MS);
+      if (!Number.isFinite(val) || val < 1) {
+        validationErrors.push('請求逾時必須至少 1 秒。');
+      }
+    }
+    if (STREAM_READ_TIMEOUT_MS !== undefined) {
+      const val = Number(STREAM_READ_TIMEOUT_MS);
+      if (!Number.isFinite(val) || val < 1) {
+        validationErrors.push('串流讀取逾時必須至少 1 秒。');
+      }
+    }
+    if (TEST_TIMEOUT_MS !== undefined) {
+      const val = Number(TEST_TIMEOUT_MS);
+      if (!Number.isFinite(val) || val < 1) {
+        validationErrors.push('測試逾時必須至少 1 秒。');
+      }
+    }
+    if (MAX_ROUNDS_PER_MODEL !== undefined) {
+      const val = Number(MAX_ROUNDS_PER_MODEL);
+      if (!Number.isFinite(val) || val < 1 || val > 10 || !Number.isInteger(val)) {
+        validationErrors.push('最大重試輪數必須是 1～10 之間的整數。');
+      }
+    }
+    if (PRICE_PER_MILLION_PROMPT_TOKENS !== undefined && Number(PRICE_PER_MILLION_PROMPT_TOKENS) < 0) {
+      validationErrors.push('Prompt 實際價格不可小於 0。');
+    }
+    if (PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined && Number(PRICE_PER_MILLION_COMPLETION_TOKENS) < 0) {
+      validationErrors.push('Completion 實際價格不可小於 0。');
+    }
+    if (REF_PRICE_PER_MILLION_PROMPT_TOKENS !== undefined && Number(REF_PRICE_PER_MILLION_PROMPT_TOKENS) < 0) {
+      validationErrors.push('Prompt 參考價格不可小於 0。');
+    }
+    if (REF_PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined && Number(REF_PRICE_PER_MILLION_COMPLETION_TOKENS) < 0) {
+      validationErrors.push('Completion 參考價格不可小於 0。');
+    }
+    if (validationErrors.length > 0) {
+      return res.status(400).json({ error: '設定驗證失敗', details: validationErrors });
+    }
     
     // 傳入的數值單位為「秒」，後端乘上 1000 轉換為毫秒儲存至資料庫
     const updated = settings.save({
@@ -334,6 +470,15 @@ function createGatewayApp() {
     });
     
     addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪`);
+
+    // 透過 SSE 推送設定變更
+    eventManager.broadcast('settings', {
+      ...updated,
+      ROUND_DELAY_MS: updated.ROUND_DELAY_MS / 1000,
+      REQUEST_TIMEOUT_MS: updated.REQUEST_TIMEOUT_MS / 1000,
+      STREAM_READ_TIMEOUT_MS: updated.STREAM_READ_TIMEOUT_MS / 1000,
+      TEST_TIMEOUT_MS: updated.TEST_TIMEOUT_MS / 1000
+    });
     
     res.json({
       ...updated,
@@ -344,8 +489,8 @@ function createGatewayApp() {
     });
   });
 
-  // 1.6 Token 使用量統計 API
-  app.get('/api/token-usage', (req, res) => {
+  // 1.6 Token 使用量統計 API (需 admin auth)
+  app.get('/api/token-usage', requireAdminAuth, (req, res) => {
     const currentSettings = settings.get();
     res.json({
       stats: tokenUsage.getStats(),
@@ -360,7 +505,7 @@ function createGatewayApp() {
     });
   });
 
-  app.get('/api/token-usage/:id', (req, res) => {
+  app.get('/api/token-usage/:id', requireAdminAuth, (req, res) => {
     const record = tokenUsage.getDetail(Number(req.params.id));
     if (!record) return res.status(404).json({ error: 'Record not found' });
     const currentSettings = settings.get();
@@ -376,50 +521,77 @@ function createGatewayApp() {
     });
   });
 
-  app.post('/api/token-usage/clear', (req, res) => {
+  app.post('/api/token-usage/clear', requireAdminAuth, (req, res) => {
     tokenUsage.clear();
     addLog('info', `已清空 Token 累加計數與使用量日誌。`);
+    eventManager.broadcast('token-usage', { action: 'clear' });
     res.json({ success: true });
   });
 
-  // 2. API Keys 管理
-  app.get('/api/keys', (req, res) => {
-    res.json(apiKeys.getAll());
+  // 2. API Keys 管理 (需 admin auth)
+  // 回傳遮蔽後的金鑰，不暴露完整 key_value
+  function maskKeyValue(keyValue) {
+    const value = String(keyValue || '');
+    if (value.length <= 8) return '****';
+    const suffix = value.substring(value.length - 8);
+    return `nvapi-****...${suffix}`;
+  }
+
+  function maskKeyRow(k) {
+    return {
+      id: k.id,
+      masked_key: maskKeyValue(k.key_value),
+      key_suffix: k.key_value ? k.key_value.substring(k.key_value.length - 8) : '',
+      status: k.status,
+      cooldown_until: k.cooldown_until,
+      consecutive_failures: k.consecutive_failures,
+      total_errors: k.total_errors,
+      last_used_at: k.last_used_at,
+      last_error_message: k.last_error_message
+    };
+  }
+
+  app.get('/api/keys', requireAdminAuth, (req, res) => {
+    const allKeys = apiKeys.getAll();
+    res.json(allKeys.map(maskKeyRow));
   });
 
-  app.post('/api/keys', (req, res) => {
+  app.post('/api/keys', requireAdminAuth, (req, res) => {
     const { key } = req.body;
     if (!key) return res.status(400).json({ error: 'Key is required' });
     const result = apiKeys.add(key.trim());
     if (result.success) {
       addLog('info', `已新增 API Key：${key.substring(0, 10)}...`);
+      eventManager.broadcast('keys', { action: 'add' });
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
     }
   });
 
-  app.delete('/api/keys/:id', (req, res) => {
+  app.delete('/api/keys/:id', requireAdminAuth, (req, res) => {
     apiKeys.delete(req.params.id);
     addLog('info', `已刪除 API Key ID：${req.params.id}`);
+    eventManager.broadcast('keys', { action: 'delete', id: req.params.id });
     res.json({ success: true });
   });
 
-  app.post('/api/keys/test', async (req, res) => {
+  app.post('/api/keys/test', requireAdminAuth, async (req, res) => {
     addLog('info', '開始手動測試所有 API Key 連線狀態。');
     const results = await apiKeys.testAllKeys();
     const successCount = results.filter(r => r.success).length;
     addLog('info', `API Key 測試完成：${successCount}/${results.length} 把 Key 可用。`);
+    eventManager.broadcast('keys', { action: 'test', results: results.map(r => ({ id: r.id, status: r.status, success: r.success })) });
     res.json(results);
   });
 
-  // 3. 模型管理
-  app.get('/api/models', (req, res) => {
+  // 3. 模型管理 (需 admin auth)
+  app.get('/api/models', requireAdminAuth, (req, res) => {
     const groupId = req.query.groupId ? Number(req.query.groupId) : null;
     res.json(modelsConfig.getAll(groupId));
   });
 
-  app.post('/api/models', (req, res) => {
+  app.post('/api/models', requireAdminAuth, (req, res) => {
     const { models, groupId } = req.body;
     if (!models || !Array.isArray(models)) {
       return res.status(400).json({ error: 'Models list is required' });
@@ -429,18 +601,19 @@ function createGatewayApp() {
     res.json({ success: true, groupId: result.groupId });
   });
 
-  app.get('/api/models/groups', (req, res) => {
+  app.get('/api/models/groups', requireAdminAuth, (req, res) => {
     res.json(modelsConfig.getGroups());
   });
 
-  app.post('/api/models/groups/active', (req, res) => {
+  app.post('/api/models/groups/active', requireAdminAuth, (req, res) => {
     const { groupId } = req.body;
     const result = modelsConfig.setActiveGroup(groupId);
     addLog('info', `已切換目前使用的模型順位組別為第 ${result.activeGroup} 組。`);
+    eventManager.broadcast('models', { action: 'set-active-group', activeGroup: result.activeGroup });
     res.json(result);
   });
 
-  app.get('/api/models/available', (req, res) => {
+  app.get('/api/models/available', requireAdminAuth, (req, res) => {
     res.json({
       models: modelsConfig.getAvailable(),
       lastSyncTime: modelsConfig.getLastSyncTime(),
@@ -451,7 +624,7 @@ function createGatewayApp() {
     });
   });
 
-  app.post('/api/models/sync', async (req, res) => {
+  app.post('/api/models/sync', requireAdminAuth, async (req, res) => {
     // 主要同步來源改為 NVIDIA Build 網頁 Free Endpoint catalog，不再依賴 /v1/models。
     // 若 Build catalog 暫時不可用，仍會用第一把 active key 做最後保底 fallback。
     const activeKeys = apiKeys.getActiveKeys();
@@ -476,46 +649,49 @@ function createGatewayApp() {
     }
   });
 
-  // 4. Rules 管理
-  app.get('/api/rules', (req, res) => {
+  // 4. Rules 管理 (需 admin auth)
+  app.get('/api/rules', requireAdminAuth, (req, res) => {
     res.json(rules.getAll());
   });
 
-  app.post('/api/rules', (req, res) => {
+  app.post('/api/rules', requireAdminAuth, (req, res) => {
     const { title, content } = req.body;
     if (!title || !content) return res.status(400).json({ error: 'Title and Content are required' });
     const result = rules.add(title, content);
     if (result.success) {
       addLog('info', `已新增自訂規範：「${title}」`);
+      eventManager.broadcast('rules', { action: 'add' });
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
     }
   });
 
-  app.put('/api/rules/:id', (req, res) => {
+  app.put('/api/rules/:id', requireAdminAuth, (req, res) => {
     const { title, content } = req.body;
     const result = rules.update(req.params.id, title, content);
     if (result.success) {
       addLog('info', `已更新自訂規範 ID：${req.params.id}`);
+      eventManager.broadcast('rules', { action: 'update', id: req.params.id });
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
     }
   });
 
-  app.delete('/api/rules/:id', (req, res) => {
+  app.delete('/api/rules/:id', requireAdminAuth, (req, res) => {
     const result = rules.delete(req.params.id);
     if (result.success) {
       addLog('info', `已刪除自訂規範 ID：${req.params.id}`);
+      eventManager.broadcast('rules', { action: 'delete', id: req.params.id });
       res.json({ success: true });
     } else {
       res.status(400).json({ error: result.error });
     }
   });
 
-  // 5. 統計資訊
-  app.get('/api/stats', (req, res) => {
+  // 5. 統計資訊 (需 admin auth)
+  app.get('/api/stats', requireAdminAuth, (req, res) => {
     res.json({
       hourly: stats.getHourlyStats(),
       keysCount: apiKeys.getAll().length,
@@ -524,7 +700,7 @@ function createGatewayApp() {
     });
   });
 
-  // 5.1 Gateway 健康檢查端點
+  // 5.1 Gateway 健康檢查端點 (不需要 admin auth，供外部探測使用)
   app.get('/api/health', (req, res) => {
     const activeKeys = apiKeys.getActiveKeys();
     const allKeys = apiKeys.getAll();
@@ -539,8 +715,8 @@ function createGatewayApp() {
     });
   });
 
-  // 5.15 重設模型層級冷卻表（供前端重啟按鈕觸發）
-  app.post('/api/gateway/reset-cooldowns', (req, res) => {
+  // 5.15 重設模型層級冷卻表（需 admin auth）
+  app.post('/api/gateway/reset-cooldowns', requireAdminAuth, (req, res) => {
     const cleared = modelFailureCooldowns.size;
     modelFailureCooldowns.clear();
     if (cleared > 0) {
@@ -571,6 +747,9 @@ function createGatewayApp() {
 
     res.once('finish', () => {
       responseFinished = true;
+      if (res.statusCode >= 400) {
+        addLog('error', `請求 #${requestId}：HTTP 回應完成但狀態碼為 ${res.statusCode}。`);
+      }
     });
 
     res.once('close', () => {
@@ -610,20 +789,15 @@ function createGatewayApp() {
       : `使用目前啟用的第 ${groupSelection.groupId} 組`;
     addLog('info', `請求 #${requestId} 已收到（stream=${stream}），${groupSourceText}模型順位，開始調度。`);
 
-    res.once('finish', () => {
-      if (res.statusCode >= 400) {
-        addLog('error', `請求 #${requestId}：HTTP 回應完成但狀態碼為 ${res.statusCode}。`);
-      }
-    });
-
     // ========== 調度規則 ==========
     // - 429：Key 層級問題，只換 Key，同模型繼續。
     // - 401 / 403：Key 層級問題，停用該 Key 後換 Key。
     // - timeout / network / 404 / 5xx / 503：模型層級問題，立即切下一個模型。
     // - 【特別例外】回傳格式失敗（JSON 解析錯 / 串流讀取錯 / 內容校驗失敗）：重試當前模型（換 Key），而非跳下一個模型。
     // - 只有全部 Key 都是 Key 層級錯誤時，才允許同一模型進入下一輪。
-    const MAX_ROUNDS_PER_MODEL = 2;
     const activeConfig = settings.get();
+    const dbMaxRounds = Number(activeConfig.MAX_ROUNDS_PER_MODEL);
+    const MAX_ROUNDS_PER_MODEL = (Number.isFinite(dbMaxRounds) && dbMaxRounds >= 1 && dbMaxRounds <= 10) ? dbMaxRounds : 2;
     const ROUND_DELAY_MS = activeConfig.ROUND_DELAY_MS;
     const REQUEST_TIMEOUT_MS = activeConfig.REQUEST_TIMEOUT_MS;
     const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
@@ -1140,10 +1314,21 @@ function createGatewayApp() {
       stats.recordRequest(true);
       const durationMs = Date.now() - requestStartedAt;
       
-      // 記錄 Token 使用量
+      // 記錄 Token 使用量 — 只保存必要 metadata，不保存完整 messages
       try {
         const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, originalBody);
+        const tokenUsageMeta = {
+          model: originalBody.model,
+          temperature: originalBody.temperature,
+          max_tokens: originalBody.max_tokens,
+          stream: originalBody.stream,
+          message_count: Array.isArray(originalBody.messages) ? originalBody.messages.length : 0,
+          last_message_preview: Array.isArray(originalBody.messages) && originalBody.messages.length > 0
+            ? String(originalBody.messages[originalBody.messages.length - 1].content || '').substring(0, 200)
+            : ''
+        };
+        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, tokenUsageMeta);
+        eventManager.broadcast('token-usage', { action: 'add', modelId, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });
         addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
       } catch (tokenErr) {
         console.error('Failed to record token usage:', tokenErr);
@@ -1284,8 +1469,8 @@ function createGatewayApp() {
     }
   });
 
-  // 7. 測試專用聊天端點 (繞過模型重寫與 Fallback，直接使用健康的金鑰對特定 NIM 模型發送對話)
-  app.post('/api/test/chat', async (req, res) => {
+  // 7. 測試專用聊天端點 (需 admin auth)
+  app.post('/api/test/chat', requireAdminAuth, async (req, res) => {
     const { model, messages, stream } = req.body;
     
     if (!model || !messages || !Array.isArray(messages)) {
@@ -1437,12 +1622,10 @@ function createGatewayApp() {
     await attemptTestChat(0);
   });
 
-  return app;
-}
-
-/**
+  /**
  * 自訂錯誤類型：內容校驗失敗
- * 用於在 dispatch 機制中觸發重試
+ * 在 attemptTestChat 中觸發重試；
+ * 正式 /v1/chat/completions route 則使用物件標記 { contentValidationFailed: true } 來保持一致性
  */
 class ContentValidationError extends Error {
   constructor(content) {
@@ -1450,6 +1633,9 @@ class ContentValidationError extends Error {
     this.name = 'ContentValidationError';
     this.content = content;
   }
+}
+
+  return app;
 }
 
 module.exports = {

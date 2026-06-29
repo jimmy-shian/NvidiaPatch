@@ -4,34 +4,7 @@ const fs = require('fs');
 
 let db = null;
 
-// 輔助函式：取得台灣時間 (Asia/Taipei, UTC+8) 的 ISO 格式字串
-function getTaiwanDateParts(date = new Date()) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23'
-  });
-
-  return formatter.formatToParts(date).reduce((acc, part) => {
-    if (part.type !== 'literal') acc[part.type] = part.value;
-    return acc;
-  }, {});
-}
-
-function getTaiwanISOString(date = new Date()) {
-  const parts = getTaiwanDateParts(date);
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+08:00`;
-}
-
-function getTaiwanHourString(date = new Date()) {
-  const parts = getTaiwanDateParts(date);
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:00`;
-}
+const { getTaiwanDateParts, getTaiwanISOString, getTaiwanHourString } = require('./utils/date');
 
 
 function ensureModelsConfigSchema() {
@@ -234,10 +207,23 @@ async function fetchNvidiaBuildFreeEndpointCatalog() {
   const visitedSignatures = new Set();
   let expectedCount = null;
   let lastError = null;
+  const MAX_PAGES = 5;
+  const MAX_CONSECUTIVE_FAILURES = 3;
+  let consecutiveFailures = 0;
+  let successfulUrlPattern = null;
 
-  for (let page = 1; page <= 12; page += 1) {
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
     let bestCandidate = null;
-    const candidateUrls = buildNvidiaCatalogCandidateUrls(page);
+    let candidateUrls;
+
+    if (page === 1 || !successfulUrlPattern) {
+      candidateUrls = buildNvidiaCatalogCandidateUrls(page);
+    } else {
+      candidateUrls = [successfulUrlPattern.replace(/page=\d+|pageNumber=\d+|p=\d+/g, (match) => {
+        const paramName = match.split('=')[0];
+        return `${paramName}=${page}`;
+      })];
+    }
 
     for (const url of candidateUrls) {
       try {
@@ -260,13 +246,29 @@ async function fetchNvidiaBuildFreeEndpointCatalog() {
       } catch (err) {
         lastError = err;
       }
+
+      if (page > 1 && successfulUrlPattern) break;
+
+      if (candidateUrls.indexOf(url) < candidateUrls.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
 
     if (!bestCandidate || bestCandidate.parsedModels.length === 0) {
+      consecutiveFailures += 1;
+      if (page === 1 && consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        throw lastError || new Error('Unable to parse NVIDIA Build Free Endpoint catalog after multiple attempts.');
+      }
       if (page === 1) {
-        throw lastError || new Error('Unable to parse NVIDIA Build Free Endpoint catalog.');
+        continue;
       }
       break;
+    }
+
+    consecutiveFailures = 0;
+
+    if (!successfulUrlPattern && page === 1) {
+      successfulUrlPattern = bestCandidate.url;
     }
 
     if (visitedSignatures.has(bestCandidate.signature) && bestCandidate.newModels.length === 0) {
@@ -280,6 +282,10 @@ async function fetchNvidiaBuildFreeEndpointCatalog() {
 
     if (expectedCount && collected.size >= expectedCount) break;
     if (bestCandidate.newModels.length === 0 && page > 1) break;
+
+    if (page < MAX_PAGES) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   }
 
   if (collected.size === 0) {
@@ -614,7 +620,9 @@ Grill-Me 提問格式：
   }
 }
 
-// 輔助函式庫 - API Keys
+/**
+ * 釋放所有已過期的 cooldown 狀態金鑰，將其狀態改回 active
+ */
 function releaseExpiredKeyCooldowns() {
   if (!db) return;
   const nowStr = getTaiwanISOString();
@@ -628,7 +636,12 @@ function releaseExpiredKeyCooldowns() {
   `).run(nowStr);
 }
 
+/** @namespace apiKeys */
 const apiKeys = {
+  /**
+   * 取得所有 API Keys（含已過期 cooldown 自動釋放）
+   * @returns {Array<{id: number, key_value: string, status: string, consecutive_failures: number, total_errors: number, last_used_at: string|null, cooldown_until: string|null, last_error_message: string|null}>} 所有金鑰
+   */
   getAll: () => {
     releaseExpiredKeyCooldowns();
     return db.prepare("SELECT * FROM api_keys ORDER BY id DESC").all();

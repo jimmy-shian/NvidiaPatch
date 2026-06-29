@@ -37,7 +37,7 @@ function restartGateway() {
     server.close(() => {
       console.log('Gateway Server stopped. Restarting...');
       gatewayAppInstance = createGatewayApp();
-      server = gatewayAppInstance.listen(PORT, '0.0.0.0', () => {
+      server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
         console.log(`LLM Gateway Server restarted on http://localhost:${PORT}`);
         if (tray) {
           tray.displayBalloon({
@@ -50,7 +50,7 @@ function restartGateway() {
     });
   } else {
     gatewayAppInstance = createGatewayApp();
-    server = gatewayAppInstance.listen(PORT, '0.0.0.0', () => {
+    server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
       console.log(`LLM Gateway Server started on http://localhost:${PORT}`);
     });
   }
@@ -63,7 +63,7 @@ function restartApp() {
 }
 
 function startServer() {
-  server = gatewayAppInstance.listen(PORT, '0.0.0.0', () => {
+  server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
     console.log(`LLM Gateway Server running on http://localhost:${PORT}`);
   });
 }
