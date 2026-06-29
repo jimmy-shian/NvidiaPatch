@@ -1,6 +1,6 @@
 {
   "name": "nvidia-gateway-app",
-  "version": "1.3.1",
+  "version": "1.3.6",
   "description": "Unified NVIDIA NIM LLM Gateway with GUI & Tray support",
   "main": "main.js",
   "scripts": {
@@ -42,6 +42,7 @@
       "preload.js",
       "database.js",
       "gateway.js",
+      "utils/**/*",
       "package.json"
     ],
     "win": {
