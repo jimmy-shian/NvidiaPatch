@@ -8,6 +8,7 @@ let mainWindow = null;
 let tray = null;
 let server = null;
 let isQuitting = false;
+let gatewayApp = null;
 
 // 1. 生成 16x16 綠色小圖示的 NativeImage，防止 Tray 圖示遺失
 const iconBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhElEQVR4nJ2S0Q2AMAhEhXQAXUq30uhWupTdQFMTkoZSjnhfDeX1rgQaDI3n/lj1vGykaxyFe3cUAb007DXd8wof4j/uNUM9WNyn68AJeiow+gZbxQIhZ1GqIaS6RwySLiDpvhQBvIGytZ5RFZblEEmi4S9BxMmbT+OMtlKnbRJ437HuXoAvOsGOPrPFAAAAAElFTkSuQmCC';
@@ -29,10 +30,40 @@ try {
   console.error('Failed to read PORT from metadata, using 4000:', e);
 }
 const PORT = portValue;
-const gatewayApp = createGatewayApp();
+let gatewayAppInstance = createGatewayApp();
+
+function restartGateway() {
+  if (server) {
+    server.close(() => {
+      console.log('Gateway Server stopped. Restarting...');
+      gatewayAppInstance = createGatewayApp();
+      server = gatewayAppInstance.listen(PORT, '0.0.0.0', () => {
+        console.log(`LLM Gateway Server restarted on http://localhost:${PORT}`);
+        if (tray) {
+          tray.displayBalloon({
+            title: 'NVIDIA NIM Gateway',
+            content: 'Gateway 服務已重新啟動。',
+            iconType: 'info'
+          });
+        }
+      });
+    });
+  } else {
+    gatewayAppInstance = createGatewayApp();
+    server = gatewayAppInstance.listen(PORT, '0.0.0.0', () => {
+      console.log(`LLM Gateway Server started on http://localhost:${PORT}`);
+    });
+  }
+}
+
+function restartApp() {
+  isQuitting = true;
+  app.relaunch();
+  app.exit(0);
+}
 
 function startServer() {
-  server = gatewayApp.listen(PORT, '0.0.0.0', () => {
+  server = gatewayAppInstance.listen(PORT, '0.0.0.0', () => {
     console.log(`LLM Gateway Server running on http://localhost:${PORT}`);
   });
 }
@@ -126,6 +157,20 @@ function updateTrayMenu() {
       submenu: ruleMenuItems.length > 0 ? ruleMenuItems : [{ label: '(無規範紀錄)', enabled: false }]
     },
     { type: 'separator' },
+    {
+      label: '🔄 重新啟動 Gateway 服務',
+      click: () => {
+        restartGateway();
+        updateTrayMenu();
+      }
+    },
+    {
+      label: '🔁 重新啟動整個應用程式',
+      click: () => {
+        restartApp();
+      }
+    },
+    { type: 'separator' },
     { 
       label: '系統狀態: 運行中', 
       enabled: false 
@@ -179,6 +224,21 @@ ipcMain.on('window-hide', () => {
 ipcMain.on('app-exit', () => {
   isQuitting = true;
   app.quit();
+});
+
+ipcMain.on('restart-gateway', () => {
+  restartGateway();
+  if (mainWindow) {
+    mainWindow.webContents.send('gateway-restarted');
+  }
+});
+
+ipcMain.on('restart-app', () => {
+  restartApp();
+});
+
+ipcMain.handle('is-gateway-running', () => {
+  return server && server.listening;
 });
 
 // App 生命週期
