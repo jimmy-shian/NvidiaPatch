@@ -524,6 +524,31 @@ function createGatewayApp() {
     });
   });
 
+  // 5.1 Gateway 健康檢查端點
+  app.get('/api/health', (req, res) => {
+    const activeKeys = apiKeys.getActiveKeys();
+    const allKeys = apiKeys.getAll();
+    const activeModels = modelsConfig.getAll().filter(m => m.is_active === 1);
+    res.json({
+      status: 'running',
+      uptime: process.uptime(),
+      timestamp: getTaiwanISOString(),
+      keys: { total: allKeys.length, active: activeKeys.length },
+      models: { active: activeModels.length },
+      memoryUsage: process.memoryUsage()
+    });
+  });
+
+  // 5.15 重設模型層級冷卻表（供前端重啟按鈕觸發）
+  app.post('/api/gateway/reset-cooldowns', (req, res) => {
+    const cleared = modelFailureCooldowns.size;
+    modelFailureCooldowns.clear();
+    if (cleared > 0) {
+      addLog('info', `已手動清除 ${cleared} 個模型的暫時跳過冷卻狀態。`);
+    }
+    res.json({ success: true, clearedCooldowns: cleared });
+  });
+
   // 5.5 OpenAI 相容的 Models 列表端點 (供 Cline / OpenCode 驗證連線與取得可用模型)
   app.get('/v1/models', (req, res) => {
     const groupSelection = resolveModelGroupFromRequest(req);
