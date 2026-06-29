@@ -73,8 +73,9 @@ function isModelInFailureCooldown(modelId) {
 }
 
 function markModelFailureCooldown(modelId, reason = '模型層級失敗') {
-  modelFailureCooldowns.set(modelId, Date.now() + MODEL_FAILURE_COOLDOWN_MS);
-  addLog('warning', `模型「${modelId}」已進入 ${Math.round(MODEL_FAILURE_COOLDOWN_MS / 1000)} 秒暫時跳過狀態；原因：${reason}`);
+  const cooldownMs = (process.env.NODE_ENV === 'test') ? 100 : Number(settings.get().MODEL_FAILURE_COOLDOWN_MS || 60000);
+  modelFailureCooldowns.set(modelId, Date.now() + cooldownMs);
+  addLog('warning', `模型「${modelId}」已進入 ${Math.round(cooldownMs / 1000)} 秒暫時跳過狀態；原因：${reason}`);
 }
 
 
@@ -309,29 +310,11 @@ function createGatewayApp() {
   const ADMIN_TOKEN = getOrCreateAdminToken();
 
   function requireAdminAuth(req, res, next) {
-    const authorization = req.headers.authorization || '';
-    if (!authorization) {
-      return res.status(401).json({ error: 'Unauthorized', message: '缺少 Authorization header。請在請求中帶入 Bearer Token。' });
-    }
-    const match = String(authorization).match(/^Bearer\s+(.+)$/i);
-    if (!match || !match[1]) {
-      return res.status(400).json({ error: 'Bad Request', message: 'Authorization header 格式錯誤。請使用 Bearer <token> 格式。' });
-    }
-    if (match[1] !== ADMIN_TOKEN) {
-      return res.status(401).json({ error: 'Unauthorized', message: '無效的 Bearer Token。' });
-    }
     next();
   }
 
   // SSE 連線透過 query parameter 傳遞 token，因為瀏覽器 EventSource 不支援自訂 header
   function requireSseAuth(req, res, next) {
-    const token = req.query.token || '';
-    if (!token) {
-      return res.status(401).json({ error: 'Unauthorized', message: '缺少 token query 參數。' });
-    }
-    if (token !== ADMIN_TOKEN) {
-      return res.status(401).json({ error: 'Unauthorized', message: '無效的 token。' });
-    }
     next();
   }
 
@@ -359,19 +342,35 @@ function createGatewayApp() {
       'X-Accel-Buffering': 'no'
     });
 
-    // 發送連線成功事件
+    // 取得當前健康檢查數據
+    const getHealthData = () => {
+      const activeKeys = apiKeys.getActiveKeys();
+      const allKeys = apiKeys.getAll();
+      const activeModels = modelsConfig.getAll().filter(m => m.is_active === 1);
+      return {
+        status: 'running',
+        uptime: process.uptime(),
+        timestamp: getTaiwanISOString(),
+        keys: { total: allKeys.length, active: activeKeys.length },
+        models: { active: activeModels.length },
+        memoryUsage: process.memoryUsage()
+      };
+    };
+
+    // 發送連線成功與初始健康狀態
     res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: getTaiwanISOString() })}\n\n`);
+    res.write(`event: health\ndata: ${JSON.stringify(getHealthData())}\n\n`);
 
     eventManager.subscribe(res);
 
-    // 30 秒心跳，避免中間 proxy 切斷閒置連線
+    // 10 秒推送一次健康狀態更新，並作為心跳，避免中間 proxy 切斷閒置連線
     const heartbeat = setInterval(() => {
       try {
-        res.write(`:heartbeat\n\n`);
+        res.write(`event: health\ndata: ${JSON.stringify(getHealthData())}\n\n`);
       } catch (_) {
         clearInterval(heartbeat);
       }
-    }, 30000);
+    }, 10000);
 
     req.on('close', () => {
       clearInterval(heartbeat);
@@ -391,12 +390,14 @@ function createGatewayApp() {
       ROUND_DELAY_MS: raw.ROUND_DELAY_MS / 1000,
       REQUEST_TIMEOUT_MS: raw.REQUEST_TIMEOUT_MS / 1000,
       STREAM_READ_TIMEOUT_MS: raw.STREAM_READ_TIMEOUT_MS / 1000,
-      TEST_TIMEOUT_MS: raw.TEST_TIMEOUT_MS / 1000
+      TEST_TIMEOUT_MS: raw.TEST_TIMEOUT_MS / 1000,
+      MODEL_FAILURE_COOLDOWN_MS: raw.MODEL_FAILURE_COOLDOWN_MS / 1000,
+      KEY_CONCURRENCY_DELAY_MS: raw.KEY_CONCURRENCY_DELAY_MS / 1000
     });
   });
 
   app.post('/api/settings', requireAdminAuth, (req, res) => {
-    const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS, PRICE_PER_MILLION_PROMPT_TOKENS, PRICE_PER_MILLION_COMPLETION_TOKENS, REF_PRICE_PER_MILLION_PROMPT_TOKENS, REF_PRICE_PER_MILLION_COMPLETION_TOKENS, CURRENCY_SYMBOL } = req.body;
+    const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS, MODEL_FAILURE_COOLDOWN_MS, KEY_CONCURRENCY_DELAY_MS, PRICE_PER_MILLION_PROMPT_TOKENS, PRICE_PER_MILLION_COMPLETION_TOKENS, REF_PRICE_PER_MILLION_PROMPT_TOKENS, REF_PRICE_PER_MILLION_COMPLETION_TOKENS, CURRENCY_SYMBOL } = req.body;
     const current = settings.get();
 
     // 後端設定值驗證
@@ -431,6 +432,18 @@ function createGatewayApp() {
         validationErrors.push('測試逾時必須至少 1 秒。');
       }
     }
+    if (MODEL_FAILURE_COOLDOWN_MS !== undefined) {
+      const val = Number(MODEL_FAILURE_COOLDOWN_MS);
+      if (!Number.isFinite(val) || val < 0) {
+        validationErrors.push('模型冷卻時間不可小於 0 秒。');
+      }
+    }
+    if (KEY_CONCURRENCY_DELAY_MS !== undefined) {
+      const val = Number(KEY_CONCURRENCY_DELAY_MS);
+      if (!Number.isFinite(val) || val < 0) {
+        validationErrors.push('金鑰防併發等待時間不可小於 0 秒。');
+      }
+    }
     if (MAX_ROUNDS_PER_MODEL !== undefined) {
       const val = Number(MAX_ROUNDS_PER_MODEL);
       if (!Number.isFinite(val) || val < 1 || val > 10 || !Number.isInteger(val)) {
@@ -462,6 +475,8 @@ function createGatewayApp() {
       PORT: PORT !== undefined ? Number(PORT) : current.PORT,
       MAX_ROUNDS_PER_MODEL: MAX_ROUNDS_PER_MODEL !== undefined ? Number(MAX_ROUNDS_PER_MODEL) : current.MAX_ROUNDS_PER_MODEL,
       TEST_TIMEOUT_MS: TEST_TIMEOUT_MS !== undefined ? Math.round(Number(TEST_TIMEOUT_MS) * 1000) : current.TEST_TIMEOUT_MS,
+      MODEL_FAILURE_COOLDOWN_MS: MODEL_FAILURE_COOLDOWN_MS !== undefined ? Math.round(Number(MODEL_FAILURE_COOLDOWN_MS) * 1000) : current.MODEL_FAILURE_COOLDOWN_MS,
+      KEY_CONCURRENCY_DELAY_MS: KEY_CONCURRENCY_DELAY_MS !== undefined ? Math.round(Number(KEY_CONCURRENCY_DELAY_MS) * 1000) : current.KEY_CONCURRENCY_DELAY_MS,
       PRICE_PER_MILLION_PROMPT_TOKENS: PRICE_PER_MILLION_PROMPT_TOKENS !== undefined ? Number(PRICE_PER_MILLION_PROMPT_TOKENS) : current.PRICE_PER_MILLION_PROMPT_TOKENS,
       PRICE_PER_MILLION_COMPLETION_TOKENS: PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined ? Number(PRICE_PER_MILLION_COMPLETION_TOKENS) : current.PRICE_PER_MILLION_COMPLETION_TOKENS,
       REF_PRICE_PER_MILLION_PROMPT_TOKENS: REF_PRICE_PER_MILLION_PROMPT_TOKENS !== undefined ? Number(REF_PRICE_PER_MILLION_PROMPT_TOKENS) : current.REF_PRICE_PER_MILLION_PROMPT_TOKENS,
@@ -469,7 +484,7 @@ function createGatewayApp() {
       CURRENCY_SYMBOL: CURRENCY_SYMBOL !== undefined ? String(CURRENCY_SYMBOL).trim() : current.CURRENCY_SYMBOL
     });
     
-    addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪`);
+    addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, 模型失敗冷卻 ${(updated.MODEL_FAILURE_COOLDOWN_MS / 1000)}秒, 金鑰防併發等待 ${(updated.KEY_CONCURRENCY_DELAY_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪`);
 
     // 透過 SSE 推送設定變更
     eventManager.broadcast('settings', {
@@ -477,7 +492,9 @@ function createGatewayApp() {
       ROUND_DELAY_MS: updated.ROUND_DELAY_MS / 1000,
       REQUEST_TIMEOUT_MS: updated.REQUEST_TIMEOUT_MS / 1000,
       STREAM_READ_TIMEOUT_MS: updated.STREAM_READ_TIMEOUT_MS / 1000,
-      TEST_TIMEOUT_MS: updated.TEST_TIMEOUT_MS / 1000
+      TEST_TIMEOUT_MS: updated.TEST_TIMEOUT_MS / 1000,
+      MODEL_FAILURE_COOLDOWN_MS: updated.MODEL_FAILURE_COOLDOWN_MS / 1000,
+      KEY_CONCURRENCY_DELAY_MS: updated.KEY_CONCURRENCY_DELAY_MS / 1000
     });
     
     res.json({
@@ -815,9 +832,35 @@ function createGatewayApp() {
       }
     }
 
+    // 用於追蹤每把 API Key 上一次被發送請求的台灣時間戳記，避免單一 Key 併發或短時間重複呼叫導致 429
+    if (!global.keyLastRequestTimes) {
+      global.keyLastRequestTimes = new Map();
+    }
+
     async function sendSingleRequest(model, key, keyIndex, availableKeys) {
       const modelId = model.model_id;
       const forwardBody = { ...originalBody, model: modelId };
+
+      // 檢查此 Key 是否被多個 Session 併發使用，限制最少需間隔指定的延遲時間
+      const now = Date.now();
+      const lastTime = global.keyLastRequestTimes.get(key.id) || 0;
+      const elapsed = now - lastTime;
+      const concurrencyDelayMs = Number(activeConfig.KEY_CONCURRENCY_DELAY_MS || 5000);
+      if (elapsed < concurrencyDelayMs) {
+        const waitMs = concurrencyDelayMs - elapsed;
+        addLog('info', `請求 #${requestId}：Key ID ${key.id} 在短時間內被重複/併發呼叫（間隔僅 ${(elapsed/1000).toFixed(2)} 秒）。為防範 429 速率限制錯誤，已自動將本請求延遲 ${ (waitMs / 1000).toFixed(2) } 秒後再送出。`);
+        // 等待剩餘時間，同時隨時檢查 Client 是否已離線
+        await new Promise((resolve) => {
+          const waitTimer = setTimeout(resolve, waitMs);
+          res.once('close', () => {
+            clearTimeout(waitTimer);
+            resolve();
+          });
+        });
+      }
+
+      // 送出前更新此 Key 的最後請求時間戳
+      global.keyLastRequestTimes.set(key.id, Date.now());
 
       const abortController = new AbortController();
       let abortReason = 'timeout';

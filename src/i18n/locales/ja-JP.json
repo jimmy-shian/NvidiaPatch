@@ -1,16 +1,16 @@
 {
   "app": {
     "title": "NVIDIA GATEWAY",
-    "version": "v{version} 安定版",
+    "version": "v{{version}} 安定版",
     "endpoint": "Gateway エンドポイント",
     "copyToClipboard": "クリックでコピー"
   },
   "nav": {
     "dashboard": "ステータス",
-    "keys": "APIキー ({active}/{total})",
-    "models": "モデル ({count})",
+    "keys": "APIキー ({{active}}/{{total}})",
+    "models": "モデル ({{count}})",
     "playground": "Playground",
-    "rules": "ルール ({count})"
+    "rules": "ルール ({{count}})"
   },
   "settings": {
     "title": "システム設定",
@@ -20,6 +20,8 @@
     "requestTimeout": "リクエストタイムアウト (秒)",
     "streamTimeout": "ストリームタイムアウト (秒)",
     "testTimeout": "テストタイムアウト (秒)",
+    "modelCooldown": "モデル失敗時冷却時間 (秒)",
+    "keyConcurrencyDelay": "キー防護併発遅延 (秒)",
     "nvidiaUrl": "NVIDIA API Base URL",
     "pricing": "NVIDIA NIM 価格",
     "promptPrice": "プロンプト価格",
@@ -49,11 +51,12 @@
     "actions": "操作",
     "noKeys": "キーがありません。",
     "active": "有効",
-    "cooldown": "冷却中 ({sec}s)",
+    "cooldown": "冷却中 ({{sec}}s)",
     "inactive": "無効",
     "unused": "未使用",
-    "addFailed": "追加失敗: {error}",
-    "deleteConfirm": "このAPIキーを削除しますか？"
+    "addFailed": "追加失敗: {{error}}",
+    "deleteConfirm": "このAPIキーを削除しますか？",
+    "apiKeyColumn": "API Key"
   },
   "models": {
     "title": "Free Endpoint モデル優先順位",
@@ -61,8 +64,8 @@
     "lastSync": "最終同期",
     "syncButton": "モデル同期",
     "syncing": "同期中...",
-    "currentOrder": "優先順位 | Group {group}",
-    "groupLabel": "Group {group}",
+    "currentOrder": "優先順位 | Group {{group}}",
+    "groupLabel": "Group {{group}}",
     "activeGroup": "使用中",
     "switchable": "切替",
     "availableModels": "利用可能モデル",
@@ -114,7 +117,48 @@
     "gatewayError": "Gateway エラー",
     "restart": "再起動",
     "restarting": "再起動中",
-    "restartApp": "アプリ再起動"
+    "restartApp": "アプリ再起動",
+    "uptime": "稼働時間：{{minutes}} 分",
+    "keysStatus": "キー：{{active}}/{{total}}",
+    "cooldownPool": "429 自動冷却キープール",
+    "only429Triggers": "429 エラーのみ冷却トリガー",
+    "priority": "優先順位 {{n}}",
+    "openaiTitle": "OpenAI 互換エンドポイント（Cline 等）",
+    "providerId": "Provider ID",
+    "baseUrl": "Base URL",
+    "apiKeyGroup": "API Key / Group",
+    "modelId": "Model ID",
+    "copyProviderId": "クリックで Provider ID をコピー",
+    "copyBaseUrl": "クリックで Base URL をコピー",
+    "copyApiKey": "クリックで API Key をコピー",
+    "copyModelId": "クリックで Model ID をコピー",
+    "apiKeyGroupText": "API Key / Group：{{group}}",
+    "modelIdText": "Model ID：{{model}}",
+    "tokenDetails": "トークン使用明細",
+    "noRecords": "使用記録がまだありません。",
+    "time": "時間",
+    "requestId": "Req ID",
+    "tokenModel": "モデル",
+    "prompt": "Prompt",
+    "completion": "Complet.",
+    "total": "合計",
+    "cost": "費用",
+    "tokenHelp": "💡 「モデル」をクリックでモデルカード、「Tokens」をクリックでメタデータ、「その他」をクリックで JSON 表示",
+    "hourTooltip": "時間：{{hour}} | 合計 {{total}} | OK {{ok}} | エラー {{err}}",
+    "providerTip": "💡 エディタのカスタムプロバイダーにこれらの値を入力してください。API Key フィールドには 1/2/3 でモデルグループを選択できます。Model ID は任意で、Gateway が自動的にプライマリ NIM モデルに書き換えます。",
+    "clear": "データクリア",
+    "actualCost": "実際の費用 ({{symbol}})",
+    "referenceCost": "参考費用 ({{symbol}})",
+    "referenceCostDesc": "商業APIの基準価格に基づく",
+    "savings": "節約された費用 ({{symbol}})",
+    "savingsDesc": "NIM vs 商業API",
+    "tokenStats": "Token 別統計",
+    "thModelId": "モデル ID",
+    "thPrompt": "Prompt",
+    "thCompletion": "Completion",
+    "thTotal": "合計",
+    "thCalls": "呼び出し回数",
+    "thCost": "費用 ({{symbol}})"
   },
   "notifications": {
     "allKeysDown": {
@@ -132,6 +176,32 @@
     "warning": "警告",
     "info": "情報",
     "ok": "OK",
-    "confirm": "確認"
+    "confirm": "確認",
+    "confirmRestartApp": "アプリケーションを再起動しますか？これによりアプリが終了して再起動されます。",
+    "confirmRestartGateway": "Gateway サービスを再起動しますか？",
+    "toggleTheme": "テーマ切替",
+    "sse": "SSE",
+    "dragToReorder": "ドラッグで並べ替え",
+    "clickForModelCard": "クリックでモデルカード",
+    "clickForMetadata": "クリックでメタデータ"
+  },
+  "auth": {
+    "title": "Gateway 管理画面",
+    "description": "管理画面にアクセスするには Admin Token を入力してください。",
+    "tokenPlaceholder": "Admin Token",
+    "loginButton": "ログイン",
+    "invalidToken": "Token が無効です。確認してもう一度お試しください。",
+    "connectionFailed": "接続失敗。Gateway が起動しているか確認してください。"
+  },
+  "playground": {
+    "title": "NVIDIA NIM Playground",
+    "description": "同期済み NVIDIA モデルをストリーミングチャットでテスト。",
+    "clearChat": "チャットをクリア",
+    "selectModel": "モデル選択：",
+    "noModels": "（利用可能なモデルがありません - 先に同期してください）",
+    "streaming": "ストリーミング中...",
+    "enterMessage": "メッセージを入力してモデルをテストしてください。",
+    "userLabel": "ユーザー",
+    "assistantLabel": "NIM（{{model}}）"
   }
 }

@@ -427,6 +427,8 @@ function initDatabase(dbPath) {
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PORT', '4000')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', '2')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', '60000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MODEL_FAILURE_COOLDOWN_MS', '60000')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('KEY_CONCURRENCY_DELAY_MS', '5000')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_PROMPT_TOKENS', '0.30')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_COMPLETION_TOKENS', '0.60')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('CURRENCY_SYMBOL', 'USD')").run();
@@ -1059,6 +1061,8 @@ const settings = {
     const port = db.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
     const maxRounds = db.prepare("SELECT value FROM metadata WHERE key = 'MAX_ROUNDS_PER_MODEL'").get();
     const testTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'TEST_TIMEOUT_MS'").get();
+    const modelFailureCooldown = db.prepare("SELECT value FROM metadata WHERE key = 'MODEL_FAILURE_COOLDOWN_MS'").get();
+    const keyConcurrencyDelay = db.prepare("SELECT value FROM metadata WHERE key = 'KEY_CONCURRENCY_DELAY_MS'").get();
     return {
       ROUND_DELAY_MS: Number(roundDelay?.value || 15000),
       REQUEST_TIMEOUT_MS: Number(reqTimeout?.value || 120000),
@@ -1067,6 +1071,8 @@ const settings = {
       PORT: Number(port?.value || 4000),
       MAX_ROUNDS_PER_MODEL: Number(maxRounds?.value || 2),
       TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000),
+      MODEL_FAILURE_COOLDOWN_MS: Number(modelFailureCooldown?.value || 60000),
+      KEY_CONCURRENCY_DELAY_MS: Number(keyConcurrencyDelay?.value || 5000),
       PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 0.30),
       PRICE_PER_MILLION_COMPLETION_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_COMPLETION_TOKENS'").get()?.value || 0.60),
       REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'REF_PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 5.00),
@@ -1095,6 +1101,12 @@ const settings = {
     }
     if (config.TEST_TIMEOUT_MS !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', ?)").run(String(config.TEST_TIMEOUT_MS));
+    }
+    if (config.MODEL_FAILURE_COOLDOWN_MS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MODEL_FAILURE_COOLDOWN_MS', ?)").run(String(config.MODEL_FAILURE_COOLDOWN_MS));
+    }
+    if (config.KEY_CONCURRENCY_DELAY_MS !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('KEY_CONCURRENCY_DELAY_MS', ?)").run(String(config.KEY_CONCURRENCY_DELAY_MS));
     }
     if (config.PRICE_PER_MILLION_PROMPT_TOKENS !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_PROMPT_TOKENS', ?)").run(String(config.PRICE_PER_MILLION_PROMPT_TOKENS));

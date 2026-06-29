@@ -36,22 +36,28 @@ function restartGateway() {
   if (server) {
     server.close(() => {
       console.log('Gateway Server stopped. Restarting...');
-      gatewayAppInstance = createGatewayApp();
-      server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
-        console.log(`LLM Gateway Server restarted on http://localhost:${PORT}`);
-        if (tray) {
-          tray.displayBalloon({
-            title: 'NVIDIA NIM Gateway',
-            content: 'Gateway 服務已重新啟動。',
-            iconType: 'info'
-          });
-        }
-      });
+      setTimeout(() => {
+        gatewayAppInstance = createGatewayApp();
+        server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
+          console.log(`LLM Gateway Server restarted on http://localhost:${PORT}`);
+          if (tray) {
+            tray.displayBalloon({
+              title: 'NVIDIA NIM Gateway',
+              content: 'Gateway 服務已重新啟動。',
+              iconType: 'info'
+            });
+          }
+        }).on('error', (err) => {
+          console.error('Gateway restart failed:', err.message);
+        });
+      }, 500);
     });
   } else {
     gatewayAppInstance = createGatewayApp();
     server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
       console.log(`LLM Gateway Server started on http://localhost:${PORT}`);
+    }).on('error', (err) => {
+      console.error('Gateway start failed:', err.message);
     });
   }
 }

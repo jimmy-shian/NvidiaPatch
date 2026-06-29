@@ -56,6 +56,7 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
     if (handlerRef.current.onRules) addHandler('rules', handlerRef.current.onRules);
     if (handlerRef.current.onSettings) addHandler('settings', handlerRef.current.onSettings);
     if (handlerRef.current.onTokenUsage) addHandler('token-usage', handlerRef.current.onTokenUsage);
+    if (handlerRef.current.onHealth) addHandler('health', handlerRef.current.onHealth);
     es.addEventListener('connected', onOpen);
 
     return () => {

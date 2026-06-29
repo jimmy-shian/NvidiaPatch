@@ -1,16 +1,16 @@
 {
   "app": {
     "title": "NVIDIA GATEWAY",
-    "version": "v{version} Stable",
+    "version": "v{{version}} Stable",
     "endpoint": "Gateway Endpoint",
     "copyToClipboard": "Click to copy"
   },
   "nav": {
     "dashboard": "Status",
-    "keys": "API Keys ({active}/{total})",
-    "models": "Models ({count})",
+    "keys": "API Keys ({{active}}/{{total}})",
+    "models": "Models ({{count}})",
     "playground": "Playground",
-    "rules": "Rules ({count})"
+    "rules": "Rules ({{count}})"
   },
   "settings": {
     "title": "System Settings",
@@ -20,6 +20,8 @@
     "requestTimeout": "Request Timeout (sec)",
     "streamTimeout": "Stream Read Timeout (sec)",
     "testTimeout": "Test Timeout (sec)",
+    "modelCooldown": "Model Failure Cooldown (sec)",
+    "keyConcurrencyDelay": "Key Concurrency Delay (sec)",
     "nvidiaUrl": "NVIDIA API Base URL",
     "pricing": "NVIDIA NIM Pricing",
     "promptPrice": "Prompt Price",
@@ -49,11 +51,12 @@
     "actions": "Actions",
     "noKeys": "No keys yet.",
     "active": "Active",
-    "cooldown": "Cooldown ({sec}s)",
+    "cooldown": "Cooldown ({{sec}}s)",
     "inactive": "Revoked",
     "unused": "Never used",
-    "addFailed": "Add failed: {error}",
-    "deleteConfirm": "Delete this API Key?"
+    "addFailed": "Add failed: {{error}}",
+    "deleteConfirm": "Delete this API Key?",
+    "apiKeyColumn": "API Key"
   },
   "models": {
     "title": "Free Endpoint Model Priority",
@@ -61,8 +64,8 @@
     "lastSync": "Last Sync",
     "syncButton": "Sync Models",
     "syncing": "Syncing...",
-    "currentOrder": "Priority | Group {group}",
-    "groupLabel": "Group {group}",
+    "currentOrder": "Priority | Group {{group}}",
+    "groupLabel": "Group {{group}}",
     "activeGroup": "Active",
     "switchable": "Switch",
     "availableModels": "Available Models",
@@ -114,7 +117,48 @@
     "gatewayError": "Gateway Error",
     "restart": "Restart",
     "restarting": "Restarting",
-    "restartApp": "Restart App"
+    "restartApp": "Restart App",
+    "uptime": "Uptime: {{minutes}}m",
+    "keysStatus": "Keys: {{active}}/{{total}}",
+    "cooldownPool": "429 auto-cooldown pool",
+    "only429Triggers": "Only 429 triggers cooldown",
+    "priority": "Priority {{n}}",
+    "openaiTitle": "OpenAI-compatible (Cline, etc.)",
+    "providerId": "Provider ID",
+    "baseUrl": "Base URL",
+    "apiKeyGroup": "API Key / Group",
+    "modelId": "Model ID",
+    "copyProviderId": "Click to copy Provider ID",
+    "copyBaseUrl": "Click to copy Base URL",
+    "copyApiKey": "Click to copy API Key",
+    "copyModelId": "Click to copy Model ID",
+    "apiKeyGroupText": "API Key / Group: {{group}}",
+    "modelIdText": "Model ID: {{model}}",
+    "tokenDetails": "Token Usage Details",
+    "noRecords": "No usage records yet.",
+    "time": "Time",
+    "requestId": "Req ID",
+    "tokenModel": "Model",
+    "prompt": "Prompt",
+    "completion": "Complet.",
+    "total": "Total",
+    "cost": "Cost",
+    "tokenHelp": "Click Model for model card; click Tokens for metadata; click Other for raw JSON",
+    "providerTip": "💡 Fill these values in your editor's custom provider. API Key field accepts 1/2/3 for model groups. Model ID can be anything; Gateway auto-rewrites to the primary NIM model.",
+    "hourTooltip": "Time: {{hour}} | Total {{total}} | OK {{ok}} | Err {{err}}",
+    "clear": "Clear Data",
+    "actualCost": "Actual Cost ({{symbol}})",
+    "referenceCost": "Reference Cost ({{symbol}})",
+    "referenceCostDesc": "Based on commercial API pricing",
+    "savings": "Savings ({{symbol}})",
+    "savingsDesc": "NIM vs commercial API",
+    "tokenStats": "Token Stats",
+    "thModelId": "Model ID",
+    "thPrompt": "Prompt",
+    "thCompletion": "Completion",
+    "thTotal": "Total",
+    "thCalls": "Calls",
+    "thCost": "Cost ({{symbol}})"
   },
   "notifications": {
     "allKeysDown": {
@@ -132,6 +176,32 @@
     "warning": "Warning",
     "info": "Info",
     "ok": "OK",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "confirmRestartApp": "Restart the application? This will close and restart the entire app.",
+    "confirmRestartGateway": "Restart the Gateway service?",
+    "toggleTheme": "Toggle theme",
+    "sse": "SSE",
+    "dragToReorder": "Drag to reorder",
+    "clickForModelCard": "Click for Model Card",
+    "clickForMetadata": "Click for metadata"
+  },
+  "auth": {
+    "title": "Gateway Admin Login",
+    "description": "Enter the admin token to access the management interface.",
+    "tokenPlaceholder": "Admin Token",
+    "loginButton": "Login",
+    "invalidToken": "Invalid token. Please check and try again.",
+    "connectionFailed": "Connection failed. Please check if Gateway is running."
+  },
+  "playground": {
+    "title": "NVIDIA NIM Playground",
+    "description": "Test any synced NVIDIA model with streaming chat.",
+    "clearChat": "Clear Chat",
+    "selectModel": "Select model:",
+    "noModels": "(No models available - sync first)",
+    "streaming": "Streaming...",
+    "enterMessage": "Enter a message below to test the selected model.",
+    "userLabel": "User",
+    "assistantLabel": "NIM ({{model}})"
   }
 }
