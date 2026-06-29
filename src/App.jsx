@@ -1,97 +1,27 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Activity, Key, Cpu, FileText, Plus, Trash, Copy, Check, 
-  RotateCw, ShieldAlert, CheckCircle, AlertTriangle, ArrowUp, 
-  ArrowDown, RefreshCw, X, Play, CopyCheck, Power, Loader2
+import { useTranslation } from 'react-i18next';
+import {
+  Activity, Key, Cpu, FileText, Plus, Trash, Copy, Check,
+  RotateCw, ShieldAlert, CheckCircle, AlertTriangle, ArrowUp,
+  ArrowDown, RefreshCw, X, Play, CopyCheck, Power, Loader2, Edit3, Globe
 } from 'lucide-react';
 import packageJson from '../package.json';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
+import useGatewayApi from './hooks/useGatewayApi';
+import useRealtimeEvents from './hooks/useRealtimeEvents';
+import useNotifications from './hooks/useNotifications';
+import ErrorBoundary from './components/shared/ErrorBoundary';
+import MarkdownContent from './components/shared/MarkdownContent';
+import RulesPanel from './components/Rules/RulesPanel';
 
-const markdownComponents = {
-  a: ({ node, ...props }) => (
-    <a
-      {...props}
-      className="md-link"
-      target="_blank"
-      rel="noopener noreferrer"
-    />
-  ),
-
-  table: ({ node, ...props }) => (
-    <div className="md-table-wrap">
-      <table {...props} className="md-table" />
-    </div>
-  ),
-
-  th: ({ node, style, ...props }) => (
-    <th {...props} style={style} />
-  ),
-
-  td: ({ node, style, ...props }) => (
-    <td {...props} style={style} />
-  ),
-
-  pre: ({ node, ...props }) => (
-    <pre {...props} className="md-code-block" />
-  ),
-
-  code: ({ node, inline, className, children, ...props }) => {
-    const isInline = inline || !className;
-
-    if (isInline) {
-      return (
-        <code {...props} className="md-inline-code">
-          {children}
-        </code>
-      );
-    }
-
-    return (
-      <code {...props} className={className}>
-        {children}
-      </code>
-    );
-  },
-
-  blockquote: ({ node, ...props }) => (
-    <blockquote {...props} />
-  ),
-
-  ul: ({ node, ...props }) => (
-    <ul {...props} className="md-list" />
-  ),
-
-  ol: ({ node, ...props }) => (
-    <ol {...props} className="md-list" />
-  ),
-
-  input: ({ node, ...props }) => (
-    <input {...props} disabled />
-  ),
-
-  img: ({ node, ...props }) => (
-    <img {...props} className="md-image" loading="lazy" />
-  ),
-
-  hr: ({ node, ...props }) => (
-    <hr {...props} />
-  )
-};
-
-function MarkdownContent({ children }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks]}
-      components={markdownComponents}
-    >
-      {children || ''}
-    </ReactMarkdown>
-  );
-}
+const LANGUAGE_OPTIONS = [
+  { code: 'zh-TW', label: '中' },
+  { code: 'en-US', label: 'EN' },
+  { code: 'ja-JP', label: '日' }
+];
 
 export default function App() {
+  const { t, i18n } = useTranslation();
+
   const getGatewayUrl = () => {
     if (window.electronAPI && window.electronAPI.getGatewayPort) {
       try {
@@ -101,9 +31,15 @@ export default function App() {
         console.error('Failed to get gateway port via IPC:', e);
       }
     }
-    return `http://localhost:4000`; // fallback
+    return `http://localhost:4000`;
   };
   const GATEWAY_URL = getGatewayUrl();
+
+  const [adminToken, setAdminToken] = useState(localStorage.getItem('gateway_admin_token') || '');
+  const [loginInput, setLoginInput] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  const api = useGatewayApi(GATEWAY_URL, adminToken);
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'theme-dark');
@@ -142,12 +78,6 @@ export default function App() {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempSettings, setTempSettings] = useState(null);
 
-  useEffect(() => {
-    document.documentElement.className = theme;
-    localStorage.setItem('theme', theme);
-  }, [theme]);
-
-  // 擴充 state 用於模型同步時間、搜尋與篩選
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [lastSyncSource, setLastSyncSource] = useState(null);
   const [expectedModelCount, setExpectedModelCount] = useState(null);
@@ -158,104 +88,136 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
 
-  // 新增狀態用於 Playground 模型測試
   const [selectedTestModel, setSelectedTestModel] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
   const chatEndRef = useRef(null);
 
-  // 拖曳排序狀態
   const [draggedModelIndex, setDraggedModelIndex] = useState(null);
   const [draggedAvailableModelId, setDraggedAvailableModelId] = useState(null);
   const [isPriorityDropActive, setIsPriorityDropActive] = useState(false);
+  const localModelOrderRef = useRef(null);
 
-  // Dashboard 子頁籤狀態
   const [dashboardSubTab, setDashboardSubTab] = useState('overview');
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [hoveredHourlyIndex, setHoveredHourlyIndex] = useState(null);
 
-  // Token 記錄展開狀態
   const [expandedTokenLogId, setExpandedTokenLogId] = useState(null);
   const [expandedTokenLogTabs, setExpandedTokenLogTabs] = useState({});
 
-  // Gateway 重啟相關狀態
   const [gatewayHealth, setGatewayHealth] = useState(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   const [restartNotice, setRestartNotice] = useState(null);
   const restartNoticeTimerRef = useRef(null);
 
-  // 清理非阻塞提示的計時器
+  const { notifyAllKeysDown, notifyAllModelsDegraded } = useNotifications();
+
+  useEffect(() => {
+    document.documentElement.className = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   useEffect(() => {
     return () => {
-      if (syncNoticeTimerRef.current) {
-        clearTimeout(syncNoticeTimerRef.current);
-      }
-      if (keyTestNoticeTimerRef.current) {
-        clearTimeout(keyTestNoticeTimerRef.current);
-      }
-      if (restartNoticeTimerRef.current) {
-        clearTimeout(restartNoticeTimerRef.current);
-      }
+      if (syncNoticeTimerRef.current) clearTimeout(syncNoticeTimerRef.current);
+      if (keyTestNoticeTimerRef.current) clearTimeout(keyTestNoticeTimerRef.current);
+      if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
     };
   }, []);
 
-  // 1. 定時輪詢 Log 與 Stats
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(() => {
-      fetchLogsAndStats();
-    }, 2000);
-    return () => clearInterval(interval);
-  }, []);
+  const fetchData = useCallback(async () => {
+    try {
+      const promises = [
+        api.fetchKeys().then(data => setKeys(data)).catch(err => console.error('keys:', err)),
+        api.fetchModels().then(data => setModels(data)).catch(err => console.error('models:', err)),
+        api.fetchModelGroups().then(data => { setActiveModelGroup(data.activeGroup || 1); setModelGroups(data.groups || []); }).catch(err => console.error('modelGroups:', err)),
+        api.fetchAvailableModels().then(data => { setAvailableModels(data.models || []); setLastSyncTime(data.lastSyncTime || null); setLastSyncSource(data.lastSyncSource || null); setExpectedModelCount(data.expectedCount || null); setLastParsedModelCount(data.parsedCount ?? null); setLastSavedModelCount(data.savedCount ?? null); if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id); }).catch(err => console.error('availModels:', err)),
+        api.fetchRules().then(data => setRules(data)).catch(err => console.error('rules:', err)),
+        api.fetchSettings().then(data => setSettingsData(data)).catch(err => console.error('settings:', err)),
+        api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
+        api.fetchLogs().then(data => setLogs(data)).catch(err => console.error('logs:', err)),
+        api.fetchStats().then(data => setStats(data)).catch(err => console.error('stats:', err)),
+      ];
+      await Promise.all(promises);
+      setApiError('');
+    } catch (err) {
+      setApiError('Unable to connect to Gateway.');
+    }
+  }, [api]);
 
-  // 2. 當切換至金鑰管理分頁，重新取得 API Keys 資料以顯示最新狀態
+  const handleLogin = useCallback(async (e) => {
+    e.preventDefault();
+    if (!loginInput.trim()) return;
+    setAuthError('');
+    try {
+      const ok = await api.login(loginInput.trim());
+      if (ok) {
+        localStorage.setItem('gateway_admin_token', loginInput.trim());
+        setAdminToken(loginInput.trim());
+        setLoginInput('');
+      } else {
+        setAuthError('Invalid token. Please check and try again.');
+      }
+    } catch (err) {
+      if (err.message === 'AUTH_REQUIRED' || err.message?.includes('401')) {
+        setAuthError('Invalid token.');
+      } else {
+        setAuthError('Connection failed.');
+      }
+    }
+  }, [loginInput, api]);
+
+  useEffect(() => {
+    if (adminToken) {
+      fetchData();
+    }
+  }, [adminToken, fetchData]);
+
   useEffect(() => {
     if (activeTab === 'keys') {
-      fetchKeys();
+      api.fetchKeys().then(data => setKeys(data)).catch(() => {});
     }
-  }, [activeTab]);
+  }, [activeTab, api]);
 
-  // 2.5 金鑰冷卻倒數即時刷新；倒數結束後自動重新抓取，避免停在 0 秒。
   useEffect(() => {
-    if (activeTab !== 'keys') return undefined;
     const timer = setInterval(() => {
-      const now = Date.now();
-      setCurrentTimeMs(now);
-      if (keys.some(k => k.status === 'cooldown' && k.cooldown_until && new Date(k.cooldown_until).getTime() <= now)) {
-        fetchKeys();
-      }
+      setCurrentTimeMs(Date.now());
     }, 1000);
     return () => clearInterval(timer);
-  }, [activeTab, keys]);
+  }, []);
 
-  // 3. 當切換至模型排序分頁，若列表為空，直接從 NVIDIA Build Free Endpoint catalog 背景同步一次
   useEffect(() => {
     if (activeTab === 'models' && availableModels.length === 0 && !isSyncingModels) {
-      console.log('自動載入 NVIDIA Build Free Endpoint 模型列表...');
       handleSyncModelsSilently();
     }
   }, [activeTab, availableModels.length]);
 
-   // 4. 當 logs 更新時，若使用者仍停在底部，才自動跟隨最新一行。
-  // 使用者往上捲查看紀錄時，不會強制拉回底部。
   useEffect(() => {
     if (dashboardSubTab !== 'logs') return;
     if (!shouldAutoFollowLogsRef.current) return;
-
     requestAnimationFrame(() => {
       scrollLogsToBottom('auto');
     });
   }, [logs, dashboardSubTab]);
 
-  // 5. 定期檢查 Gateway 健康狀態（每 10 秒）
+  const checkGatewayHealth = useCallback(async () => {
+    try {
+      const data = await api.checkHealth();
+      setGatewayHealth(data);
+      return data;
+    } catch (err) {
+      setGatewayHealth(null);
+      return null;
+    }
+  }, [api]);
+
   useEffect(() => {
     checkGatewayHealth();
-    const healthInterval = setInterval(checkGatewayHealth, 10000);
+    const healthInterval = setInterval(checkGatewayHealth, 30000);
     return () => clearInterval(healthInterval);
   }, [checkGatewayHealth]);
 
-  // 6. 監聽 Gateway 重啟完成事件（來自 Electron IPC）
   useEffect(() => {
     if (!window.electronAPI || !window.electronAPI.onGatewayRestarted) return;
     const unsubscribe = window.electronAPI.onGatewayRestarted(() => {
@@ -263,26 +225,38 @@ export default function App() {
       fetchData();
     });
     return unsubscribe;
-  }, [checkGatewayHealth]);
+  }, [checkGatewayHealth, fetchData]);
+
+  useEffect(() => {
+    if (keys.length > 0 && keys.every(k => k.status === 'inactive' || k.status === 'cooldown')) {
+      notifyAllKeysDown();
+    }
+  }, [keys, notifyAllKeysDown]);
+
+  const sseConnected = useRealtimeEvents(GATEWAY_URL, adminToken, {
+    onLogs: (data) => { setLogs(prev => { const updated = [...prev, data]; return updated.length > 100 ? updated.slice(-100) : updated; }); },
+    onStats: (data) => { setStats(data); },
+    onKeys: (data) => { if (data.action !== 'test') fetchData(); },
+    onModels: () => { fetchData(); },
+    onRules: () => { fetchData(); },
+    onSettings: (data) => { setSettingsData(data); },
+    onTokenUsage: () => { api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(() => {}); }
+  });
 
   const handleSyncModelsSilently = async () => {
     setIsSyncingModels(true);
     try {
-      const res = await fetch(GATEWAY_URL + '/api/models/sync', { method: 'POST' });
-      if (res.ok) {
-        fetchData();
-      }
+      const data = await api.syncModels();
+      if (data) fetchData();
     } catch (err) {
-      console.error('背景自動同步模型出錯:', err);
+      console.error('Background model sync error:', err);
     } finally {
       setIsSyncingModels(false);
     }
   };
 
   const showSyncNotice = (type, message) => {
-    if (syncNoticeTimerRef.current) {
-      clearTimeout(syncNoticeTimerRef.current);
-    }
+    if (syncNoticeTimerRef.current) clearTimeout(syncNoticeTimerRef.current);
     setSyncNotice({ type, message, createdAt: Date.now() });
     syncNoticeTimerRef.current = setTimeout(() => {
       setSyncNotice(null);
@@ -291,9 +265,7 @@ export default function App() {
   };
 
   const showKeyTestNotice = (type, message) => {
-    if (keyTestNoticeTimerRef.current) {
-      clearTimeout(keyTestNoticeTimerRef.current);
-    }
+    if (keyTestNoticeTimerRef.current) clearTimeout(keyTestNoticeTimerRef.current);
     setKeyTestNotice({ type, message, createdAt: Date.now() });
     keyTestNoticeTimerRef.current = setTimeout(() => {
       setKeyTestNotice(null);
@@ -302,20 +274,20 @@ export default function App() {
   };
 
   const getSyncSourceLabel = (source) => {
-    if (!source) return '未知來源';
+    if (!source) return '';
     if (source.includes('build.nvidia.com')) return 'NVIDIA Build Free Endpoint';
-    if (source.includes('featured-models')) return 'Featured Catalog 備援';
-    if (source.includes('/v1/models')) return '/v1/models 備援';
+    if (source.includes('featured-models')) return 'Featured Catalog';
+    if (source.includes('/v1/models')) return '/v1/models';
     return source;
   };
 
   const formatModelSyncSummary = ({ parsedCount, savedCount, expectedCount, source }) => {
     const parts = [];
-    if (Number.isFinite(Number(parsedCount))) parts.push(`頁面解析 ${Number(parsedCount)} 個`);
-    if (Number.isFinite(Number(savedCount))) parts.push(`實際入庫 ${Number(savedCount)} 個`);
-    if (Number.isFinite(Number(expectedCount))) parts.push(`Build 標示 ${Number(expectedCount)} 個`);
-    if (source) parts.push(`來源：${getSyncSourceLabel(source)}`);
-    return parts.join('｜') || '同步完成';
+    if (Number.isFinite(Number(parsedCount))) parts.push(`Parsed: ${Number(parsedCount)}`);
+    if (Number.isFinite(Number(savedCount))) parts.push(`Saved: ${Number(savedCount)}`);
+    if (Number.isFinite(Number(expectedCount))) parts.push(`Expected: ${Number(expectedCount)}`);
+    if (source) parts.push(`Source: ${getSyncSourceLabel(source)}`);
+    return parts.join(' | ') || 'Sync complete';
   };
 
   const formatTaiwanParts = (value) => {
@@ -346,7 +318,7 @@ export default function App() {
 
   const formatTaiwanDateTime = (value) => {
     const parts = formatTaiwanParts(value);
-    if (!parts) return '無';
+    if (!parts) return '--';
     return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
   };
 
@@ -361,14 +333,16 @@ export default function App() {
 
     setChatHistory(prev => [...prev, userMsg, assistantMsg]);
     const targetMessages = [...chatHistory, userMsg];
-    const originalInput = chatInput.trim();
     setChatInput('');
     setIsChatting(true);
 
     try {
       const res = await fetch(GATEWAY_URL + '/api/test/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminToken ? { 'Authorization': `Bearer ${adminToken}` } : {})
+        },
         body: JSON.stringify({
           model: selectedTestModel,
           messages: targetMessages,
@@ -380,7 +354,7 @@ export default function App() {
         const text = await res.text();
         setChatHistory(prev => {
           const updated = [...prev];
-          updated[updated.length - 1].content = `錯誤 (HTTP ${res.status}): ${text || '無法測試此模型'}`;
+          updated[updated.length - 1].content = `Error (HTTP ${res.status}): ${text || 'Unable to test model'}`;
           return updated;
         });
         setIsChatting(false);
@@ -397,7 +371,7 @@ export default function App() {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop(); // 保留不完整的一行
+        buffer = lines.pop();
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -415,7 +389,7 @@ export default function App() {
                 });
               }
             } catch (err) {
-              // 忽略 JSON 解析異常
+              // ignore parse errors
             }
           }
         }
@@ -423,7 +397,7 @@ export default function App() {
     } catch (err) {
       setChatHistory(prev => {
         const updated = [...prev];
-        updated[updated.length - 1].content = `連線異常: ${err.message}`;
+        updated[updated.length - 1].content = `Connection error: ${err.message}`;
         return updated;
       });
     } finally {
@@ -431,298 +405,81 @@ export default function App() {
     }
   };
 
-  const fetchSettings = async () => {
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/settings');
-      if (res.ok) setSettingsData(await res.json());
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const saveSettings = async (updated) => {
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated)
-      });
-      if (res.ok) setSettingsData(await res.json());
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const fetchTokenUsage = async () => {
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/token-usage');
-      if (res.ok) setTokenUsageData(await res.json());
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const clearTokenUsage = async () => {
-    if (!window.confirm('確定要清除所有 Token 使用記錄與統計嗎？')) return;
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/token-usage/clear', { method: 'POST' });
-      if (res.ok) fetchTokenUsage();
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const checkGatewayHealth = useCallback(async () => {
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/health');
-      if (res.ok) {
-        const data = await res.json();
-        setGatewayHealth(data);
-        return data;
-      }
-      setGatewayHealth(null);
-      return null;
-    } catch (err) {
-      setGatewayHealth(null);
-      return null;
-    }
-  }, [GATEWAY_URL]);
-
-  const showRestartNotice = useCallback((type, message) => {
-    if (restartNoticeTimerRef.current) {
-      clearTimeout(restartNoticeTimerRef.current);
-    }
-    setRestartNotice({ type, message });
-    restartNoticeTimerRef.current = setTimeout(() => {
-      setRestartNotice(null);
-      restartNoticeTimerRef.current = null;
-    }, 10000);
-  }, []);
-
-  const handleRestartGateway = useCallback(async () => {
-    if (isRestartingGateway) return;
-    setIsRestartingGateway(true);
-    showRestartNotice('info', '正在重新啟動 Gateway 服務...');
-
-    try {
-      const resetRes = await fetch(GATEWAY_URL + '/api/gateway/reset-cooldowns', { method: 'POST' });
-      if (!resetRes.ok) {
-        showRestartNotice('warning', '清除模型冷卻狀態失敗，繼續嘗試重啟。');
-      }
-    } catch (_) {}
-
-    if (window.electronAPI && window.electronAPI.restartGateway) {
-      window.electronAPI.restartGateway();
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const health = await checkGatewayHealth();
-      if (health && health.status === 'running') {
-        showRestartNotice('success', `Gateway 已成功重啟！運行時間：${Math.round(health.uptime)}秒`);
-        fetchData();
-      } else {
-        showRestartNotice('warning', 'Gateway 重啟指令已發送，等待服務恢復中...');
-      }
-    } else {
-      try {
-        const res = await fetch(GATEWAY_URL + '/api/gateway/reset-cooldowns', { method: 'POST' });
-        if (res.ok) {
-          showRestartNotice('success', '已清除所有模型冷卻狀態，Gateway 服務持續運行中。');
-          fetchData();
-        }
-      } catch (err) {
-        showRestartNotice('error', `重啟操作失敗：${err.message}`);
-      }
-    }
-
-    setIsRestartingGateway(false);
-  }, [isRestartingGateway, GATEWAY_URL, checkGatewayHealth, showRestartNotice, fetchData]);
-
-  const handleRestartApp = useCallback(() => {
-    if (!window.confirm('確定要重新啟動整個應用程式嗎？所有未儲存的狀態將會遺失。')) return;
-    if (window.electronAPI && window.electronAPI.restartApp) {
-      window.electronAPI.restartApp();
-    }
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      const keysRes = await fetch(GATEWAY_URL + '/api/keys');
-      if (keysRes.ok) setKeys(await keysRes.json());
-
-      const modelsRes = await fetch(GATEWAY_URL + '/api/models');
-      if (modelsRes.ok) setModels(await modelsRes.json());
-
-      const modelGroupsRes = await fetch(GATEWAY_URL + '/api/models/groups');
-      if (modelGroupsRes.ok) {
-        const data = await modelGroupsRes.json();
-        setActiveModelGroup(data.activeGroup || 1);
-        setModelGroups(data.groups || []);
-      }
-
-      const availModelsRes = await fetch(GATEWAY_URL + '/api/models/available');
-      if (availModelsRes.ok) {
-        const data = await availModelsRes.json();
-        setAvailableModels(data.models || []);
-        setLastSyncTime(data.lastSyncTime || null);
-        setLastSyncSource(data.lastSyncSource || null);
-        setExpectedModelCount(data.expectedCount || null);
-        setLastParsedModelCount(data.parsedCount ?? null);
-        setLastSavedModelCount(data.savedCount ?? null);
-        if (data.models && data.models.length > 0) {
-          setSelectedTestModel(prev => prev || data.models[0].id);
-        }
-      }
-
-      const rulesRes = await fetch(GATEWAY_URL + '/api/rules');
-      if (rulesRes.ok) setRules(await rulesRes.json());
-
-      await fetchSettings();
-      await fetchTokenUsage();
-      fetchLogsAndStats();
-    } catch (err) {
-      setApiError('無法連接到 Gateway 服務。請確保 Electron 背景服務已成功啟動！');
-    }
-  };
-
-  const isLogPanelNearBottom = () => {
-  const el = logsContainerRef.current;
-    if (!el) return true;
-
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-
-    // 允許一點誤差，避免剛好差 1~2px 時判斷錯誤
-    return distanceFromBottom <= 24;
-  };
-
-  const handleLogsScroll = () => {
-    // 只有捲動容器本身位於底部時，才繼續自動跟隨新日誌。
-    // 使用者往上捲查看舊紀錄時，不會再被強制拉回最後一行。
-    shouldAutoFollowLogsRef.current = isLogPanelNearBottom();
-  };
-
-  const scrollLogsToBottom = (behavior = 'auto') => {
-    const el = logsContainerRef.current;
-    if (!el) return;
-
-    el.scrollTo({
-      top: el.scrollHeight,
-      behavior
-    });
-  };
-
-  const fetchLogsAndStats = async () => {
-    try {
-      const statsRes = await fetch(GATEWAY_URL + '/api/stats');
-      if (statsRes.ok) setStats(await statsRes.json());
-
-      const logsRes = await fetch(GATEWAY_URL + '/api/logs');
-      if (logsRes.ok) setLogs(await logsRes.json());
-      
-      fetchTokenUsage();
-      setApiError(''); // 成功連線，清除錯誤
-    } catch (err) {
-      // 避免頻繁報錯
-    }
-  };
-
-  const fetchKeys = async () => {
-    try {
-      const keysRes = await fetch(GATEWAY_URL + '/api/keys');
-      if (keysRes.ok) setKeys(await keysRes.json());
-    } catch (err) {
-      console.error('取得金鑰資料失敗:', err);
-    }
-  };
-
-  // --- API Key 操作 ---
   const handleAddKey = async (e) => {
     e.preventDefault();
     if (!newKey.trim()) return;
     try {
-      const res = await fetch(GATEWAY_URL + '/api/keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: newKey.trim() })
-      });
-      if (res.ok) {
-        setNewKey('');
-        fetchData();
-      } else {
-        const data = await res.json();
-        alert(`新增失敗: ${data.error}`);
-      }
+      await api.addKey(newKey.trim());
+      setNewKey('');
+      fetchData();
     } catch (err) {
-      alert('新增金鑰出錯');
+      alert(t('keys.addFailed', { error: err.message }));
     }
   };
 
   const handleDeleteKey = async (id) => {
-    if (!confirm('確認要刪除此 API Key？')) return;
+    if (!confirm(t('keys.deleteConfirm'))) return;
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/keys/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) fetchData();
+      await api.deleteKey(id);
+      fetchData();
     } catch (err) {
-      alert('刪除金鑰出錯');
+      alert('Delete key error');
     }
   };
 
   const handleTestKeys = async () => {
     setIsTestingKeys(true);
-    showKeyTestNotice('info', '正在測試所有 API Key，測試期間不會鎖住輸入框。');
+    showKeyTestNotice('info', t('keys.testing'));
     try {
-      const res = await fetch(GATEWAY_URL + '/api/keys/test', { method: 'POST' });
-      if (res.ok) {
-        const results = await res.json();
-        const failures = results.filter(r => !r.success);
-        const successCount = results.length - failures.length;
-        if (failures.length > 0) {
-          showKeyTestNotice(
-            'error',
-            `一鍵測試完成：${successCount}/${results.length} 把金鑰可用，${failures.length} 把測試失敗。非 401/403 會保留 Active，只有 429 會進入 Cooldown。`
-          );
-        } else {
-          showKeyTestNotice('success', `一鍵測試完成：${results.length}/${results.length} 把金鑰皆健康運行。`);
-        }
+      const results = await api.testKeys();
+      const failures = results.filter(r => !r.success);
+      const successCount = results.length - failures.length;
+      if (failures.length > 0) {
+        showKeyTestNotice(
+          'error',
+          `${successCount}/${results.length} OK, ${failures.length} failed.`
+        );
       } else {
-        const data = await res.json().catch(() => ({}));
-        showKeyTestNotice('error', `連線測試出錯：${data.error || '伺服器回應異常'}`);
+        showKeyTestNotice('success', `${results.length}/${results.length} keys healthy.`);
       }
       fetchData();
     } catch (err) {
-      showKeyTestNotice('error', `連線測試出錯：${err.message}`);
+      showKeyTestNotice('error', `Test error: ${err.message}`);
     } finally {
       setIsTestingKeys(false);
     }
   };
 
-  // --- 模型排序與同步 ---
   const handleSyncModels = async () => {
     setIsSyncingModels(true);
-    showSyncNotice('info', '正在同步 NVIDIA Build Free Endpoint 模型清單，不會鎖住搜尋輸入框。');
+    showSyncNotice('info', t('models.syncing'));
     try {
-      const res = await fetch(GATEWAY_URL + '/api/models/sync', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setLastParsedModelCount(data.parsedCount ?? null);
-        setLastSavedModelCount(data.savedCount ?? data.count ?? null);
-        setExpectedModelCount(data.expectedCount || null);
-        setLastSyncSource(data.source || null);
-        showSyncNotice('success', `同步成功：${formatModelSyncSummary({
-          parsedCount: data.parsedCount,
-          savedCount: data.savedCount ?? data.count,
-          expectedCount: data.expectedCount,
-          source: data.source
-        })}`);
-        fetchData();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        showSyncNotice('error', `同步失敗：${data.error || '未知錯誤'}`);
-      }
+      const data = await api.syncModels();
+      setLastParsedModelCount(data.parsedCount ?? null);
+      setLastSavedModelCount(data.savedCount ?? data.count ?? null);
+      setExpectedModelCount(data.expectedCount || null);
+      setLastSyncSource(data.source || null);
+      showSyncNotice('success', `Sync OK: ${formatModelSyncSummary({
+        parsedCount: data.parsedCount,
+        savedCount: data.savedCount ?? data.count,
+        expectedCount: data.expectedCount,
+        source: data.source
+      })}`);
+      fetchData();
     } catch (err) {
-      showSyncNotice('error', `同步模型時伺服器無回應：${err.message}`);
+      showSyncNotice('error', `Sync failed: ${err.message}`);
     } finally {
       setIsSyncingModels(false);
+    }
+  };
+
+  const saveModelPriorities = async (modelIds, groupId = activeModelGroup) => {
+    try {
+      await api.saveModelPriorities(modelIds, groupId);
+      fetchData();
+    } catch (err) {
+      console.error('Save model priorities failed:', err);
+      throw err;
     }
   };
 
@@ -748,7 +505,6 @@ export default function App() {
   const handlePriorityDragOver = (e) => {
     const hasAvailableModel = draggedAvailableModelId || Array.from(e.dataTransfer.types || []).includes('application/x-nvidia-model-id');
     if (!hasAvailableModel) return;
-
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     setIsPriorityDropActive(true);
@@ -762,11 +518,9 @@ export default function App() {
   const handlePriorityDrop = (e) => {
     const modelId = e.dataTransfer.getData('application/x-nvidia-model-id') || draggedAvailableModelId;
     if (!modelId) return;
-
     e.preventDefault();
     setIsPriorityDropActive(false);
     setDraggedAvailableModelId(null);
-
     if (!models.some(m => m.model_id === modelId)) {
       handleAddModelToPriority(modelId);
     }
@@ -791,78 +545,121 @@ export default function App() {
     saveModelPriorities(updated);
   };
 
-  const saveModelPriorities = async (modelIds, groupId = activeModelGroup) => {
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models: modelIds, groupId })
-      });
-      if (res.ok) fetchData();
-    } catch (err) {
-      alert('儲存優先順序失敗');
-    }
-  };
-
   const handleSwitchModelGroup = async (groupId) => {
     if (groupId === activeModelGroup) return;
     try {
-      const res = await fetch(GATEWAY_URL + '/api/models/groups/active', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId })
-      });
-      if (res.ok) {
-        setActiveModelGroup(groupId);
-        fetchData();
-      } else {
-        const data = await res.json();
-        alert(`切換組別失敗: ${data.error || '未知錯誤'}`);
-      }
+      await api.setActiveModelGroup(groupId);
+      setActiveModelGroup(groupId);
+      fetchData();
     } catch (err) {
-      alert('切換模型組別時伺服器無回應');
+      alert(`Switch group failed: ${err.message}`);
     }
   };
 
-  // --- Rules 操作 ---
   const handleAddRule = async (e) => {
     e.preventDefault();
     if (!newRuleTitle.trim() || !newRuleContent.trim()) return;
     try {
-      const res = await fetch(GATEWAY_URL + '/api/rules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newRuleTitle.trim(), content: newRuleContent.trim() })
-      });
-      if (res.ok) {
-        setNewRuleTitle('');
-        setNewRuleContent('');
-        fetchData();
-        if (window.electronAPI && window.electronAPI.notifyRulesUpdated) {
-          window.electronAPI.notifyRulesUpdated();
-        }
+      await api.addRule(newRuleTitle.trim(), newRuleContent.trim());
+      setNewRuleTitle('');
+      setNewRuleContent('');
+      fetchData();
+      if (window.electronAPI?.notifyRulesUpdated) {
+        window.electronAPI.notifyRulesUpdated();
       }
     } catch (err) {
-      alert('新增規則出錯');
+      alert('Add rule error');
     }
   };
 
   const handleDeleteRule = async (id) => {
-    if (!confirm('確認要刪除此規則？')) return;
+    if (!confirm(t('rules.deleteConfirm'))) return;
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/rules/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        fetchData();
-        if (window.electronAPI && window.electronAPI.notifyRulesUpdated) {
-          window.electronAPI.notifyRulesUpdated();
-        }
+      await api.deleteRule(id);
+      fetchData();
+      if (window.electronAPI?.notifyRulesUpdated) {
+        window.electronAPI.notifyRulesUpdated();
       }
     } catch (err) {
-      alert('刪除規則出錯');
+      alert('Delete rule error');
     }
   };
+
+  const handleUpdateRule = async (id, title, content) => {
+    await api.updateRule(id, title, content);
+    fetchData();
+    if (window.electronAPI?.notifyRulesUpdated) {
+      window.electronAPI.notifyRulesUpdated();
+    }
+  };
+
+  const saveSettings = async (updated) => {
+    try {
+      const data = await api.saveSettings(updated);
+      setSettingsData(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const clearTokenUsage = async () => {
+    if (!window.confirm(t('common.confirm'))) return;
+    try {
+      await api.clearTokenUsage();
+      const data = await api.fetchTokenUsage();
+      setTokenUsageData(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const showRestartNotice = useCallback((type, message) => {
+    if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
+    setRestartNotice({ type, message });
+    restartNoticeTimerRef.current = setTimeout(() => {
+      setRestartNotice(null);
+      restartNoticeTimerRef.current = null;
+    }, 10000);
+  }, []);
+
+  const handleRestartGateway = useCallback(async () => {
+    if (isRestartingGateway) return;
+    setIsRestartingGateway(true);
+    showRestartNotice('info', t('dashboard.restarting') + '...');
+
+    try {
+      await api.resetCooldowns();
+    } catch (_) {}
+
+    if (window.electronAPI && window.electronAPI.restartGateway) {
+      window.electronAPI.restartGateway();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const health = await checkGatewayHealth();
+      if (health && health.status === 'running') {
+        showRestartNotice('success', `Gateway restarted! Uptime: ${Math.round(health.uptime)}s`);
+        fetchData();
+      } else {
+        showRestartNotice('warning', 'Restart command sent, waiting for service...');
+      }
+    } else {
+      try {
+        await api.resetCooldowns();
+        showRestartNotice('success', 'Cooldowns cleared, Gateway still running.');
+        fetchData();
+      } catch (err) {
+        showRestartNotice('error', `Restart failed: ${err.message}`);
+      }
+    }
+
+    setIsRestartingGateway(false);
+  }, [isRestartingGateway, api, checkGatewayHealth, showRestartNotice, fetchData]);
+
+  const handleRestartApp = useCallback(() => {
+    if (!window.confirm(t('common.confirm'))) return;
+    if (window.electronAPI?.restartApp) {
+      window.electronAPI.restartApp();
+    }
+  }, []);
 
   const copyToClipboard = (text, id) => {
     navigator.clipboard.writeText(text);
@@ -870,7 +667,6 @@ export default function App() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // 計算成功率
   const calculateSuccessRate = () => {
     if (stats.hourly.length === 0) return '100%';
     const totalRequests = stats.hourly.reduce((acc, curr) => acc + curr.request_count, 0);
@@ -883,66 +679,126 @@ export default function App() {
     return stats.hourly.reduce((acc, curr) => acc + curr.request_count, 0);
   };
 
+  const isLogPanelNearBottom = () => {
+    const el = logsContainerRef.current;
+    if (!el) return true;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return distanceFromBottom <= 24;
+  };
+
+  const handleLogsScroll = () => {
+    shouldAutoFollowLogsRef.current = isLogPanelNearBottom();
+  };
+
+  const scrollLogsToBottom = (behavior = 'auto') => {
+    const el = logsContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  };
+
+  if (!adminToken) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <div className="glass-panel" style={{ padding: '32px', width: '400px' }}>
+          <h2>Gateway Admin Login</h2>
+          <p>Enter the admin token to access the management interface.</p>
+          <form onSubmit={handleLogin}>
+            <input className="input" type="password" placeholder="Admin Token" value={loginInput} onChange={e => setLoginInput(e.target.value)} />
+            {authError && <div style={{ color: 'var(--text-inactive)', marginTop: '8px', fontSize: '14px' }}>{authError}</div>}
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '12px' }}>Login</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  const getModelEmoji = (modelId) => {
+    const id = modelId.toLowerCase();
+    if (id.includes('llama')) return '🦙';
+    if (id.includes('gpt')) return '🤖';
+    if (id.includes('mistral') || id.includes('mixtral')) return '🌀';
+    if (id.includes('gemma')) return '💎';
+    if (id.includes('nemotron')) return '🧠';
+    if (id.includes('phi')) return '🔤';
+    if (id.includes('minimax') || id.includes('minimaxai')) return '🔲';
+    if (id.includes('step')) return '🪜';
+    if (id.includes('nvidia')) return '💚';
+    if (id.includes('deepseek')) return '🔍';
+    if (id.includes('qwen')) return '🐼';
+    return '⚡';
+  };
+
+  const getModelCategory = (modelId) => {
+    const id = modelId.toLowerCase();
+    if (id.includes('llama')) return 'Llama';
+    if (id.includes('gpt')) return 'GPT';
+    if (id.includes('mistral') || id.includes('mixtral')) return 'Mistral';
+    if (id.includes('gemma')) return 'Gemma';
+    if (id.includes('nemotron')) return 'Nemotron';
+    if (id.includes('phi')) return 'Phi';
+    if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
+    if (id.includes('step')) return 'Step';
+    if (id.includes('nvidia')) return 'Nvidia';
+    return 'Other';
+  };
+
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      {/* 側邊導航 */}
       <div className="glass-panel" style={{ width: '240px', margin: '12px 6px 12px 12px', display: 'flex', flexDirection: 'column', padding: '20px 12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '32px', paddingLeft: '8px' }}>
           <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'linear-gradient(135deg, #10b981 0%, #3b82f6 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Activity size={18} color="white" />
           </div>
           <div>
-            <h1 style={{ fontSize: '17px', fontWeight: '800', fontFamily: 'Outfit', letterSpacing: '0.5px' }}>NVIDIA GATEWAY</h1>
-            <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '700' }}>v{packageJson.version} Stable</span>
+            <h1 style={{ fontSize: '17px', fontWeight: '800', fontFamily: 'Outfit', letterSpacing: '0.5px' }}>{t('app.title')}</h1>
+            <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '700' }}>{t('app.version', { version: packageJson.version })}</span>
           </div>
         </div>
 
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
-          <button 
+          <button
             className={`btn ${activeTab === 'dashboard' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
             onClick={() => setActiveTab('dashboard')}
           >
             <Activity size={16} />
-            <span>運行狀態</span>
+            <span>{t('nav.dashboard')}</span>
           </button>
-          <button 
+          <button
             className={`btn ${activeTab === 'keys' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
             onClick={() => setActiveTab('keys')}
           >
             <Key size={16} />
-            <span>金鑰管理 ({stats.activeKeysCount}/{stats.keysCount})</span>
+            <span>{t('nav.keys', { active: stats.activeKeysCount, total: stats.keysCount })}</span>
           </button>
-          <button 
+          <button
             className={`btn ${activeTab === 'models' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
             onClick={() => setActiveTab('models')}
           >
             <Cpu size={16} />
-            <span>模型排序 ({stats.modelsCount})</span>
+            <span>{t('nav.models', { count: stats.modelsCount })}</span>
           </button>
-          <button 
+          <button
             className={`btn ${activeTab === 'playground' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
             onClick={() => setActiveTab('playground')}
           >
             <Play size={16} />
-            <span>模型測試 (Playground)</span>
+            <span>{t('nav.playground')}</span>
           </button>
-          <button 
+          <button
             className={`btn ${activeTab === 'rules' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
             onClick={() => setActiveTab('rules')}
           >
             <FileText size={16} />
-            <span>規範快捷 ({rules.length})</span>
+            <span>{t('nav.rules', { count: rules.length })}</span>
           </button>
         </nav>
 
-        {/* 系統設定按鈕區 */}
         <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {/* Gateway 運行狀態指示器 + 重啟按鈕 */}
           <div className="glass-panel" style={{ padding: '10px 12px', borderRadius: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
@@ -952,7 +808,7 @@ export default function App() {
                   boxShadow: gatewayHealth?.status === 'running' ? '0 0 6px rgba(16, 185, 129, 0.5)' : 'none'
                 }} />
                 <span style={{ fontSize: '12px', color: gatewayHealth?.status === 'running' ? '#10b981' : (gatewayHealth === null ? '#ef4444' : '#f59e0b'), fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {gatewayHealth?.status === 'running' ? 'Gateway 運行中' : (gatewayHealth === null ? 'Gateway 離線' : 'Gateway 異常')}
+                  {gatewayHealth?.status === 'running' ? t('dashboard.gatewayRunning') : (gatewayHealth === null ? t('dashboard.gatewayOffline') : t('dashboard.gatewayError'))}
                 </span>
               </div>
               <button
@@ -960,10 +816,10 @@ export default function App() {
                 style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', flexShrink: 0 }}
                 onClick={handleRestartGateway}
                 disabled={isRestartingGateway}
-                title="重新啟動 Gateway 服務（清除模型冷卻狀態並重建連線）"
+                title={t('dashboard.restart')}
               >
                 {isRestartingGateway ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />}
-                <span>{isRestartingGateway ? '重啟中' : '重啟'}</span>
+                <span>{isRestartingGateway ? t('dashboard.restarting') : t('dashboard.restart')}</span>
               </button>
             </div>
             {gatewayHealth?.status === 'running' && (
@@ -974,7 +830,6 @@ export default function App() {
             )}
           </div>
 
-          {/* 重啟通知 */}
           {restartNotice && (
             <div
               className={`sync-notice sync-notice-${restartNotice.type}`}
@@ -987,6 +842,21 @@ export default function App() {
             </div>
           )}
 
+          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+            {LANGUAGE_OPTIONS.map(lang => (
+              <button
+                key={lang.code}
+                className={`btn ${i18n.language === lang.code ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '4px 8px', fontSize: '11px', minWidth: '32px' }}
+                onClick={() => i18n.changeLanguage(lang.code)}
+                title={lang.code}
+              >
+                <Globe size={10} />
+                <span>{lang.label}</span>
+              </button>
+            ))}
+          </div>
+
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => {
@@ -996,25 +866,25 @@ export default function App() {
               className="btn btn-secondary"
               style={{ flex: 1, padding: '8px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
             >
-              ⚙️ 系統設定
+              ⚙️ {t('settings.settingsButton')}
             </button>
             <button
               onClick={() => setTheme(prev => prev === 'theme-dark' ? 'theme-light' : 'theme-dark')}
               className="btn btn-secondary"
               style={{ padding: '8px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              title="切換深淺色模式"
+              title="Toggle theme"
             >
-              {theme === 'theme-dark' ? '☀️ 淺色' : '🌙 深色'}
+              {theme === 'theme-dark' ? '☀️' : '🌙'}
             </button>
           </div>
           <button
             className="btn btn-danger"
             style={{ padding: '8px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
             onClick={handleRestartApp}
-            title="重新啟動整個應用程式（包含 Electron 視窗）"
+            title={t('dashboard.restartApp')}
           >
             <Power size={14} />
-            <span>重啟應用程式</span>
+            <span>{t('dashboard.restartApp')}</span>
           </button>
         </div>
 
@@ -1026,13 +896,10 @@ export default function App() {
         )}
       </div>
 
-      {/* 主工作區 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', margin: '12px 12px 12px 6px', overflow: 'hidden' }}>
-        
-        {/* Dashboard 頁面 */}
+
         {activeTab === 'dashboard' && (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
-            {/* Dashboard 額外頁籤：總覽 / 即時日誌 */}
             <div className="glass-panel" style={{ padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
@@ -1041,7 +908,7 @@ export default function App() {
                   onClick={() => setDashboardSubTab('overview')}
                 >
                   <Activity size={14} />
-                  <span>總覽</span>
+                  <span>{t('dashboard.overview')}</span>
                 </button>
                 <button
                   className={`btn ${dashboardSubTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
@@ -1049,7 +916,7 @@ export default function App() {
                   onClick={() => setDashboardSubTab('logs')}
                 >
                   <RefreshCw size={14} className={dashboardSubTab === 'logs' && logs.length > 0 ? 'animate-spin' : ''} />
-                  <span>即時日誌</span>
+                  <span>{t('dashboard.logs')}</span>
                 </button>
                 <button
                   className={`btn ${dashboardSubTab === 'tokens' ? 'btn-primary' : 'btn-secondary'}`}
@@ -1057,38 +924,42 @@ export default function App() {
                   onClick={() => setDashboardSubTab('tokens')}
                 >
                   <Cpu size={14} />
-                  <span>Token 記數</span>
+                  <span>{t('dashboard.tokens')}</span>
                 </button>
               </div>
-              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                運行狀態子頁籤，可快速切換總覽與 Gateway 即時轉發日誌
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-muted)' }}>
+                <span>SSE</span>
+                <div style={{
+                  width: '6px', height: '6px', borderRadius: '50%',
+                  backgroundColor: sseConnected ? '#10b981' : '#ef4444',
+                  boxShadow: sseConnected ? '0 0 6px rgba(16,185,129,0.5)' : 'none'
+                }} />
+              </div>
             </div>
 
             {dashboardSubTab === 'overview' && (
             <>
-            {/* 核心卡片欄 */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-              <div 
-                className="glass-panel" 
-                style={{ 
-                  padding: '16px', 
-                  display: 'flex', 
-                  flexDirection: 'column', 
-                  gap: '8px', 
+              <div
+                className="glass-panel"
+                style={{
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
                   cursor: 'pointer',
                   transition: 'all 0.2s ease'
                 }}
                 onClick={() => copyToClipboard('http://127.0.0.1:4000/v1', 'gateway_endpoint')}
                 onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                 onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
-                title="點擊複製 Gateway Endpoint"
+                title={t('app.copyToClipboard')}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Gateway Endpoint</span>
+                  <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>{t('app.endpoint')}</span>
                   {copiedId === 'gateway_endpoint' ? (
                     <span style={{ fontSize: '13px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      <Check size={12} />已複製
+                      <Check size={12} />{t('app.copyToClipboard')}
                     </span>
                   ) : (
                     <Copy size={12} style={{ color: 'var(--text-muted)' }} />
@@ -1097,45 +968,44 @@ export default function App() {
                 <span style={{ fontSize: '17px', fontWeight: '700', color: '#10b981', fontFamily: 'Outfit' }}>http://127.0.0.1:4000/v1</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981' }}></div>
-                  <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>點擊複製 (Port 4000)</span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{t('app.copyToClipboard')} (Port 4000)</span>
                 </div>
               </div>
 
               <div className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>活躍 API 金鑰 pool</span>
+                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>{t('dashboard.activeKeys')}</span>
                 <span style={{ fontSize: '26px', fontWeight: '800', fontFamily: 'Outfit' }}>
-                  {stats.activeKeysCount} <span style={{ fontSize: '16px', color: 'var(--text-secondary)', fontWeight: '400' }}>/ {stats.keysCount} 健康</span>
+                  {stats.activeKeysCount} <span style={{ fontSize: '16px', color: 'var(--text-secondary)', fontWeight: '400' }}>/ {stats.keysCount}</span>
                 </span>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>429 自動金鑰輪詢備載</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>429 auto-cooldown pool</span>
               </div>
 
               <div className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>近 24 小時請求量 / 成功率</span>
+                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>{t('dashboard.recentRequests')}</span>
                 <span style={{ fontSize: '26px', fontWeight: '800', fontFamily: 'Outfit' }}>
                   {getTotalRequests()} <span style={{ fontSize: '16px', color: '#10b981', fontWeight: '600' }}>({calculateSuccessRate()})</span>
                 </span>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>僅 429 會讓 Key 進入冷卻</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Only 429 triggers cooldown</span>
               </div>
 
               <div className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>第一順位模型</span>
-                <span style={{ fontSize: '16px', fontWeight: '700', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={models[0]?.model_id || '未設定'}>
-                  {models[0] ? models[0].model_id.split('/').pop() : '未設定'}
+                <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>{t('dashboard.primaryModel')}</span>
+                <span style={{ fontSize: '16px', fontWeight: '700', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={models[0]?.model_id || '--'}>
+                  {models[0] ? models[0].model_id.split('/').pop() : '--'}
                 </span>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>優先嘗試順位 1 模型</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Priority 1</span>
               </div>
             </div>
 
-            {/* 編輯器自訂提供商整合設定引導 */}
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <span style={{ fontSize: '16px', fontWeight: '700', color: '#10b981' }}>⚙️ 相容OpenAI，如Cline等軟體</span>
+              <span style={{ fontSize: '16px', fontWeight: '700', color: '#10b981' }}>⚙️ OpenAI-compatible (Cline, etc.)</span>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                <div 
-                  style={{ 
-                    background: 'var(--bg-tertiary)', 
-                    padding: '12px', 
-                    borderRadius: '8px', 
-                    position: 'relative', 
+                <div
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    position: 'relative',
                     border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
@@ -1143,23 +1013,23 @@ export default function App() {
                   onClick={() => copyToClipboard('myself', 'prov_id')}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
-                  title="點擊複製提供商 ID"
+                  title="Click to copy Provider ID"
                 >
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>提供商 ID (Provider ID)</div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Provider ID</div>
                   <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>myself</div>
-                  <div 
-                    className="btn btn-secondary" 
+                  <div
+                    className="btn btn-secondary"
                     style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     {copiedId === 'prov_id' ? <Check size={12} /> : <Copy size={12} />}
                   </div>
                 </div>
-                <div 
-                  style={{ 
-                    background: 'var(--bg-tertiary)', 
-                    padding: '12px', 
-                    borderRadius: '8px', 
-                    position: 'relative', 
+                <div
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    position: 'relative',
                     border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
@@ -1167,23 +1037,23 @@ export default function App() {
                   onClick={() => copyToClipboard(getGatewayUrl() + '/v1', 'prov_url')}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
-                  title="點擊複製基礎 URL"
+                  title="Click to copy Base URL"
                 >
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>基礎 URL (Base URL)</div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Base URL</div>
                   <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>{getGatewayUrl()}/v1</div>
-                  <div 
-                    className="btn btn-secondary" 
+                  <div
+                    className="btn btn-secondary"
                     style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     {copiedId === 'prov_url' ? <Check size={12} /> : <Copy size={12} />}
                   </div>
                 </div>
-                <div 
-                  style={{ 
-                    background: 'var(--bg-tertiary)', 
-                    padding: '12px', 
-                    borderRadius: '8px', 
-                    position: 'relative', 
+                <div
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    position: 'relative',
                     border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
@@ -1191,24 +1061,24 @@ export default function App() {
                   onClick={() => copyToClipboard(String(activeModelGroup), 'prov_key')}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
-                  title="點擊複製目前使用中的模型組別 Key"
+                  title="Click to copy model group key"
                 >
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>API 金鑰 / 模型組別 Key</div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>API Key / Group</div>
                   <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>1 / 2 / 3</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>點擊複製目前第 {activeModelGroup} 組</div>
-                  <div 
-                    className="btn btn-secondary" 
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>Group {activeModelGroup}</div>
+                  <div
+                    className="btn btn-secondary"
                     style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     {copiedId === 'prov_key' ? <Check size={12} /> : <Copy size={12} />}
                   </div>
                 </div>
-                <div 
-                  style={{ 
-                    background: 'var(--bg-tertiary)', 
-                    padding: '12px', 
-                    borderRadius: '8px', 
-                    position: 'relative', 
+                <div
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    position: 'relative',
                     border: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease'
@@ -1216,12 +1086,12 @@ export default function App() {
                   onClick={() => copyToClipboard('patcher-main', 'prov_model')}
                   onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
                   onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
-                  title="點擊複製模型 ID"
+                  title="Click to copy Model ID"
                 >
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>模型 ID (Model ID)</div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Model ID</div>
                   <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>patcher-main</div>
-                  <div 
-                    className="btn btn-secondary" 
+                  <div
+                    className="btn btn-secondary"
                     style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     {copiedId === 'prov_model' ? <Check size={12} /> : <Copy size={12} />}
@@ -1229,43 +1099,42 @@ export default function App() {
                 </div>
               </div>
               <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                💡 註：於編輯器自訂提供商填入上方數值。API Key 欄位可直接填 1 / 2 / 3 來指定第 1 / 2 / 3 組模型順位；若填 any-key 或其他值，則使用 UI 目前啟用中的模型組。模型 ID 可任意填寫，Gateway 會自動重寫為所選組別的第一順位 NVIDIA NIM 模型。
+                💡 Tip: Fill these values in your editor's custom provider. API Key field accepts 1/2/3 for model groups. Model ID can be anything; Gateway auto-rewrites to the primary NIM model.
               </span>
             </div>
 
-            {/* 圖表與統計 */}
             <div className="glass-panel" style={{ padding: '20px', flex: '1', minHeight: '180px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '16px', fontWeight: '700' }}>近 24 小時每小時流量分佈</span>
-                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>資料庫存儲 (SQLite)</span>
+                <span style={{ fontSize: '16px', fontWeight: '700' }}>{t('dashboard.hourlyTraffic')}</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>SQLite</span>
               </div>
               <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: '8px', padding: '42px 0 8px', overflow: 'visible' }}>
                 {stats.hourly.length === 0 ? (
                   <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'var(--text-muted)', fontSize: '15px' }}>
-                    目前尚無請求數據
+                    {t('dashboard.noData')}
                   </div>
                 ) : (
                   stats.hourly.map((h, i) => {
                     const maxRequests = Math.max(...stats.hourly.map(x => x.request_count), 1);
                     const barHeightPercent = h.request_count > 0 ? Math.max((h.request_count / maxRequests) * 100, 5) : 0;
                     const errorHeightPercent = h.request_count > 0 ? Math.min((h.error_count / h.request_count) * 100, 100) : 0;
-                    const hourText = h.hour.split(' ')[1]; // 取出 HH:00
+                    const hourText = h.hour.split(' ')[1];
                     const isHovered = hoveredHourlyIndex === i;
                     return (
-                      <div 
-                        key={i} 
+                      <div
+                        key={i}
                         style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', height: '100%', minWidth: '28px', position: 'relative' }}
                         onMouseEnter={() => setHoveredHourlyIndex(i)}
                         onMouseLeave={() => setHoveredHourlyIndex(null)}
                       >
-                        <div 
+                        <div
                           style={{
                             position: 'absolute',
                             top: '-36px',
                             left: i < 3 ? '0' : (i > stats.hourly.length - 3 ? 'auto' : '50%'),
                             right: i > stats.hourly.length - 3 ? '0' : 'auto',
-                            transform: i < 3 || i > stats.hourly.length - 3 
-                              ? `translateY(${isHovered ? '0' : '6px'})` 
+                            transform: i < 3 || i > stats.hourly.length - 3
+                              ? `translateY(${isHovered ? '0' : '6px'})`
                               : `translateX(-50%) translateY(${isHovered ? '0' : '6px'})`,
                             opacity: isHovered ? 1 : 0,
                             pointerEvents: 'none',
@@ -1281,14 +1150,14 @@ export default function App() {
                             zIndex: 5
                           }}
                         >
-                          {hourText}｜總 {h.request_count}｜成功 {h.success_count}｜失敗 {h.error_count}
+                          {hourText} | Total {h.request_count} | OK {h.success_count} | Err {h.error_count}
                         </div>
                         <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', position: 'relative' }}>
-                          <div 
-                            style={{ 
-                              width: '100%', 
-                              height: `${barHeightPercent}%`, 
-                              background: 'linear-gradient(to top, rgba(16, 185, 129, 0.22) 0%, rgba(16, 185, 129, 0.82) 100%)', 
+                          <div
+                            style={{
+                              width: '100%',
+                              height: `${barHeightPercent}%`,
+                              background: 'linear-gradient(to top, rgba(16, 185, 129, 0.22) 0%, rgba(16, 185, 129, 0.82) 100%)',
                               borderRadius: '4px 4px 0 0',
                               transition: 'height 450ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms ease, box-shadow 180ms ease, filter 180ms ease',
                               transform: isHovered ? 'translateY(-2px)' : 'translateY(0)',
@@ -1298,17 +1167,16 @@ export default function App() {
                               overflow: 'hidden',
                               cursor: 'default'
                             }}
-                            title={`時間: ${h.hour}\n總請求: ${h.request_count}\n成功: ${h.success_count}\n失敗: ${h.error_count}`}
+                            title={`Time: ${h.hour}\nRequests: ${h.request_count}\nOK: ${h.success_count}\nErr: ${h.error_count}`}
                           >
-                            {/* 錯誤疊圖 */}
-                            <div 
-                              style={{ 
-                                position: 'absolute', 
-                                bottom: 0, 
-                                left: 0, 
-                                width: '100%', 
-                                height: `${errorHeightPercent}%`, 
-                                background: 'rgba(239, 68, 68, 0.62)', 
+                            <div
+                              style={{
+                                position: 'absolute',
+                                bottom: 0,
+                                left: 0,
+                                width: '100%',
+                                height: `${errorHeightPercent}%`,
+                                background: 'rgba(239, 68, 68, 0.62)',
                                 minHeight: h.error_count > 0 ? '2px' : '0',
                                 transition: 'height 450ms cubic-bezier(0.22, 1, 0.36, 1)'
                               }}
@@ -1326,23 +1194,23 @@ export default function App() {
             </>
             )}
 
-            {/* Gateway 即時活動日誌 */}
             {dashboardSubTab === 'logs' && (
+            <ErrorBoundary name="DashboardLogs">
             <div className="glass-panel" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <RefreshCw size={14} className={logs.length > 0 ? 'animate-spin' : ''} style={{ animationDuration: '3s', color: '#10b981' }} />
-                  <span style={{ fontSize: '16px', fontWeight: '700' }}>Gateway 即時轉發日誌（最多 100 筆）</span>
+                  <span style={{ fontSize: '16px', fontWeight: '700' }}>{t('dashboard.logTitle')}</span>
                 </div>
-                <button className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={fetchLogsAndStats}>
-                  手動刷新
+                <button className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={fetchData}>
+                  {t('dashboard.refresh')}
                 </button>
               </div>
 
               <div className="terminal-log-panel">
                 {logs.length === 0 ? (
                   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px' }}>
-                    等待 Cline/OpenCode 連線請求，或目前無轉發日誌。
+                    {t('dashboard.waiting')}
                   </div>
                 ) : (
                   <div
@@ -1371,11 +1239,9 @@ export default function App() {
                           <span className="terminal-log-time">
                             [{formatTaiwanTime(log.timestamp)}]
                           </span>
-
                           <span className="terminal-log-icon">
                             {icon}
                           </span>
-
                           <span
                             className="terminal-log-message"
                             style={{ color: logColor }}
@@ -1389,9 +1255,9 @@ export default function App() {
                 )}
               </div>
             </div>
+            </ErrorBoundary>
             )}
 
-            {/* Token 記數頁籤 */}
             {dashboardSubTab === 'tokens' && (() => {
               const pricing = tokenUsageData.pricing || {};
               const pPrice = Number(pricing.pricePerMillionPromptTokens) || 0;
@@ -1400,7 +1266,6 @@ export default function App() {
               const refCPrice = Number(pricing.refPricePerMillionCompletionTokens) || 0;
               const curSym = pricing.currencySymbol || 'USD';
 
-              // 計算實際花費與商業參考花費
               const totalPromptCost = tokenUsageData.stats.reduce((acc, s) => acc + (s.total_prompt_tokens / 1_000_000) * pPrice, 0);
               const totalCompletionCost = tokenUsageData.stats.reduce((acc, s) => acc + (s.total_completion_tokens / 1_000_000) * cPrice, 0);
               const totalActualCost = totalPromptCost + totalCompletionCost;
@@ -1416,109 +1281,64 @@ export default function App() {
                 return val.toFixed(4);
               };
 
-              const getModelEmoji = (modelId) => {
-                const id = modelId.toLowerCase();
-                if (id.includes('llama')) return '🦙';
-                if (id.includes('gpt')) return '🤖';
-                if (id.includes('mistral') || id.includes('mixtral')) return '🌀';
-                if (id.includes('gemma')) return '💎';
-                if (id.includes('nemotron')) return '🧠';
-                if (id.includes('phi')) return '🔤';
-                if (id.includes('minimax') || id.includes('minimaxai')) return '🔲';
-                if (id.includes('step')) return '🪜';
-                if (id.includes('nvidia')) return '💚';
-                if (id.includes('deepseek')) return '🔍';
-                if (id.includes('qwen')) return '🐼';
-                return '⚡';
-              };
-
-              const parseRequestBody = (bodyStr) => {
-                if (!bodyStr) return null;
-                try {
-                  return JSON.parse(bodyStr);
-                } catch {
-                  return bodyStr;
-                }
-              };
-
-              const handleFieldClick = (logId, fieldTab) => {
-                const isCurrentlyExpanded = expandedTokenLogId === logId;
-                const currentTab = expandedTokenLogTabs[logId];
-                
-                if (isCurrentlyExpanded && currentTab === fieldTab) {
-                  // 收合
-                  setExpandedTokenLogId(null);
-                } else {
-                  // 展開並設定分頁
-                  setExpandedTokenLogId(logId);
-                  setExpandedTokenLogTabs({
-                    ...expandedTokenLogTabs,
-                    [logId]: fieldTab
-                  });
-                }
-              };
-
               return (
             <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '16px', fontWeight: '700' }}>📊 Token 記數與使用量統計</span>
+                <span style={{ fontSize: '16px', fontWeight: '700' }}>📊 {t('dashboard.tokens')}</span>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={fetchTokenUsage}>
-                    重新載入
+                  <button className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={() => api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(() => {})}>
+                    {t('dashboard.refresh')}
                   </button>
                   <button className="btn btn-danger" style={{ padding: '6px 10px', fontSize: '13px' }} onClick={clearTokenUsage}>
-                    清空記錄
+                    Clear
                   </button>
                 </div>
               </div>
 
-              {/* 費用與節省統計卡片 */}
               {tokenUsageData.stats.length > 0 && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
                   <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>實際估計花費 ({curSym})</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Actual cost ({curSym})</div>
                     <div className="token-cost" style={{ fontSize: '18px', fontWeight: '700' }}>{curSym} {formatCost(totalActualCost)}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                       P: {formatCost(totalPromptCost)} | C: {formatCost(totalCompletionCost)}
                     </div>
                   </div>
                   <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>商業 API 參考花費 ({curSym})</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Reference cost ({curSym})</div>
                     <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-secondary)' }}>{curSym} {formatCost(totalRefCost)}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      基於參考單價計算
+                      Based on reference pricing
                     </div>
                   </div>
                   <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid var(--accent-color)', borderRadius: '8px', padding: '12px 14px' }}>
-                    <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '4px', fontWeight: '600' }}>💰 累計節省金額 ({curSym})</div>
+                    <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '4px', fontWeight: '600' }}>💰 Savings ({curSym})</div>
                     <div className="token-cost-total" style={{ fontSize: '20px', fontWeight: '800' }}>{curSym} {formatCost(totalSavings)}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-active)', marginTop: '4px', fontWeight: '500' }}>
-                      使用 NIM 替代付費商業 API 節省
+                      NIM vs commercial API
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* 滾動容器 */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', paddingRight: '4px' }}>
-                {/* 1. 累加統計 */}
                 <div>
-                  <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>模型累計 Token 統計</h3>
+                  <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>Token Stats</h3>
                   {tokenUsageData.stats.length === 0 ? (
                     <div style={{ padding: '16px', textAlign: 'center', background: 'var(--bg-tertiary)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '14px' }}>
-                      尚無統計資料。請先使用 Gateway 發送請求。
+                      {t('dashboard.noData')}
                     </div>
                   ) : (
                     <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                       <table className="token-usage-table">
                         <thead>
                           <tr>
-                            <th>模型 ID</th>
+                            <th>Model ID</th>
                             <th>Prompt Tokens</th>
                             <th>Completion Tokens</th>
                             <th>Total Tokens</th>
-                            <th>調用次數</th>
-                            <th>預估花費 ({curSym})</th>
+                            <th>Calls</th>
+                            <th>Cost ({curSym})</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1546,41 +1366,51 @@ export default function App() {
                   )}
                 </div>
 
-                {/* 2. 即時日誌 */}
                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '350px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px', color: 'var(--text-secondary)' }}>
-                    每次回應 Token 用量明細
+                    Token Usage Details
                     <span style={{ fontSize: '11px', fontWeight: '400', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                      💡 提示：點擊「模型」開模型卡；點擊「Token 數」看 Prompts 對話；點擊「其他」看原始 JSON
+                      💡 Click "Model" for model card; click "Tokens" for metadata; click "Other" for raw JSON
                     </span>
                   </h3>
                   {tokenUsageData.logs.length === 0 ? (
                     <div style={{ padding: '16px', textAlign: 'center', background: 'var(--bg-tertiary)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '14px', flex: 1 }}>
-                      尚無詳細使用記錄。
+                      No usage records yet.
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      {/* 明細標題列 */}
                       <div className="token-log-header">
-                        <span>時間</span>
-                        <span>請求 ID</span>
-                        <span>模型名稱 (點擊看 ModelCard)</span>
+                        <span>Time</span>
+                        <span>Req ID</span>
+                        <span>Model</span>
                         <span>Prompt</span>
                         <span>Complet.</span>
                         <span>Total</span>
-                        <span style={{ textAlign: 'right', paddingRight: '4px' }}>預估花費</span>
+                        <span style={{ textAlign: 'right', paddingRight: '4px' }}>Cost</span>
                       </div>
-                      
+
                       {tokenUsageData.logs.map((log, idx) => {
                         const isExpanded = expandedTokenLogId === log.id;
-                        const activeDetailTab = expandedTokenLogTabs[log.id] || 'prompt';
+                        const activeDetailTab = expandedTokenLogTabs[log.id] || 'metadata';
                         const logCost = (log.prompt_tokens / 1_000_000) * pPrice + (log.completion_tokens / 1_000_000) * cPrice;
-                        const parsedBody = parseRequestBody(log.request_body);
                         const modelInfo = availableModels.find(m => m.id === log.model_id);
+
+                        const handleFieldClick = (fieldTab) => {
+                          const isCurrentlyExpanded = expandedTokenLogId === log.id;
+                          const currentTab = expandedTokenLogTabs[log.id];
+                          if (isCurrentlyExpanded && currentTab === fieldTab) {
+                            setExpandedTokenLogId(null);
+                          } else {
+                            setExpandedTokenLogId(log.id);
+                            setExpandedTokenLogTabs({
+                              ...expandedTokenLogTabs,
+                              [log.id]: fieldTab
+                            });
+                          }
+                        };
 
                         return (
                           <div key={log.id || idx} style={{ marginBottom: '2px' }}>
-                            {/* 表格資料行 */}
                             <div
                               className={isExpanded ? 'token-row-expanded' : ''}
                               style={{
@@ -1597,81 +1427,77 @@ export default function App() {
                                 transition: 'background 150ms ease'
                               }}
                             >
-                              <span onClick={() => handleFieldClick(log.id, 'raw')} style={{ color: 'var(--text-muted)' }}>
+                              <span onClick={() => handleFieldClick('raw')} style={{ color: 'var(--text-muted)' }}>
                                 {formatTaiwanTime(log.timestamp)}
                               </span>
-                              <span onClick={() => handleFieldClick(log.id, 'raw')} style={{ fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: 'var(--text-muted)' }}>
+                              <span onClick={() => handleFieldClick('raw')} style={{ fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: 'var(--text-muted)' }}>
                                 #{log.request_id || 'test'}
                               </span>
-                              <span onClick={() => handleFieldClick(log.id, 'model')} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: '600' }} title="點擊檢視模型 Model Card">
+                              <span onClick={() => handleFieldClick('model')} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: '600' }} title="Click for Model Card">
                                 <span>{getModelEmoji(log.model_id)}</span>
                                 <span style={{ fontFamily: 'ui-monospace, monospace', textDecoration: 'underline', textDecorationStyle: 'dotted' }}>
                                   {log.model_id.split('/').pop()}
                                 </span>
                               </span>
-                              <span onClick={() => handleFieldClick(log.id, 'prompt')} style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="點擊檢視輸入提示對話內容">
+                              <span onClick={() => handleFieldClick('metadata')} style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="Click for metadata">
                                 {log.prompt_tokens.toLocaleString()}
                               </span>
-                              <span onClick={() => handleFieldClick(log.id, 'prompt')} style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="點擊檢視輸入提示對話內容">
+                              <span onClick={() => handleFieldClick('metadata')} style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="Click for metadata">
                                 {log.completion_tokens.toLocaleString()}
                               </span>
-                              <span onClick={() => handleFieldClick(log.id, 'prompt')} style={{ fontWeight: '700', color: 'var(--accent-color)', textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="點擊檢視輸入提示對話內容">
+                              <span onClick={() => handleFieldClick('metadata')} style={{ fontWeight: '700', color: 'var(--accent-color)', textDecoration: 'underline', textDecorationStyle: 'dotted' }} title="Click for metadata">
                                 {log.total_tokens.toLocaleString()}
                               </span>
-                              <span onClick={() => handleFieldClick(log.id, 'raw')} className="token-cost" style={{ textAlign: 'right', fontSize: '12px' }}>
+                              <span onClick={() => handleFieldClick('raw')} className="token-cost" style={{ textAlign: 'right', fontSize: '12px' }}>
                                 {formatCost(logCost)}
                               </span>
                             </div>
 
-                            {/* 展開詳情面板 */}
                             {isExpanded && (
                               <div className="token-detail-panel" style={{ padding: '16px' }}>
-                                {/* 頁籤切換 */}
                                 <div className="token-detail-tabs">
-                                  <div 
-                                    className={`token-detail-tab ${activeDetailTab === 'prompt' ? 'active' : ''}`}
-                                    onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'prompt' })}
+                                  <div
+                                    className={`token-detail-tab ${activeDetailTab === 'metadata' ? 'active' : ''}`}
+                                    onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'metadata' })}
                                   >
-                                    💬 對話內容 (Prompt)
+                                    📋 Metadata
                                   </div>
-                                  <div 
+                                  <div
                                     className={`token-detail-tab ${activeDetailTab === 'model' ? 'active' : ''}`}
                                     onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'model' })}
                                   >
                                     🎴 Model Card
                                   </div>
-                                  <div 
+                                  <div
                                     className={`token-detail-tab ${activeDetailTab === 'raw' ? 'active' : ''}`}
                                     onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'raw' })}
                                   >
-                                    ⚙️ 原始請求 (Raw JSON)
+                                    ⚙️ Raw JSON
                                   </div>
                                 </div>
 
-                                {/* 頁籤 1: 對話內容 */}
-                                {activeDetailTab === 'prompt' && (() => {
-                                  const msgs = parsedBody?.messages;
-                                  return (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                      {msgs && Array.isArray(msgs) ? (
-                                        <div className="chat-bubble-container">
-                                          {msgs.map((m, mIdx) => (
-                                            <div key={mIdx} className={`chat-bubble ${m.role}`}>
-                                              <div className="chat-bubble-role">{m.role}</div>
-                                              <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      ) : (
-                                        <pre style={{ padding: '10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
-                                          {parsedBody ? (typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody, null, 2)) : '無請求內容'}
-                                        </pre>
-                                      )}
-                                    </div>
-                                  );
-                                })()}
+                                {activeDetailTab === 'metadata' && (
+                                  <pre style={{
+                                    background: 'var(--bg-primary)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '8px',
+                                    padding: '12px',
+                                    fontSize: '12px',
+                                    overflow: 'auto',
+                                    maxHeight: '300px'
+                                  }}>
+                                    {JSON.stringify({
+                                      model_id: log.model_id,
+                                      prompt_tokens: log.prompt_tokens,
+                                      completion_tokens: log.completion_tokens,
+                                      total_tokens: log.total_tokens,
+                                      request_id: log.request_id,
+                                      timestamp: log.timestamp,
+                                      metadata: log.metadata || null
+                                    }, null, 2)}
+                                  </pre>
+                                )}
 
-                                {/* 頁籤 2: Model Card */}
                                 {activeDetailTab === 'model' && (
                                   <div className="token-model-card">
                                     <div className="token-model-card-icon" style={{ background: 'rgba(16, 185, 129, 0.12)' }}>
@@ -1685,14 +1511,13 @@ export default function App() {
                                         {log.model_id}
                                       </div>
                                       <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '12px', flexWrap: 'wrap' }}>
-                                        <span style={{ color: 'var(--text-secondary)' }}>NIM 實際價格: Prompt <strong>${pPrice}</strong> / Completion <strong>${cPrice}</strong> (每百萬)</span>
-                                        <span style={{ color: 'var(--text-muted)' }}>對比參考價格: Prompt <strong>${refPPrice}</strong> / Completion <strong>${refCPrice}</strong> (每百萬)</span>
+                                        <span style={{ color: 'var(--text-secondary)' }}>NIM: Prompt <strong>${pPrice}</strong> / Completion <strong>${cPrice}</strong> (per M)</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>Ref: Prompt <strong>${refPPrice}</strong> / Completion <strong>${refCPrice}</strong> (per M)</span>
                                       </div>
                                     </div>
                                   </div>
                                 )}
 
-                                {/* 頁籤 3: 原始請求 */}
                                 {activeDetailTab === 'raw' && (
                                   <div>
                                     <pre style={{
@@ -1704,7 +1529,7 @@ export default function App() {
                                       overflow: 'auto',
                                       maxHeight: '300px'
                                     }}>
-                                      {JSON.stringify(parsedBody || { raw: log.request_body }, null, 2)}
+                                      {JSON.stringify(log, null, 2)}
                                     </pre>
                                   </div>
                                 )}
@@ -1723,22 +1548,22 @@ export default function App() {
           </div>
         )}
 
-        {/* API Keys 管理頁面 */}
         {activeTab === 'keys' && (
+          <ErrorBoundary name="KeysPanel">
           <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA NIM API Keys 管理池</h2>
-                <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>對應 patcher-main，在 429 時自動按序冷卻並切換 Key。</p>
+                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>{t('keys.title')}</h2>
+                <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>{t('keys.description')}</p>
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button 
-                  className="btn btn-secondary" 
+                <button
+                  className="btn btn-secondary"
                   onClick={handleTestKeys}
                   disabled={isTestingKeys || keys.length === 0}
                 >
                   <RefreshCw size={14} className={isTestingKeys ? 'animate-spin' : ''} />
-                  <span>{isTestingKeys ? '測試中...' : '一鍵連線測試所有 Key'}</span>
+                  <span>{isTestingKeys ? t('keys.testing') : t('keys.testAll')}</span>
                 </button>
               </div>
             </div>
@@ -1754,66 +1579,64 @@ export default function App() {
               </div>
             )}
 
-            {/* 新增 Key 表單 */}
             <form onSubmit={handleAddKey} style={{ display: 'flex', gap: '10px' }}>
-              <input 
-                type="password" 
-                placeholder="貼入 nvapi- 開頭的 NVIDIA NIM API Key" 
-                className="input" 
+              <input
+                type="password"
+                placeholder={t('keys.addPlaceholder')}
+                className="input"
                 style={{ flex: 1 }}
                 value={newKey}
                 onChange={(e) => setNewKey(e.target.value)}
               />
               <button type="submit" className="btn btn-primary">
                 <Plus size={16} />
-                <span>新增金鑰</span>
+                <span>{t('keys.addButton')}</span>
               </button>
             </form>
 
-            {/* Keys 列表表格 */}
             <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '15px', textAlign: 'left' }}>
                 <thead>
                   <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--border-color)' }}>
                     <th style={{ padding: '12px' }}>API Key</th>
-                    <th style={{ padding: '12px' }}>目前狀態</th>
-                    <th style={{ padding: '12px' }}>連續失敗</th>
-                    <th style={{ padding: '12px' }}>總錯誤數</th>
-                    <th style={{ padding: '12px' }}>最後使用時間</th>
-                    <th style={{ padding: '12px' }}>錯誤原因 / 提示</th>
-                    <th style={{ padding: '12px', textAlign: 'center' }}>操作</th>
+                    <th style={{ padding: '12px' }}>{t('keys.status')}</th>
+                    <th style={{ padding: '12px' }}>{t('keys.consecutiveFails')}</th>
+                    <th style={{ padding: '12px' }}>{t('keys.totalErrors')}</th>
+                    <th style={{ padding: '12px' }}>{t('keys.lastUsed')}</th>
+                    <th style={{ padding: '12px' }}>{t('keys.errorReason')}</th>
+                    <th style={{ padding: '12px', textAlign: 'center' }}>{t('keys.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {keys.length === 0 ? (
                     <tr>
                       <td colSpan="7" style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                        目前沒有金鑰，請新增一把金鑰以啟動服務！
+                        {t('keys.noKeys')}
                       </td>
                     </tr>
                   ) : (
                     keys.map((k) => {
                       let badgeClass = 'badge-active';
-                      let statusText = '健康 (Active)';
+                      let statusText = t('keys.active');
                       if (k.status === 'cooldown') {
                         const cooldownUntilMs = k.cooldown_until ? new Date(k.cooldown_until).getTime() : 0;
                         const secLeft = Math.max(0, Math.ceil((cooldownUntilMs - currentTimeMs) / 1000));
                         if (secLeft > 0) {
                           badgeClass = 'badge-cooldown';
-                          statusText = `冷卻中 (${secLeft}s)`;
+                          statusText = t('keys.cooldown', { sec: secLeft });
                         } else {
                           badgeClass = 'badge-active';
-                          statusText = '健康 (Active)';
+                          statusText = t('keys.active');
                         }
                       } else if (k.status === 'inactive') {
                         badgeClass = 'badge-inactive';
-                        statusText = 'Revoked / 損壞';
+                        statusText = t('keys.inactive');
                       }
 
                       return (
                         <tr key={k.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                           <td style={{ padding: '12px', fontFamily: 'monospace' }}>
-                            nvapi-...{k.key_value.substring(k.key_value.length - 12)}
+                            {k.masked_key || `nvapi-****...${k.key_suffix || ''}`}
                           </td>
                           <td style={{ padding: '12px' }}>
                             <span className={`badge ${badgeClass}`}>{statusText}</span>
@@ -1825,7 +1648,7 @@ export default function App() {
                             {k.total_errors}
                           </td>
                           <td style={{ padding: '12px', color: 'var(--text-secondary)' }}>
-                            {k.last_used_at ? formatTaiwanTime(k.last_used_at) : '未使用'}
+                            {k.last_used_at ? formatTaiwanTime(k.last_used_at) : t('keys.unused')}
                           </td>
                           <td style={{ padding: '12px', color: '#f87171', fontSize: '13px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.last_error_message}>
                             {k.last_error_message || '--'}
@@ -1843,20 +1666,21 @@ export default function App() {
               </table>
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
-        {/* 模型優先排序頁面 */}
         {activeTab === 'models' && (
+          <ErrorBoundary name="ModelsPanel">
           <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA Build Free Endpoint 模型順位</h2>
+                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>{t('models.title')}</h2>
                 <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  同步來源改為 build.nvidia.com 的 Free Endpoint 篩選頁，不再把 /v1/models 當成可用免費模型清單；可保存三組模型順位並一鍵切換。
+                  {t('models.description')}
                 </p>
                 {lastSyncTime && (
                   <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '600', marginTop: '6px', display: 'inline-block' }}>
-                    🔄 最後更新時間：{formatSyncTime(lastSyncTime)}｜{formatModelSyncSummary({
+                    🔄 {t('models.lastSync')}: {formatSyncTime(lastSyncTime)} | {formatModelSyncSummary({
                       parsedCount: lastParsedModelCount ?? availableModels.length,
                       savedCount: lastSavedModelCount ?? availableModels.length,
                       expectedCount: expectedModelCount,
@@ -1875,36 +1699,35 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <button 
-                className="btn btn-secondary" 
+              <button
+                className="btn btn-secondary"
                 onClick={handleSyncModels}
                 disabled={isSyncingModels}
               >
                 <RefreshCw size={14} className={isSyncingModels ? 'animate-spin' : ''} />
-                <span>{isSyncingModels ? '正在同步 NVIDIA Build Free Endpoint...' : '同步 Build Free Endpoint 模型'}</span>
+                <span>{isSyncingModels ? t('models.syncing') : t('models.syncButton')}</span>
               </button>
             </div>
 
             <div style={{ flex: 1, display: 'flex', gap: '20px', overflow: 'hidden' }}>
-              {/* 左側：當前配置優先級 (Priority List) */}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>⚙️ 當前模型順位｜第 {activeModelGroup} 組 (1st &rarr; 2nd &rarr; 3rd)</h3>
+                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>⚙️ {t('models.currentOrder', { group: activeModelGroup })}</h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', minWidth: 0 }}>
                   {[1, 2, 3].map((groupId) => {
                     const groupInfo = modelGroups.find(g => g.group_id === groupId) || { count: groupId === activeModelGroup ? models.length : 0, primary_model: null };
-                    const primaryText = groupInfo.primary_model ? groupInfo.primary_model.split('/').pop() : '尚未設定';
+                    const primaryText = groupInfo.primary_model ? groupInfo.primary_model.split('/').pop() : '--';
                     return (
                       <button
                         key={groupId}
                         className={`btn ${activeModelGroup === groupId ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ padding: '8px 10px', fontSize: '13px', flexDirection: 'column', alignItems: 'flex-start', gap: '4px', minWidth: 0, overflow: 'hidden' }}
                         onClick={() => handleSwitchModelGroup(groupId)}
-                        title={`切換到第 ${groupId} 組模型順位`}
+                        title={t('models.groupLabel', { group: groupId })}
                       >
-                        <span style={{ fontWeight: '800' }}>第 {groupId} 組 {activeModelGroup === groupId ? '使用中' : '可切換'}</span>
+                        <span style={{ fontWeight: '800' }}>{t('models.groupLabel', { group: groupId })} {activeModelGroup === groupId ? t('models.activeGroup') : t('models.switchable')}</span>
                         <span className="model-group-summary-line">
-                          <span className="model-group-count">{groupInfo.count || 0} 個模型｜</span>
+                          <span className="model-group-count">{groupInfo.count || 0} | </span>
                           <span className="model-group-marquee" title={primaryText}>
                             <span className="model-group-marquee-track">
                               <span>{primaryText}</span>
@@ -1917,7 +1740,7 @@ export default function App() {
                     );
                   })}
                 </div>
-                
+
                 <div
                   className={`priority-drop-zone ${isPriorityDropActive ? 'is-drag-over' : ''}`}
                   style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}
@@ -1927,18 +1750,18 @@ export default function App() {
                 >
                   {models.length === 0 ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px' }}>
-                      尚未配置任何模型。請從右側可用列表中點擊「新增」或直接拖曳模型到這裡。
+                      {t('models.noModels')}
                     </div>
                   ) : (
                     models.map((m, index) => (
-                      <div 
-                        key={m.id} 
-                        className="glass-panel" 
-                        style={{ 
-                          padding: '12px 16px', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'space-between', 
+                      <div
+                        key={m.id}
+                        className="glass-panel"
+                        style={{
+                          padding: '12px 16px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
                           border: '1px solid var(--border-color)',
                           borderLeft: `5px solid ${index === 0 ? 'var(--status-active)' : 'var(--status-cooldown)'}`,
                           borderRadius: '8px',
@@ -1951,30 +1774,46 @@ export default function App() {
                         draggable
                         onDragStart={(e) => {
                           setDraggedModelIndex(index);
+                          localModelOrderRef.current = models.map(m2 => m2.model_id);
                           e.dataTransfer.effectAllowed = 'move';
                         }}
                         onDragOver={(e) => {
                           e.preventDefault();
                           if (draggedModelIndex === null || draggedModelIndex === index) return;
-                          // 即時交換
-                          const updated = [...models.map(m => m.model_id)];
+                          const currentOrder = localModelOrderRef.current || models.map(m2 => m2.model_id);
+                          const updated = [...currentOrder];
                           const temp = updated[draggedModelIndex];
                           updated[draggedModelIndex] = updated[index];
                           updated[index] = temp;
-                          saveModelPriorities(updated);
+                          localModelOrderRef.current = updated;
+                          const reorderedModels = updated.map((id, i) => ({ ...models.find(m2 => m2.model_id === id) || { model_id: id }, priority: i + 1 }));
+                          setModels(reorderedModels);
                           setDraggedModelIndex(index);
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
                           setDraggedModelIndex(null);
                         }}
-                        onDragEnd={() => setDraggedModelIndex(null)}
-                        title="可拖曳排序"
+                        onDragEnd={async () => {
+                          setDraggedModelIndex(null);
+                          const finalOrder = localModelOrderRef.current;
+                          if (finalOrder) {
+                            const previousOrder = models.map(m2 => m2.model_id);
+                            try {
+                              await saveModelPriorities(finalOrder);
+                            } catch (err) {
+                              const restoredModels = previousOrder.map((id, i) => ({ ...models.find(m2 => m2.model_id === id) || { model_id: id }, priority: i + 1 }));
+                              setModels(restoredModels);
+                            }
+                            localModelOrderRef.current = null;
+                          }
+                        }}
+                        title="Drag to reorder"
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', maxWidth: '75%', minWidth: 0 }}>
-                          <span style={{ 
-                            fontSize: '11px', 
-                            padding: '3px 8px', 
+                          <span style={{
+                            fontSize: '11px',
+                            padding: '3px 8px',
                             borderRadius: '4px',
                             background: index === 0 ? 'var(--bg-active)' : 'var(--bg-cooldown)',
                             color: index === 0 ? 'var(--text-active)' : 'var(--text-cooldown)',
@@ -1982,7 +1821,7 @@ export default function App() {
                             fontWeight: 'bold',
                             whiteSpace: 'nowrap'
                           }}>
-                            #{m.priority} {index === 0 ? '主要' : '備用'}
+                            #{m.priority} {index === 0 ? t('models.primary') : t('models.backup')}
                           </span>
                           <span style={{ fontSize: '14px', fontWeight: '600', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{m.model_id}</span>
                         </div>
@@ -2003,29 +1842,27 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 右側：可用的 NVIDIA 模型庫 (Available Models) */}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>🌐 NVIDIA Build Free Endpoint 模型庫</h3>
-                
-                {/* 搜尋與分類篩選 */}
+                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>🌐 {t('models.availableModels')}</h3>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <input 
-                    type="text" 
-                    placeholder="搜尋模型名稱或 ID..." 
-                    className="input" 
+                  <input
+                    type="text"
+                    placeholder={t('models.searchPlaceholder')}
+                    className="input"
                     style={{ width: '100%', padding: '8px 12px', fontSize: '15px' }}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     {['ALL', 'Llama', 'GPT', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Nvidia', 'Other'].map(cat => (
-                      <button 
+                      <button
                         key={cat}
                         className={`btn ${selectedCategory === cat ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ padding: '4px 10px', fontSize: '13px', borderRadius: '6px' }}
                         onClick={() => setSelectedCategory(cat)}
                       >
-                        {cat === 'ALL' ? '全部' : cat}
+                        {cat === 'ALL' ? 'All' : cat}
                       </button>
                     ))}
                   </div>
@@ -2034,28 +1871,13 @@ export default function App() {
                 <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {availableModels.length === 0 ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px', textAlign: 'center', padding: '20px' }}>
-                      目前沒有同步下來的模型。請點擊右上方「同步」按鈕，系統會從 NVIDIA Build Free Endpoint 篩選頁抓取模型。
+                      {t('models.noSyncData')}
                     </div>
                   ) : (
                     (() => {
-                      const getModelCategory = (modelId) => {
-                        const id = modelId.toLowerCase();
-                        if (id.includes('llama')) return 'Llama';
-                        if (id.includes('gpt')) return 'GPT';
-                        if (id.includes('mistral') || id.includes('mixtral')) return 'Mistral';
-                        if (id.includes('gemma')) return 'Gemma';
-                        if (id.includes('nemotron')) return 'Nemotron';
-                        if (id.includes('phi')) return 'Phi';
-                        if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
-                        if (id.includes('step')) return 'Step';
-                        if (id.includes('nvidia')) return 'Nvidia';
-                        return 'Other';
-                      };
-                      
                       const searchTerms = searchTerm.trim().toLowerCase().split(/\s+/).filter(Boolean);
                       const filtered = availableModels.filter(am => {
-                        // OR 邏輯：只要有任何一個搜尋詞匹配即可
-                        const matchesSearch = searchTerms.length === 0 || searchTerms.some(term => 
+                        const matchesSearch = searchTerms.length === 0 || searchTerms.some(term =>
                           am.name.toLowerCase().includes(term) || am.id.toLowerCase().includes(term)
                         );
                         const matchesCategory = selectedCategory === 'ALL' || getModelCategory(am.id) === selectedCategory;
@@ -2065,7 +1887,7 @@ export default function App() {
                       if (filtered.length === 0) {
                         return (
                           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px', textAlign: 'center', padding: '20px' }}>
-                            沒有符合篩選條件的模型。
+                            {t('models.noCategoryMatch')}
                           </div>
                         );
                       }
@@ -2079,15 +1901,15 @@ export default function App() {
                             draggable={!isAdded}
                             onDragStart={(e) => handleAvailableModelDragStart(e, am.id)}
                             onDragEnd={handleAvailableModelDragEnd}
-                            title={isAdded ? '此模型已在目前順位組中' : '可拖曳到左側模型順位區新增'}
-                            style={{ 
-                              display: 'flex', 
-                              alignItems: 'center', 
-                              justifyContent: 'space-between', 
-                              padding: '12px 14px', 
-                              background: isAdded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)', 
-                              border: '1px solid var(--border-color)', 
-                              borderRadius: '8px', 
+                            title={isAdded ? 'Already in priority list' : 'Drag to priority list'}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '12px 14px',
+                              background: isAdded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '8px',
                               opacity: draggedAvailableModelId === am.id ? 0.55 : 1,
                               boxShadow: 'var(--card-shadow)',
                               marginBottom: '2px'
@@ -2097,13 +1919,13 @@ export default function App() {
                               <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>{am.name}</span>
                               <span style={{ fontSize: '11px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{am.id}</span>
                             </div>
-                            <button 
-                              className={isAdded ? 'btn btn-secondary' : 'btn btn-primary'} 
+                            <button
+                              className={isAdded ? 'btn btn-secondary' : 'btn btn-primary'}
                               style={{ padding: '6px 12px', fontSize: '13px', opacity: isAdded ? 0.7 : 1 }}
                               disabled={isAdded}
                               onClick={() => !isAdded && handleAddModelToPriority(am.id)}
                             >
-                              {isAdded ? '已加入' : '新增'}
+                              {isAdded ? t('models.added') : t('models.add')}
                             </button>
                           </div>
                         );
@@ -2114,148 +1936,58 @@ export default function App() {
               </div>
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
-        {/* 規範快捷複製頁面 */}
         {activeTab === 'rules' && (
-          <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>Editor Rules & 開發規範快捷鍵</h2>
-                <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>一鍵複製高品質的 Agent/Cline 規則與 Commit 規範到您的編輯器中。</p>
-              </div>
-            </div>
-
-            <div style={{ flex: 1, display: 'flex', gap: '20px', overflow: 'hidden' }}>
-              {/* 左側：規則庫卡片列表 */}
-              <div style={{ flex: 1.5, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', paddingRight: '4px' }}>
-                {rules.map((r) => (
-                  <div key={r.id} className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span className={`badge ${r.is_preset ? 'badge-active' : 'badge-cooldown'}`}>
-                          {r.is_preset ? '系統內建' : '自訂規範'}
-                        </span>
-                        <h3 style={{ fontSize: '16px', fontWeight: '700' }}>{r.title}</h3>
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button 
-                          className="btn btn-primary" 
-                          style={{ padding: '6px 12px', fontSize: '14px' }}
-                          onClick={() => copyToClipboard(r.content, r.id)}
-                        >
-                          {copiedId === r.id ? <Check size={12} /> : <Copy size={12} />}
-                          <span>{copiedId === r.id ? '已複製！' : '一鍵複製'}</span>
-                        </button>
-                        <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => handleDeleteRule(r.id)}>
-                          <Trash size={12} />
-                        </button>
-                      </div>
-                    </div>
-                    <div 
-                      className="markdown-body"
-                      style={{ 
-                        background: 'rgba(0,0,0,0.3)', 
-                        padding: '12px', 
-                        borderRadius: '6px', 
-                        fontSize: '14px', 
-                        border: '1px solid rgba(255,255,255,0.03)',
-                        color: 'var(--text-secondary)',
-                        lineHeight: '1.6',
-                        maxHeight: '200px',
-                        overflowY: 'auto',
-                        whiteSpace: 'normal'
-                      }}
-                    >
-                      <MarkdownContent>{r.content}</MarkdownContent>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* 右側：新增自訂規則 */}
-              <div className="glass-panel" style={{ flex: 1, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', height: 'fit-content' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: '700' }}>➕ 建立自訂開發規範</h3>
-                <form onSubmit={handleAddRule} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>規範標題</label>
-                    <input 
-                      type="text" 
-                      placeholder="例如: Vue 團隊命名規範" 
-                      className="input"
-                      value={newRuleTitle}
-                      onChange={(e) => setNewRuleTitle(e.target.value)}
-                    />
-                  </div>
-                  
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>規則內文 (會複製進剪貼簿)</label>
-                    <textarea 
-                      placeholder="貼入您平常要丟給 AI Agent / Cline 的約束提示詞..." 
-                      className="input" 
-                      rows="10"
-                      style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: '14px' }}
-                      value={newRuleContent}
-                      onChange={(e) => setNewRuleContent(e.target.value)}
-                    />
-                  </div>
-
-                  <button type="submit" className="btn btn-primary" style={{ marginTop: '4px' }}>
-                    <Plus size={14} />
-                    <span>新增至快捷面板</span>
-                  </button>
-                </form>
-              </div>
-            </div>
-          </div>
+          <ErrorBoundary name="RulesPanel" fallbackText="Rules panel error">
+            <RulesPanel
+              rules={rules}
+              newRuleTitle={newRuleTitle}
+              newRuleContent={newRuleContent}
+              setNewRuleTitle={setNewRuleTitle}
+              setNewRuleContent={setNewRuleContent}
+              onAddRule={handleAddRule}
+              onDeleteRule={handleDeleteRule}
+              onUpdateRule={handleUpdateRule}
+              onCopy={copyToClipboard}
+              copiedId={copiedId}
+            />
+          </ErrorBoundary>
         )}
 
-        {/* 模型測試 Playground 頁面 */}
         {activeTab === 'playground' && (
+          <ErrorBoundary name="Playground" fallbackText="Playground error">
           <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA NIM 模型測試 Playground</h2>
-                <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>可以直接選擇任一已同步的 NVIDIA 模型，快速進行對話發送與串流回應測試。</p>
+                <h2 style={{ fontSize: '20px', fontWeight: '800', fontFamily: 'Outfit' }}>NVIDIA NIM Playground</h2>
+                <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginTop: '4px' }}>Test any synced NVIDIA model with streaming chat.</p>
               </div>
-              <button 
-                className="btn btn-secondary" 
+              <button
+                className="btn btn-secondary"
                 style={{ fontSize: '14px', padding: '8px 16px' }}
                 onClick={() => setChatHistory([])}
                 disabled={chatHistory.length === 0}
               >
-                清空對話歷程
+                Clear Chat
               </button>
             </div>
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
-              {/* 模型選擇與狀態 */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-secondary)' }}>選擇測試模型:</span>
-                <select 
-                  className="input" 
+                <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-secondary)' }}>Select model:</span>
+                <select
+                  className="input"
                   style={{ minWidth: '320px', fontSize: '15px', padding: '8px 12px', background: 'var(--bg-tertiary)', color: 'var(--text-primary)', cursor: 'pointer' }}
                   value={selectedTestModel}
                   onChange={(e) => setSelectedTestModel(e.target.value)}
                   disabled={isChatting}
                 >
                   {availableModels.length === 0 ? (
-                    <option value="">(無可用模型，請先點擊「同步」)</option>
+                    <option value="">(No models available - sync first)</option>
                   ) : (
                     (() => {
-                      const getModelCategory = (modelId) => {
-                        const id = modelId.toLowerCase();
-                        if (id.includes('llama')) return 'Llama';
-                        if (id.includes('mistral') || id.includes('mixtral')) return 'Mistral';
-                        if (id.includes('gpt')) return 'GPT';
-                        if (id.includes('gemma')) return 'Gemma';
-                        if (id.includes('nemotron')) return 'Nemotron';
-                        if (id.includes('phi')) return 'Phi';
-                        if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
-                        if (id.includes('step')) return 'Step';
-                        if (id.includes('nvidia')) return 'Nvidia';
-                        return 'Other';
-                      };
                       const grouped = availableModels.reduce((acc, m) => {
                         const cat = getModelCategory(m.id);
                         if (!acc[cat]) acc[cat] = [];
@@ -2283,18 +2015,17 @@ export default function App() {
                 {isChatting && (
                   <span style={{ fontSize: '13px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <RefreshCw size={14} className="animate-spin" />
-                    模型正在串流回應中...
+                    Streaming...
                   </span>
                 )}
               </div>
 
-              {/* 聊天對話區域 */}
-              <div style={{ 
-                flex: 1, 
-                overflowY: 'auto', 
-                background: 'rgba(0, 0, 0, 0.25)', 
-                borderRadius: '10px', 
-                border: '1px solid var(--border-color)', 
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                background: 'rgba(0, 0, 0, 0.25)',
+                borderRadius: '10px',
+                border: '1px solid var(--border-color)',
                 padding: '20px',
                 display: 'flex',
                 flexDirection: 'column',
@@ -2303,22 +2034,22 @@ export default function App() {
                 {chatHistory.length === 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', gap: '12px' }}>
                     <Cpu size={48} style={{ color: 'var(--border-color)' }} />
-                    <span style={{ fontSize: '15px' }}>請在下方輸入訊息以測試選取的模型。所有測試將直接向 Gateway 發送。</span>
+                    <span style={{ fontSize: '15px' }}>Enter a message below to test the selected model.</span>
                   </div>
                 ) : (
                   chatHistory.map((msg, index) => {
                     const isUser = msg.role === 'user';
                     return (
-                      <div 
-                        key={index} 
-                        style={{ 
-                          display: 'flex', 
+                      <div
+                        key={index}
+                        style={{
+                          display: 'flex',
                           justifyContent: isUser ? 'flex-end' : 'flex-start',
                           width: '100%'
                         }}
                       >
-                        <div style={{ 
-                          maxWidth: '75%', 
+                        <div style={{
+                          maxWidth: '75%',
                           background: isUser ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'rgba(255,255,255,0.04)',
                           border: isUser ? 'none' : '1px solid var(--border-color)',
                           color: 'white',
@@ -2332,7 +2063,7 @@ export default function App() {
                           userSelect: 'text'
                         }}>
                           <span style={{ fontSize: '12px', fontWeight: '700', opacity: 0.7, display: 'block', marginBottom: '6px' }}>
-                            {isUser ? '👤 使用者 (User)' : `🤖 NIM 助手 (${selectedTestModel.split('/').pop()})`}
+                            {isUser ? '👤 User' : `🤖 NIM (${selectedTestModel.split('/').pop()})`}
                           </span>
                           {isUser ? (
                             <div style={{ whiteSpace: 'pre-wrap' }}>
@@ -2352,35 +2083,34 @@ export default function App() {
                 <div ref={chatEndRef} />
               </div>
 
-              {/* 輸入發送區域 */}
               <form onSubmit={handleSendTestMessage} style={{ display: 'flex', gap: '10px' }}>
-                <input 
-                  type="text" 
-                  placeholder={selectedTestModel ? "請輸入對話訊息..." : "請先同步模型以進行測試"} 
-                  className="input" 
+                <input
+                  type="text"
+                  placeholder={selectedTestModel ? "Enter message..." : "Sync models first"}
+                  className="input"
                   style={{ flex: 1, fontSize: '15px', padding: '12px 16px' }}
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   disabled={!selectedTestModel || isChatting}
                 />
-                <button 
-                  type="submit" 
-                  className="btn btn-primary" 
+                <button
+                  type="submit"
+                  className="btn btn-primary"
                   style={{ padding: '0 24px', fontSize: '15px' }}
                   disabled={!selectedTestModel || !chatInput.trim() || isChatting}
                 >
-                  發送訊息
+                  Send
                 </button>
               </form>
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
       </div>
 
-      {/* 系統詳細設定對話框 (Modal Card) */}
       {isSettingsModalOpen && tempSettings && (
-        <div 
+        <div
           onClick={() => setIsSettingsModalOpen(false)}
           style={{
             position: 'fixed',
@@ -2393,8 +2123,8 @@ export default function App() {
             backdropFilter: 'blur(2px)'
           }}
         >
-          <div 
-            className="glass-panel" 
+          <div
+            className="glass-panel"
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '500px',
@@ -2410,7 +2140,7 @@ export default function App() {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: '800', fontFamily: 'Outfit' }}>⚙️ 系統詳細設定</h3>
+              <h3 style={{ fontSize: '18px', fontWeight: '800', fontFamily: 'Outfit' }}>⚙️ {t('settings.title')}</h3>
               <button className="btn btn-secondary" style={{ padding: '4px 8px' }} onClick={() => setIsSettingsModalOpen(false)}>
                 <X size={16} />
               </button>
@@ -2418,7 +2148,7 @@ export default function App() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>NVIDIA API Base URL</label>
+                <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.nvidiaUrl')}</label>
                 <input
                   className="input"
                   type="text"
@@ -2429,7 +2159,7 @@ export default function App() {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>Gateway 埠號 (PORT)</label>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.gatewayPort')}</label>
                   <input
                     className="input"
                     type="number"
@@ -2438,7 +2168,7 @@ export default function App() {
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>最大重試輪數</label>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.maxRounds')}</label>
                   <input
                     className="input"
                     type="number"
@@ -2450,7 +2180,7 @@ export default function App() {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>每輪重試等待 (秒 / S)</label>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.roundDelay')}</label>
                   <input
                     className="input"
                     type="number"
@@ -2459,7 +2189,7 @@ export default function App() {
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>模型請求逾時 (秒 / S)</label>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.requestTimeout')}</label>
                   <input
                     className="input"
                     type="number"
@@ -2471,7 +2201,7 @@ export default function App() {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>串流讀取逾時 (秒 / S)</label>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.streamTimeout')}</label>
                   <input
                     className="input"
                     type="number"
@@ -2480,7 +2210,7 @@ export default function App() {
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>模型測試逾時 (秒 / S)</label>
+                  <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.testTimeout')}</label>
                   <input
                     className="input"
                     type="number"
@@ -2489,27 +2219,27 @@ export default function App() {
                   />
                 </div>
               </div>
-              
+
               <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontWeight: '700', color: 'var(--accent-color)', fontSize: '15px' }}>
-                💰 NVIDIA NIM 實際單價 (每百萬 tokens)
+                💰 {t('settings.pricing')}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Prompt 實際價</label>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.promptPrice')}</label>
                   <input className="input" type="number" step="0.01"
                     value={tempSettings.PRICE_PER_MILLION_PROMPT_TOKENS || 0}
                     onChange={(e) => setTempSettings({ ...tempSettings, PRICE_PER_MILLION_PROMPT_TOKENS: Number(e.target.value) })}
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Completion 實際價</label>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.completionPrice')}</label>
                   <input className="input" type="number" step="0.01"
                     value={tempSettings.PRICE_PER_MILLION_COMPLETION_TOKENS || 0}
                     onChange={(e) => setTempSettings({ ...tempSettings, PRICE_PER_MILLION_COMPLETION_TOKENS: Number(e.target.value) })}
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>貨幣單位</label>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.currency')}</label>
                   <input className="input" type="text"
                     value={tempSettings.CURRENCY_SYMBOL || 'USD'}
                     onChange={(e) => setTempSettings({ ...tempSettings, CURRENCY_SYMBOL: e.target.value })}
@@ -2518,50 +2248,41 @@ export default function App() {
               </div>
 
               <div style={{ marginTop: '8px', fontWeight: '700', color: 'var(--text-secondary)', fontSize: '14px' }}>
-                ⚖️ 對照商業 API 參考單價 (如 GPT-4o 類別)
+                ⚖️ {t('settings.refPricing')}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Prompt 參考價 (百萬 tokens)</label>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.refPromptPrice')}</label>
                   <input className="input" type="number" step="0.01"
                     value={tempSettings.REF_PRICE_PER_MILLION_PROMPT_TOKENS || 0}
                     onChange={(e) => setTempSettings({ ...tempSettings, REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(e.target.value) })}
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>Completion 參考價 (百萬 tokens)</label>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.refCompletionPrice')}</label>
                   <input className="input" type="number" step="0.01"
                     value={tempSettings.REF_PRICE_PER_MILLION_COMPLETION_TOKENS || 0}
                     onChange={(e) => setTempSettings({ ...tempSettings, REF_PRICE_PER_MILLION_COMPLETION_TOKENS: Number(e.target.value) })}
                   />
                 </div>
               </div>
-              
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                💡 說明：系統會基於商業 API 參考單價與實際單價之差額，為您計算透過此 Gateway 所省下的估計費用。
-              </div>
 
               {tempSettings.PORT !== settingsData.PORT && (
                 <div style={{ fontSize: '12px', color: 'var(--status-cooldown)', marginTop: '4px', fontWeight: '500' }}>
-                  ⚠️ 提示：變更連接埠 (PORT) 需要重啟 Electron 應用程式才會生效。
+                  ⚠️ {t('settings.portNotice')}
                 </div>
               )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
               <button className="btn btn-secondary" onClick={() => setIsSettingsModalOpen(false)}>
-                取消
+                {t('settings.cancel')}
               </button>
               <button className="btn btn-primary" onClick={async () => {
                 await saveSettings(tempSettings);
                 setIsSettingsModalOpen(false);
-                if (tempSettings.PORT !== settingsData.PORT) {
-                  alert('系統設定已儲存！由於您變更了連接埠 (PORT)，請重啟應用程式以套用新連接埠。');
-                } else {
-                  alert('系統設定已儲存！');
-                }
               }}>
-                儲存設定
+                {t('settings.save')}
               </button>
             </div>
           </div>
