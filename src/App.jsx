@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Activity, Key, Cpu, FileText, Plus, Trash, Copy, Check, 
   RotateCw, ShieldAlert, CheckCircle, AlertTriangle, ArrowUp, 
-  ArrowDown, RefreshCw, X, Play, CopyCheck
+  ArrowDown, RefreshCw, X, Play, CopyCheck, Power, Loader2
 } from 'lucide-react';
 import packageJson from '../package.json';
 import ReactMarkdown from 'react-markdown';
@@ -179,6 +179,12 @@ export default function App() {
   const [expandedTokenLogId, setExpandedTokenLogId] = useState(null);
   const [expandedTokenLogTabs, setExpandedTokenLogTabs] = useState({});
 
+  // Gateway 重啟相關狀態
+  const [gatewayHealth, setGatewayHealth] = useState(null);
+  const [isRestartingGateway, setIsRestartingGateway] = useState(false);
+  const [restartNotice, setRestartNotice] = useState(null);
+  const restartNoticeTimerRef = useRef(null);
+
   // 清理非阻塞提示的計時器
   useEffect(() => {
     return () => {
@@ -187,6 +193,9 @@ export default function App() {
       }
       if (keyTestNoticeTimerRef.current) {
         clearTimeout(keyTestNoticeTimerRef.current);
+      }
+      if (restartNoticeTimerRef.current) {
+        clearTimeout(restartNoticeTimerRef.current);
       }
     };
   }, []);
@@ -238,6 +247,23 @@ export default function App() {
       scrollLogsToBottom('auto');
     });
   }, [logs, dashboardSubTab]);
+
+  // 5. 定期檢查 Gateway 健康狀態（每 10 秒）
+  useEffect(() => {
+    checkGatewayHealth();
+    const healthInterval = setInterval(checkGatewayHealth, 10000);
+    return () => clearInterval(healthInterval);
+  }, [checkGatewayHealth]);
+
+  // 6. 監聽 Gateway 重啟完成事件（來自 Electron IPC）
+  useEffect(() => {
+    if (!window.electronAPI || !window.electronAPI.onGatewayRestarted) return;
+    const unsubscribe = window.electronAPI.onGatewayRestarted(() => {
+      checkGatewayHealth();
+      fetchData();
+    });
+    return unsubscribe;
+  }, [checkGatewayHealth]);
 
   const handleSyncModelsSilently = async () => {
     setIsSyncingModels(true);
@@ -445,6 +471,77 @@ export default function App() {
       console.error(err);
     }
   };
+
+  const checkGatewayHealth = useCallback(async () => {
+    try {
+      const res = await fetch(GATEWAY_URL + '/api/health');
+      if (res.ok) {
+        const data = await res.json();
+        setGatewayHealth(data);
+        return data;
+      }
+      setGatewayHealth(null);
+      return null;
+    } catch (err) {
+      setGatewayHealth(null);
+      return null;
+    }
+  }, [GATEWAY_URL]);
+
+  const showRestartNotice = useCallback((type, message) => {
+    if (restartNoticeTimerRef.current) {
+      clearTimeout(restartNoticeTimerRef.current);
+    }
+    setRestartNotice({ type, message });
+    restartNoticeTimerRef.current = setTimeout(() => {
+      setRestartNotice(null);
+      restartNoticeTimerRef.current = null;
+    }, 10000);
+  }, []);
+
+  const handleRestartGateway = useCallback(async () => {
+    if (isRestartingGateway) return;
+    setIsRestartingGateway(true);
+    showRestartNotice('info', '正在重新啟動 Gateway 服務...');
+
+    try {
+      const resetRes = await fetch(GATEWAY_URL + '/api/gateway/reset-cooldowns', { method: 'POST' });
+      if (!resetRes.ok) {
+        showRestartNotice('warning', '清除模型冷卻狀態失敗，繼續嘗試重啟。');
+      }
+    } catch (_) {}
+
+    if (window.electronAPI && window.electronAPI.restartGateway) {
+      window.electronAPI.restartGateway();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const health = await checkGatewayHealth();
+      if (health && health.status === 'running') {
+        showRestartNotice('success', `Gateway 已成功重啟！運行時間：${Math.round(health.uptime)}秒`);
+        fetchData();
+      } else {
+        showRestartNotice('warning', 'Gateway 重啟指令已發送，等待服務恢復中...');
+      }
+    } else {
+      try {
+        const res = await fetch(GATEWAY_URL + '/api/gateway/reset-cooldowns', { method: 'POST' });
+        if (res.ok) {
+          showRestartNotice('success', '已清除所有模型冷卻狀態，Gateway 服務持續運行中。');
+          fetchData();
+        }
+      } catch (err) {
+        showRestartNotice('error', `重啟操作失敗：${err.message}`);
+      }
+    }
+
+    setIsRestartingGateway(false);
+  }, [isRestartingGateway, GATEWAY_URL, checkGatewayHealth, showRestartNotice, fetchData]);
+
+  const handleRestartApp = useCallback(() => {
+    if (!window.confirm('確定要重新啟動整個應用程式嗎？所有未儲存的狀態將會遺失。')) return;
+    if (window.electronAPI && window.electronAPI.restartApp) {
+      window.electronAPI.restartApp();
+    }
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -845,6 +942,51 @@ export default function App() {
 
         {/* 系統設定按鈕區 */}
         <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {/* Gateway 運行狀態指示器 + 重啟按鈕 */}
+          <div className="glass-panel" style={{ padding: '10px 12px', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                <div style={{
+                  width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                  backgroundColor: gatewayHealth?.status === 'running' ? '#10b981' : (gatewayHealth === null ? '#ef4444' : '#f59e0b'),
+                  boxShadow: gatewayHealth?.status === 'running' ? '0 0 6px rgba(16, 185, 129, 0.5)' : 'none'
+                }} />
+                <span style={{ fontSize: '12px', color: gatewayHealth?.status === 'running' ? '#10b981' : (gatewayHealth === null ? '#ef4444' : '#f59e0b'), fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {gatewayHealth?.status === 'running' ? 'Gateway 運行中' : (gatewayHealth === null ? 'Gateway 離線' : 'Gateway 異常')}
+                </span>
+              </div>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', flexShrink: 0 }}
+                onClick={handleRestartGateway}
+                disabled={isRestartingGateway}
+                title="重新啟動 Gateway 服務（清除模型冷卻狀態並重建連線）"
+              >
+                {isRestartingGateway ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />}
+                <span>{isRestartingGateway ? '重啟中' : '重啟'}</span>
+              </button>
+            </div>
+            {gatewayHealth?.status === 'running' && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                <span>Uptime: {Math.round(gatewayHealth.uptime / 60)}m</span>
+                <span>Keys: {gatewayHealth.keys?.active}/{gatewayHealth.keys?.total}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 重啟通知 */}
+          {restartNotice && (
+            <div
+              className={`sync-notice sync-notice-${restartNotice.type}`}
+              role="status"
+              aria-live="polite"
+              style={{ fontSize: '12px' }}
+            >
+              {restartNotice.type === 'info' && <Loader2 size={11} className="animate-spin" style={{ marginRight: '4px', flexShrink: 0, verticalAlign: 'middle' }} />}
+              {restartNotice.message}
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => {
@@ -865,6 +1007,15 @@ export default function App() {
               {theme === 'theme-dark' ? '☀️ 淺色' : '🌙 深色'}
             </button>
           </div>
+          <button
+            className="btn btn-danger"
+            style={{ padding: '8px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            onClick={handleRestartApp}
+            title="重新啟動整個應用程式（包含 Electron 視窗）"
+          >
+            <Power size={14} />
+            <span>重啟應用程式</span>
+          </button>
         </div>
 
         {apiError && (

@@ -735,3 +735,56 @@ input, textarea, pre, code, [contenteditable="true"] {
   letter-spacing: 0.5px;
 }
 
+/* 同步 / 重啟通知樣式 */
+.sync-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.sync-notice-info {
+  background: var(--bg-active);
+  color: var(--text-active);
+  border: 1px solid var(--border-active);
+}
+
+.sync-notice-success {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.sync-notice-warning {
+  background: var(--bg-cooldown);
+  color: var(--text-cooldown);
+  border: 1px solid var(--border-cooldown);
+}
+
+.sync-notice-error {
+  background: var(--bg-inactive);
+  color: var(--text-inactive);
+  border: 1px solid var(--border-inactive);
+}
+
+/* Gateway 狀態指示燈呼吸動畫 */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(16, 185, 129, 0.3); }
+  50% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.6); }
+}
+
+/* Loader2 旋轉動畫（Animate.css 互補） */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
