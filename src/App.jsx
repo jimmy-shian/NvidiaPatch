@@ -12,6 +12,7 @@ import useNotifications from './hooks/useNotifications';
 import ErrorBoundary from './components/shared/ErrorBoundary';
 import MarkdownContent from './components/shared/MarkdownContent';
 import RulesPanel from './components/Rules/RulesPanel';
+import { translateLogMessage } from './i18n/logTranslator';
 
 const LANGUAGE_OPTIONS = [
   { code: 'zh-TW', label: '中' },
@@ -235,8 +236,20 @@ export default function App() {
     onRules: () => { fetchData(); },
     onSettings: (data) => { setSettingsData(data); },
     onTokenUsage: () => { api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(() => {}); },
-    onHealth: (data) => { setGatewayHealth(data); }
+    onHealth: (data) => { setGatewayHealth(data); },
+    onReconnect: () => { fetchData(); }
   });
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && adminToken) {
+        fetchData();
+        checkGatewayHealth();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [adminToken, fetchData, checkGatewayHealth]);
 
   // 藉由 SSE 連線狀態與後端推送的事件判定 Gateway 健康狀態，不進行任何主動輪詢或主動 API 查詢
   useEffect(() => {
@@ -638,9 +651,9 @@ export default function App() {
       window.electronAPI.restartGateway();
       
       let attempts = 0;
-      const maxAttempts = 10;
+      const maxAttempts = 30;
       while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 150));
         const health = await checkGatewayHealth();
         if (health && health.status === 'running') {
           showRestartNotice('success', `Gateway restarted! Uptime: ${Math.round(health.uptime)}s`);
@@ -1243,7 +1256,7 @@ export default function App() {
                             className="terminal-log-message"
                             style={{ color: logColor }}
                           >
-                            {log.message}
+                            {translateLogMessage(log.message, i18n.language)}
                           </span>
                         </div>
                       );
@@ -1937,7 +1950,7 @@ export default function App() {
         )}
 
         {activeTab === 'rules' && (
-          <ErrorBoundary name="RulesPanel" fallbackText="Rules panel error">
+          <ErrorBoundary name="RulesPanel">
             <RulesPanel
               rules={rules}
               newRuleTitle={newRuleTitle}
@@ -1954,7 +1967,7 @@ export default function App() {
         )}
 
         {activeTab === 'playground' && (
-          <ErrorBoundary name="Playground" fallbackText="Playground error">
+          <ErrorBoundary name="Playground">
           <div className="glass-panel animate-fade-in" style={{ flex: 1, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>

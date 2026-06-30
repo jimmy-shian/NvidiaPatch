@@ -1,9 +1,19 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback } from 'react';
 
-/**
- * 集中管理所有 API 呼叫的 hook
- * 自動帶上 admin Bearer token 與錯誤處理
- */
+const FETCH_TIMEOUT_MS = 30000;
+
+function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, {
+    ...options,
+    signal: controller.signal
+  }).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
+
 export default function useGatewayApi(gatewayUrl, adminToken) {
   const authHeaders = useCallback(() => ({
     'Content-Type': 'application/json',
@@ -11,7 +21,7 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
   }), [adminToken]);
 
   const apiFetch = useCallback(async (path, options = {}) => {
-    const res = await fetch(`${gatewayUrl}${path}`, {
+    const res = await fetchWithTimeout(`${gatewayUrl}${path}`, {
       ...options,
       headers: {
         ...authHeaders(),
@@ -90,7 +100,7 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
   }, [apiFetch]);
 
   const syncModels = useCallback(async () => {
-    const res = await apiFetch('/api/models/sync', { method: 'POST' });
+    const res = await apiFetch('/api/models/sync', { method: 'POST' }, 60000);
     if (res.ok) return await res.json();
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Sync failed: ${res.status}`);
@@ -169,7 +179,7 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
   }, [apiFetch]);
 
   const checkHealth = useCallback(async () => {
-    const res = await fetch(`${gatewayUrl}/api/health`);
+    const res = await fetchWithTimeout(`${gatewayUrl}/api/health`);
     if (res.ok) return await res.json();
     return null;
   }, [gatewayUrl]);
@@ -181,7 +191,7 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
   }, [apiFetch]);
 
   const login = useCallback(async (token) => {
-    const res = await fetch(`${gatewayUrl}/api/auth/login`, {
+    const res = await fetchWithTimeout(`${gatewayUrl}/api/auth/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

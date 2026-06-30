@@ -20,45 +20,94 @@ const dbPath = path.join(app.getPath('userData'), 'gateway.db');
 const dbInstance = initDatabase(dbPath);
 
 // 3. 啟動 Gateway Express 伺服器
-let portValue = 4000;
-try {
-  const row = dbInstance.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
-  if (row && row.value) {
-    portValue = Number(row.value) || 4000;
+let currentPort = 4000;
+const activeConnections = new Set();
+
+function loadPortFromDb() {
+  try {
+    const row = dbInstance.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
+    if (row && row.value) {
+      currentPort = Number(row.value) || 4000;
+    }
+  } catch (e) {
+    console.error('Failed to read PORT from database:', e);
   }
-} catch (e) {
-  console.error('Failed to read PORT from metadata, using 4000:', e);
+  return currentPort;
 }
-const PORT = portValue;
+
+// 追蹤所有連入的 socket 連線，以便重啟時強制關閉
+function trackConnections(srv) {
+  if (!srv) return;
+  srv.on('connection', (socket) => {
+    activeConnections.add(socket);
+    socket.once('close', () => {
+      activeConnections.delete(socket);
+    });
+  });
+}
+
+// 安全關閉伺服器與其所有連線，避免 Keep-Alive/SSE 導致關閉卡死
+function closeServerAndSockets(cb) {
+  if (!server) return cb();
+  
+  if (typeof server.closeAllConnections === 'function') {
+    try {
+      server.closeAllConnections();
+    } catch (e) {
+      console.error('Error in closeAllConnections:', e);
+    }
+  }
+  
+  for (const socket of activeConnections) {
+    if (!socket.destroyed) {
+      try {
+        socket.destroy();
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+  activeConnections.clear();
+  
+  server.close(cb);
+}
+
+loadPortFromDb();
 let gatewayAppInstance = createGatewayApp();
 
 function restartGateway() {
+  const portToUse = loadPortFromDb();
   if (server) {
-    server.close(() => {
+    closeServerAndSockets(() => {
       console.log('Gateway Server stopped. Restarting...');
       setTimeout(() => {
         gatewayAppInstance = createGatewayApp();
-        server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
-          console.log(`LLM Gateway Server restarted on http://localhost:${PORT}`);
+        server = gatewayAppInstance.listen(portToUse, '127.0.0.1', () => {
+          console.log(`LLM Gateway Server restarted on http://localhost:${portToUse}`);
           if (tray) {
             tray.displayBalloon({
               title: 'NVIDIA NIM Gateway',
-              content: 'Gateway 服務已重新啟動。',
+              content: `Gateway 服務已在埠號 ${portToUse} 重新啟動。`,
               iconType: 'info'
             });
+          }
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('gateway-restarted');
           }
         }).on('error', (err) => {
           console.error('Gateway restart failed:', err.message);
         });
-      }, 500);
+        trackConnections(server);
+      }, 50);
     });
   } else {
     gatewayAppInstance = createGatewayApp();
-    server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
-      console.log(`LLM Gateway Server started on http://localhost:${PORT}`);
+    server = gatewayAppInstance.listen(portToUse, '127.0.0.1', () => {
+      console.log(`LLM Gateway Server started on http://localhost:${portToUse}`);
     }).on('error', (err) => {
       console.error('Gateway start failed:', err.message);
     });
+    trackConnections(server);
   }
 }
 
@@ -69,9 +118,11 @@ function restartApp() {
 }
 
 function startServer() {
-  server = gatewayAppInstance.listen(PORT, '127.0.0.1', () => {
-    console.log(`LLM Gateway Server running on http://localhost:${PORT}`);
+  const portToUse = loadPortFromDb();
+  server = gatewayAppInstance.listen(portToUse, '127.0.0.1', () => {
+    console.log(`LLM Gateway Server running on http://localhost:${portToUse}`);
   });
+  trackConnections(server);
 }
 
 function createMainWindow() {
@@ -216,7 +267,7 @@ ipcMain.on('rules-updated', () => {
 });
 
 ipcMain.on('get-gateway-port', (event) => {
-  event.returnValue = PORT;
+  event.returnValue = loadPortFromDb();
 });
 
 ipcMain.on('window-minimize', () => {
@@ -234,9 +285,6 @@ ipcMain.on('app-exit', () => {
 
 ipcMain.on('restart-gateway', () => {
   restartGateway();
-  if (mainWindow) {
-    mainWindow.webContents.send('gateway-restarted');
-  }
 });
 
 ipcMain.on('restart-app', () => {

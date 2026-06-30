@@ -1,9 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-/**
- * SSE 即時事件推送 hook
- * 連接到 /api/events，自動處理重連與斷線復原
- */
+const SSE_HEALTH_TIMEOUT_MS = 35000;
+const SSE_MAX_RETRIES = 50;
+
 export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
   const [connected, setConnected] = useState(false);
   const retryTimeoutRef = useRef(null);
@@ -16,18 +15,52 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
 
     const url = `${gatewayUrl}/api/events?token=${encodeURIComponent(adminToken)}`;
     const es = new EventSource(url);
+    let lastHealthTime = Date.now();
+
+    const healthCheckInterval = setInterval(() => {
+      if (Date.now() - lastHealthTime > SSE_HEALTH_TIMEOUT_MS) {
+        console.warn('[SSE] No health heartbeat received for', SSE_HEALTH_TIMEOUT_MS, 'ms — forcing reconnect');
+        setConnected(false);
+        es.close();
+        clearInterval(healthCheckInterval);
+
+        const retryDelay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
+        retryCountRef.current += 1;
+
+        if (retryCountRef.current > SSE_MAX_RETRIES) {
+          console.error('[SSE] Max retries exceeded. Stopping reconnection.');
+          return;
+        }
+
+        if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = setTimeout(() => {
+          connect();
+        }, retryDelay);
+      }
+    }, 15000);
 
     const onOpen = () => {
       setConnected(true);
       retryCountRef.current = 0;
+      lastHealthTime = Date.now();
+
+      if (handlerRef.current.onReconnect) {
+        handlerRef.current.onReconnect();
+      }
     };
 
     const onError = () => {
       setConnected(false);
       es.close();
+      clearInterval(healthCheckInterval);
 
       const retryDelay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
       retryCountRef.current += 1;
+
+      if (retryCountRef.current > SSE_MAX_RETRIES) {
+        console.error('[SSE] Max retries exceeded. Stopping reconnection.');
+        return;
+      }
 
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = setTimeout(() => {
@@ -56,10 +89,16 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
     if (handlerRef.current.onRules) addHandler('rules', handlerRef.current.onRules);
     if (handlerRef.current.onSettings) addHandler('settings', handlerRef.current.onSettings);
     if (handlerRef.current.onTokenUsage) addHandler('token-usage', handlerRef.current.onTokenUsage);
-    if (handlerRef.current.onHealth) addHandler('health', handlerRef.current.onHealth);
+    if (handlerRef.current.onHealth) {
+      addHandler('health', (data) => {
+        lastHealthTime = Date.now();
+        handlerRef.current.onHealth(data);
+      });
+    }
     es.addEventListener('connected', onOpen);
 
     return () => {
+      clearInterval(healthCheckInterval);
       setConnected(false);
       es.close();
     };
