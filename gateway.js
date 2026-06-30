@@ -832,35 +832,65 @@ function createGatewayApp() {
       }
     }
 
-    // 用於追蹤每把 API Key 上一次被發送請求的台灣時間戳記，避免單一 Key 併發或短時間重複呼叫導致 429
-    if (!global.keyLastRequestTimes) {
-      global.keyLastRequestTimes = new Map();
+    // 用於追蹤每把 API Key 下一次允許被發送請求的台灣時間戳記，實現跨 Session 共同計數與排隊等待
+    if (!global.keyNextRequestTimes) {
+      global.keyNextRequestTimes = new Map();
     }
 
     async function sendSingleRequest(model, key, keyIndex, availableKeys) {
       const modelId = model.model_id;
       const forwardBody = { ...originalBody, model: modelId };
 
-      // 檢查此 Key 是否被多個 Session 併發使用，限制最少需間隔指定的延遲時間
+      // 1. 在排隊前，先檢查該 Key 是否依然為 active。如果已被停用或進入冷卻，直接略過。
+      const preQueueStatus = apiKeys.getKeyStatus(key.id);
+      if (preQueueStatus !== 'active') {
+        addLog('warning', `請求 #${requestId}：金鑰 ID ${key.id} 目前狀態為「${preQueueStatus}」（非 active），直接跳過。`);
+        return { success: false, retryScope: 'key', errorText: `金鑰狀態為 ${preQueueStatus}` };
+      }
+
+      // 檢查並預約此 Key 的下一次允許請求時間，限制最少需間隔指定的延遲時間
       const now = Date.now();
-      const lastTime = global.keyLastRequestTimes.get(key.id) || 0;
-      const elapsed = now - lastTime;
+      const nextAllowedTime = global.keyNextRequestTimes.get(key.id) || 0;
       const concurrencyDelayMs = Number(activeConfig.KEY_CONCURRENCY_DELAY_MS || 5000);
-      if (elapsed < concurrencyDelayMs) {
-        const waitMs = concurrencyDelayMs - elapsed;
-        addLog('info', `請求 #${requestId}：Key ID ${key.id} 在短時間內被重複/併發呼叫（間隔僅 ${(elapsed/1000).toFixed(2)} 秒）。為防範 429 速率限制錯誤，已自動將本請求延遲 ${ (waitMs / 1000).toFixed(2) } 秒後再送出。`);
+
+      let waitMs = 0;
+      let scheduledTime = now;
+
+      if (now < nextAllowedTime) {
+        waitMs = nextAllowedTime - now;
+        scheduledTime = nextAllowedTime;
+      }
+
+      // 跨 Session 共同累加排隊時間，預約下一筆請求的起始時間點
+      global.keyNextRequestTimes.set(key.id, scheduledTime + concurrencyDelayMs);
+
+      if (waitMs > 0) {
+        addLog('info', `請求 #${requestId}：Key ID ${key.id} 已預約在 ${new Date(scheduledTime).toLocaleTimeString('zh-TW')} 送出（跨 Session 排隊等待 ${(waitMs / 1000).toFixed(2)} 秒）。`);
         // 等待剩餘時間，同時隨時檢查 Client 是否已離線
         await new Promise((resolve) => {
           const waitTimer = setTimeout(resolve, waitMs);
-          res.once('close', () => {
+          const handleClose = () => {
             clearTimeout(waitTimer);
             resolve();
+          };
+          res.once('close', handleClose);
+          res.once('finish', () => {
+            res.off('close', handleClose);
           });
         });
       }
 
-      // 送出前更新此 Key 的最後請求時間戳
-      global.keyLastRequestTimes.set(key.id, Date.now());
+      // 2. 睡眠醒來後，再次檢查金鑰狀態。因為在睡覺期間，其他併發請求可能使該 Key 進入冷卻或停用。
+      const postSleepStatus = apiKeys.getKeyStatus(key.id);
+      if (postSleepStatus !== 'active') {
+        addLog('warning', `請求 #${requestId}：金鑰 ID ${key.id} 在排隊等待期間狀態變更為「${postSleepStatus}」，取消本次發送。`);
+        return { success: false, retryScope: 'key', errorText: `金鑰狀態已在等待期變更為 ${postSleepStatus}` };
+      }
+
+      if (isClientGone()) {
+        addLog('warning', `請求 #${requestId}：金鑰排隊等待完成後檢測到用戶端已中斷連線，取消對 Key ID ${key.id} 的 NVIDIA 請求發送。`);
+        return { success: false, clientGone: true, errorText: '用戶端已於等待期間中斷連線' };
+      }
 
       const abortController = new AbortController();
       let abortReason = 'timeout';
@@ -1105,9 +1135,17 @@ function createGatewayApp() {
           return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
         } catch (err) {
           try {
-            await reader.cancel();
+            reader.cancel().catch(() => {});
           } catch (cancelErr) {
             // ignore
+          }
+
+          const isTimeout = err.message.includes('逾時') || err.message.toLowerCase().includes('timeout');
+          if (isTimeout) {
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取發生逾時（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+            apiKeys.recordFailure(selectedKey.id, `串流讀取逾時：${err.message}`);
+            stats.recordRequest(false);
+            return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: err.message };
           }
 
           addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
@@ -1165,6 +1203,13 @@ function createGatewayApp() {
         addLog('error', `請求 #${requestId}：模型「${modelId}」無法嘗試，因為目前沒有健康的 API Key。`);
         return { success: false, noHealthyKeys: true, errorText: '目前沒有健康的 API Key。' };
       }
+
+      // 依據金鑰下一次允許請求的時間（預約時間）進行升序排序，優先使用閒置或最快可用的金鑰，避免無謂等待並實現自動輪換
+      availableKeys.sort((a, b) => {
+        const timeA = global.keyNextRequestTimes?.get(a.id) || 0;
+        const timeB = global.keyNextRequestTimes?.get(b.id) || 0;
+        return timeA - timeB;
+      });
 
       addLog('info', `請求 #${requestId}：第 ${roundNumber}/${MAX_ROUNDS_PER_MODEL} 輪，嘗試模型「${modelId}」（順位 ${model.priority}），可用 Key 數：${availableKeys.length}。`);
 
@@ -1360,15 +1405,18 @@ function createGatewayApp() {
       // 記錄 Token 使用量 — 只保存必要 metadata，不保存完整 messages
       try {
         const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+        const lastMsg = Array.isArray(originalBody.messages) && originalBody.messages.length > 0
+          ? originalBody.messages[originalBody.messages.length - 1]
+          : null;
+        const previewRaw = lastMsg ? (lastMsg.content || '') : '';
+        const previewStr = typeof previewRaw === 'string' ? previewRaw : JSON.stringify(previewRaw);
         const tokenUsageMeta = {
           model: originalBody.model,
           temperature: originalBody.temperature,
           max_tokens: originalBody.max_tokens,
           stream: originalBody.stream,
           message_count: Array.isArray(originalBody.messages) ? originalBody.messages.length : 0,
-          last_message_preview: Array.isArray(originalBody.messages) && originalBody.messages.length > 0
-            ? String(originalBody.messages[originalBody.messages.length - 1].content || '').substring(0, 200)
-            : ''
+          last_message_preview: previewStr.substring(0, 200)
         };
         tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, tokenUsageMeta);
         eventManager.broadcast('token-usage', { action: 'add', modelId, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });

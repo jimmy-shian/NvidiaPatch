@@ -657,6 +657,11 @@ const apiKeys = {
       WHERE status = 'active'
     `).all();
   },
+  getKeyStatus: (id) => {
+    releaseExpiredKeyCooldowns();
+    const row = db.prepare("SELECT status FROM api_keys WHERE id = ?").get(id);
+    return row ? row.status : null;
+  },
   add: (keyValue) => {
     try {
       const stmt = db.prepare("INSERT INTO api_keys (key_value) VALUES (?)");
