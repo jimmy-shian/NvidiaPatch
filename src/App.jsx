@@ -298,11 +298,11 @@ export default function App() {
 
   const formatModelSyncSummary = ({ parsedCount, savedCount, expectedCount, source }) => {
     const parts = [];
-    if (Number.isFinite(Number(parsedCount))) parts.push(`Parsed: ${Number(parsedCount)}`);
-    if (Number.isFinite(Number(savedCount))) parts.push(`Saved: ${Number(savedCount)}`);
-    if (Number.isFinite(Number(expectedCount))) parts.push(`Expected: ${Number(expectedCount)}`);
-    if (source) parts.push(`Source: ${getSyncSourceLabel(source)}`);
-    return parts.join(' | ') || 'Sync complete';
+    if (Number.isFinite(Number(parsedCount))) parts.push(`${t('models.parsed')}: ${Number(parsedCount)}`);
+    if (Number.isFinite(Number(savedCount))) parts.push(`${t('models.saved')}: ${Number(savedCount)}`);
+    if (Number.isFinite(Number(expectedCount))) parts.push(`${t('models.expected')}: ${Number(expectedCount)}`);
+    if (source) parts.push(`${t('models.source')}: ${getSyncSourceLabel(source)}`);
+    return parts.join(' | ') || t('models.syncComplete');
   };
 
   const formatTaiwanParts = (value) => {
@@ -337,7 +337,38 @@ export default function App() {
     return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
   };
 
-  const formatSyncTime = (isoString) => formatTaiwanDateTime(isoString);
+  const formatSyncTime = (isoString) => {
+    if (!isoString) return '--';
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return '--';
+
+    let locale = 'zh-TW';
+    if (i18n.language) {
+      if (i18n.language.startsWith('ja')) {
+        locale = 'ja-JP';
+      } else if (i18n.language.startsWith('en')) {
+        locale = 'en-US';
+      } else if (i18n.language.startsWith('zh')) {
+        locale = 'zh-TW';
+      } else {
+        locale = i18n.language;
+      }
+    }
+
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: 'Asia/Taipei'
+      }).format(date);
+    } catch (e) {
+      return date.toLocaleString();
+    }
+  };
 
   const handleSendTestMessage = async (e) => {
     if (e) e.preventDefault();
@@ -1689,14 +1720,36 @@ export default function App() {
                   {t('models.description')}
                 </p>
                 {lastSyncTime && (
-                  <span style={{ fontSize: '13px', color: '#10b981', fontWeight: '600', marginTop: '6px', display: 'inline-block' }}>
-                    🔄 {t('models.lastSync')}: {formatSyncTime(lastSyncTime)} | {formatModelSyncSummary({
-                      parsedCount: lastParsedModelCount ?? availableModels.length,
-                      savedCount: lastSavedModelCount ?? availableModels.length,
-                      expectedCount: expectedModelCount,
-                      source: lastSyncSource
-                    })}
-                  </span>
+                  <div className="sync-info-container">
+                    <div className="sync-info-chip last-sync" title={t('models.lastSync')}>
+                      <RefreshCw size={12} className={isSyncingModels ? 'animate-spin' : ''} />
+                      <span>{t('models.lastSync')}: {formatSyncTime(lastSyncTime)}</span>
+                    </div>
+                    {Number.isFinite(Number(lastParsedModelCount ?? availableModels.length)) && (
+                      <div className="sync-info-chip parsed">
+                        <Cpu size={12} />
+                        <span>{t('models.parsed')}: {lastParsedModelCount ?? availableModels.length}</span>
+                      </div>
+                    )}
+                    {Number.isFinite(Number(lastSavedModelCount ?? availableModels.length)) && (
+                      <div className="sync-info-chip saved">
+                        <CheckCircle size={12} />
+                        <span>{t('models.saved')}: {lastSavedModelCount ?? availableModels.length}</span>
+                      </div>
+                    )}
+                    {Number.isFinite(Number(expectedModelCount)) && (
+                      <div className="sync-info-chip expected">
+                        <Activity size={12} />
+                        <span>{t('models.expected')}: {expectedModelCount}</span>
+                      </div>
+                    )}
+                    {lastSyncSource && (
+                      <div className="sync-info-chip source">
+                        <Globe size={12} />
+                        <span>{t('models.source')}: {getSyncSourceLabel(lastSyncSource)}</span>
+                      </div>
+                    )}
+                  </div>
                 )}
                 {syncNotice && (
                   <div
