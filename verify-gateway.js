@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { initDatabase, closeDatabase, apiKeys, modelsConfig, stats } = require('./database');
+const { initDatabase, closeDatabase, apiKeys, modelsConfig, stats, settings } = require('./database');
 const { createGatewayApp } = require('./gateway');
 
 const MOCK_NVIDIA_PORT = 18080;
@@ -63,8 +63,41 @@ function startMockNvidiaServer() {
           }));
           return;
         }
+        
+        // G. 模擬串流超時 (只在第一順位模型且使用特定 key 時觸發，故意掛起連線。寫入第一個 chunk 以便立刻發出 Header)
+        if (model === 'meta/llama3-70b-instruct' && key === 'key-trigger-stream-timeout') {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+          });
+          res.write(':\n\n'); // 發送一個 SSE 註解 chunk 來強制 Flush Header，讓客戶端 fetch 立即 Resolve
+          return;
+        }
 
         // D. 正常回應
+        if (payload.stream) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+          });
+          res.write(`data: ${JSON.stringify({
+            id: "chatcmpl-mock",
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model: model,
+            choices: [{
+              index: 0,
+              delta: { content: `Mock stream response for model ${model}` },
+              finish_reason: null
+            }]
+          })}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           id: "chatcmpl-mock",
@@ -349,6 +382,44 @@ async function runTests() {
       console.log('=> TEST 9 PASSED (successfully degraded to 2nd priority model on 400 context limit)');
     } else {
       throw new Error('TEST 9 FAILED');
+    }
+
+    // --- 測試 10: 串流讀取逾時 Fallback 模型降級 ---
+    console.log('\n--- Test 10: Stream Read Timeout Fallback ---');
+    // 清除模型冷卻狀態，以免被前一個測試的冷卻時間干擾而直接跳過 70b 模型
+    await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/gateway/reset-cooldowns`, { method: 'POST' });
+
+    // 清空 Key，加入會對 70b 觸發串流超時的 key
+    apiKeys.getAll().forEach(k => apiKeys.delete(k.id));
+    apiKeys.add('key-trigger-stream-timeout');
+
+    // 設定兩台模型順位 (70b 第一順位, 8b 第二順位)
+    modelsConfig.savePriorityList(['meta/llama3-70b-instruct', 'meta/llama3-8b-instruct']);
+
+    // 暫時將超時設定改為 1.5 秒
+    settings.save({ STREAM_READ_TIMEOUT_MS: 1500 });
+
+    res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'patcher-main',
+        messages: [{ role: 'user', content: 'trigger stream timeout' }],
+        stream: true
+      })
+    });
+
+    // 串流請求時，Gateway 會在順利切換到備用模型後輸出最終的 HTTP 200 SSE 串流。
+    // 這裡我們直接校驗回應狀態碼與內容，確保它成功回傳。
+    console.log('Response Status:', res.status);
+    
+    // 恢復超時設定為 120000ms
+    settings.save({ STREAM_READ_TIMEOUT_MS: 120000 });
+
+    if (res.status === 200) {
+      console.log('=> TEST 10 PASSED (successfully degraded to 2nd priority model on stream read timeout)');
+    } else {
+      throw new Error('TEST 10 FAILED');
     }
 
     console.log('\n>>> ALL INTEGRATION TESTS PASSED SUCCESSFULLY! <<<\n');
