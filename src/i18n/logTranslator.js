@@ -157,6 +157,11 @@ const translationRules = [
     ja: "リクエスト #$1：モデル「$2」が HTTP 400（コンテキスト長の上限超過）を返しました。モデルエラーと判定し、次のモデルに切り替えます。エラー: $3"
   },
   {
+    regex: /請求 #(\d+)：模型「(.*?)」回傳 HTTP 400（模型已降級），判定為模型層級失敗，立即切換下一個模型。錯誤：(.*)/,
+    en: "Request #$1: Model \"$2\" returned HTTP 400 (model degraded); switching to next model immediately. Error: $3",
+    ja: "リクエスト #$1：モデル「$2」が HTTP 400（モデル已デグレード）。モデルエラーと判定し、次のモデルに切り替えます。エラー: $3"
+  },
+  {
     regex: /請求 #(\d+)：NVIDIA 回傳不可重試的 HTTP (\d+)，停止本次調度。錯誤：(.*)/,
     en: "Request #$1: NVIDIA returned non-retryable HTTP $2; stopping dispatch. Error: $3",
     ja: "リクエスト #$1：NVIDIA から再試行不可能な HTTP $2 が返されました。スケジュールを停止します。エラー: $3"
@@ -334,7 +339,10 @@ const translationRules = [
 ];
 
 export function translateLogMessage(message, lang) {
-  if (!message) return "";
+  if (message === undefined || message === null) return "";
+  if (typeof message !== 'string') {
+    return String(message);
+  }
   if (!lang || lang.startsWith("zh")) {
     return message;
   }

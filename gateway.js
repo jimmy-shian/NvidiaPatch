@@ -106,6 +106,59 @@ function parseModelGroupValue(value) {
   return null;
 }
 
+function sanitizeChatCompletionBody(body) {
+  if (!body || typeof body !== 'object') return body;
+
+  const standardRootKeys = [
+    'messages',
+    'model',
+    'frequency_penalty',
+    'logit_bias',
+    'logprobs',
+    'top_logprobs',
+    'max_tokens',
+    'max_completion_tokens',
+    'n',
+    'presence_penalty',
+    'response_format',
+    'seed',
+    'stop',
+    'stream',
+    'stream_options',
+    'temperature',
+    'top_p',
+    'tools',
+    'tool_choice',
+    'parallel_tool_calls',
+    'user'
+  ];
+
+  const sanitized = {};
+  for (const key of standardRootKeys) {
+    if (body[key] !== undefined) {
+      sanitized[key] = body[key];
+    }
+  }
+
+  if (sanitized.messages && Array.isArray(sanitized.messages)) {
+    sanitized.messages = sanitized.messages.map(msg => {
+      if (msg && typeof msg === 'object') {
+        const cleanMsg = {};
+        const standardMsgKeys = ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'function_call', 'refusal'];
+        for (const key of standardMsgKeys) {
+          if (msg[key] !== undefined) {
+            cleanMsg[key] = msg[key];
+          }
+        }
+        return cleanMsg;
+      }
+      return msg;
+    });
+  }
+
+  return sanitized;
+}
+
 function getBearerTokenFromRequest(req) {
   const authorization = req.headers.authorization || '';
   const match = String(authorization).match(/^Bearer\s+(.+)$/i);
@@ -839,7 +892,12 @@ function createGatewayApp() {
 
     async function sendSingleRequest(model, key, keyIndex, availableKeys) {
       const modelId = model.model_id;
-      const forwardBody = { ...originalBody, model: modelId };
+      const sanitizedBody = sanitizeChatCompletionBody(originalBody);
+      const forwardBody = {
+        ...sanitizedBody,
+        model: modelId,
+        temperature: 1
+      };
 
       // 1. 在排隊前，先檢查該 Key 是否依然為 active。如果已被停用或進入冷卻，直接略過。
       const preQueueStatus = apiKeys.getKeyStatus(key.id);
@@ -974,9 +1032,15 @@ function createGatewayApp() {
                                  errText.toLowerCase().includes('max context') ||
                                  errText.toLowerCase().includes('context window') ||
                                  errText.toLowerCase().includes('context_window');
-          if (isContextLimit) {
-            addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（長度超出限制），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
-            apiKeys.recordFailure(key.id, `ModelContextLimit HTTP 400: ${errText.substring(0, 80)}`);
+          const isDegraded = errText.toLowerCase().includes('degraded');
+          if (isContextLimit || isDegraded) {
+            if (isContextLimit) {
+              addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（長度超出限制），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+              apiKeys.recordFailure(key.id, `ModelContextLimit HTTP 400: ${errText.substring(0, 80)}`);
+            } else {
+              addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（模型已降級），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+              apiKeys.recordFailure(key.id, `ModelDegraded HTTP 400: ${errText.substring(0, 80)}`);
+            }
             // 每次呼叫失敗都算一次錯誤（含重試）
             stats.recordRequest(false);
             return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
@@ -1148,12 +1212,11 @@ function createGatewayApp() {
             return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: err.message };
           }
 
-          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
           apiKeys.recordFailure(selectedKey.id, `串流讀取錯誤：${err.message}`);
           // 每次執行失敗（含重試）都算一次錯誤
           stats.recordRequest(false);
-          // 【特別例外】回傳格式失敗應重試當前模型（換 Key），而非跳下一個模型
-          return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: err.message };
+          return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
         }
       }
 
@@ -1227,7 +1290,7 @@ function createGatewayApp() {
           const validated = await validateSuccessfulResponse(model, selectedKey, result, roundNumber);
           if (validated.success) return validated;
 
-          // 【特別例外】回傳格式失敗（內容校驗/JSON 解析/串流讀取錯誤）時，重試當前模型，而非跳下一個模型
+          // 【特別例外】回傳格式失敗（內容校驗/JSON 解析）時，重試當前模型，而非跳下一個模型
           if (validated.contentValidationFailed) {
             addLog('info', `請求 #${requestId}：模型「${modelId}」回傳格式失敗（${validated.errorText}），觸發同模型重試。`);
             return {
@@ -1235,6 +1298,16 @@ function createGatewayApp() {
               forceRetrySameModel: true,
               contentValidationFailed: true,
               errorText: validated.errorText || '回傳格式失敗'
+            };
+          }
+
+          if (validated.streamReadFailed) {
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取失敗（${validated.errorText}），將觸發等待後重試。`);
+            return {
+              success: false,
+              forceRetrySameModel: true,
+              streamReadFailed: true,
+              errorText: validated.errorText || '串流讀取失敗'
             };
           }
 
@@ -1402,23 +1475,17 @@ function createGatewayApp() {
       stats.recordRequest(true);
       const durationMs = Date.now() - requestStartedAt;
       
-      // 記錄 Token 使用量 — 只保存必要 metadata，不保存完整 messages
+      // 記錄 Token 使用量與完整對話內容 (僅最近 5 個保留對話文字)
       try {
         const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        const lastMsg = Array.isArray(originalBody.messages) && originalBody.messages.length > 0
-          ? originalBody.messages[originalBody.messages.length - 1]
-          : null;
-        const previewRaw = lastMsg ? (lastMsg.content || '') : '';
-        const previewStr = typeof previewRaw === 'string' ? previewRaw : JSON.stringify(previewRaw);
-        const tokenUsageMeta = {
-          model: originalBody.model,
-          temperature: originalBody.temperature,
-          max_tokens: originalBody.max_tokens,
-          stream: originalBody.stream,
-          message_count: Array.isArray(originalBody.messages) ? originalBody.messages.length : 0,
-          last_message_preview: previewStr.substring(0, 200)
-        };
-        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, tokenUsageMeta);
+        let responseContent = '';
+        if (stream) {
+          responseContent = result.streamContent || '';
+        } else {
+          responseContent = result.jsonData?.choices?.[0]?.message?.content || '';
+        }
+
+        tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, originalBody.messages, responseContent);
         eventManager.broadcast('token-usage', { action: 'add', modelId, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });
         addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
       } catch (tokenErr) {
@@ -1447,13 +1514,17 @@ function createGatewayApp() {
 
         addLog('info', `請求 #${requestId}：開始調度模型「${modelId}」（順位 ${currentModel.priority}）。`);
 
-        // 【特別例外】回傳格式失敗時標記立即重試，跳過 ROUND_DELAY_MS 等待
+        // 【特別例外】回傳格式失敗時標記立即重試，跳過 ROUND_DELAY_MS 等待；串流讀取錯誤時標記等待後重試
         let lastResultContentValidationFailed = false;
+        let lastResultStreamReadFailed = false;
 
         for (let round = 1; round <= MAX_ROUNDS_PER_MODEL; round += 1) {
           if (round > 1) {
             if (lastResultContentValidationFailed) {
               addLog('info', `請求 #${requestId}：模型「${modelId}」因回傳格式失敗立即重試，不等待。`);
+            } else if (lastResultStreamReadFailed) {
+              addLog('info', `請求 #${requestId}：模型「${modelId}」因先前發生串流讀取錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪重試。`);
+              await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
             } else {
               addLog('info', `請求 #${requestId}：模型「${modelId}」只有 Key 層級錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪。`);
               await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
@@ -1462,6 +1533,7 @@ function createGatewayApp() {
 
           const result = await tryModelWithKeys(currentModel, round);
           lastResultContentValidationFailed = !!(result && result.contentValidationFailed);
+          lastResultStreamReadFailed = !!(result && result.streamReadFailed);
 
           if (result.clientGone) {
             addLog('warning', `請求 #${requestId}：客戶端已中斷，停止後續模型調度。`);
@@ -1516,6 +1588,13 @@ function createGatewayApp() {
                 continue;
               }
             }
+            // 串流讀取錯誤：觸發同模型等待後重試
+            if (result.streamReadFailed) {
+              addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪發生串流讀取錯誤，排程進行下一輪重試。`);
+              if (round < MAX_ROUNDS_PER_MODEL) {
+                continue;
+              }
+            }
             addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪僅發生 Key 層級錯誤。`);
             if (round < MAX_ROUNDS_PER_MODEL) {
               continue;
@@ -1560,13 +1639,15 @@ function createGatewayApp() {
     }
   });
 
-  // 7. 測試專用聊天端點 (需 admin auth)
   app.post('/api/test/chat', requireAdminAuth, async (req, res) => {
-    const { model, messages, stream } = req.body;
+    const { model, messages, stream, response_format } = req.body;
     
     if (!model || !messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Model and messages array are required' });
     }
+
+    const sanitized = sanitizeChatCompletionBody({ model, messages, stream, response_format });
+    const cleanMessages = sanitized.messages;
 
     const activeKeys = apiKeys.getActiveKeys();
     if (activeKeys.length === 0) {
@@ -1596,7 +1677,13 @@ function createGatewayApp() {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${selectedKey.key_value}`
           },
-          body: JSON.stringify({ model, messages, stream: !!stream }),
+          body: JSON.stringify({
+            model,
+            messages: cleanMessages,
+            stream: !!stream,
+            temperature: 1,
+            ...(sanitized.response_format ? { response_format: sanitized.response_format } : {})
+          }),
           signal: abortController.signal
         });
 

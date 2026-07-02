@@ -25,6 +25,13 @@ function startMockNvidiaServer() {
 
         console.log(`[Mock NVIDIA] Received request. Key: ${key}, Model: ${model}`);
 
+        if (payload.temperature !== 1) {
+          console.error(`[Mock NVIDIA] Error: temperature is ${payload.temperature}, expected 1`);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Invalid temperature parameter: expected 1, got ${payload.temperature}` }));
+          return;
+        }
+
         // A. 模擬 401 錯誤
         if (key === 'key-invalid') {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -60,6 +67,17 @@ function startMockNvidiaServer() {
             message: "This model's maximum context length is 202752 tokens. However, your messages resulted in 206517 tokens. Please reduce the length of the messages.",
             type: "Bad Request",
             code: 400
+          }));
+          return;
+        }
+
+        // H. 模擬 400 Degraded Function 錯誤 (只在模型為 70b 時觸發，用以測試 fallback)
+        if (model === 'meta/llama3-70b-instruct' && key === 'key-trigger-400-degraded') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 400,
+            title: "Bad Request",
+            detail: "Function id '948fe171-ce7a-4332-8bc0-5e14e90259f9': DEGRADED function cannot be invoked"
           }));
           return;
         }
@@ -420,6 +438,37 @@ async function runTests() {
       console.log('=> TEST 10 PASSED (successfully degraded to 2nd priority model on stream read timeout)');
     } else {
       throw new Error('TEST 10 FAILED');
+    }
+
+    // --- 測試 11: 400 Degraded Function Fallback 模型降級 ---
+    console.log('\n--- Test 11: 400 Degraded Function Fallback ---');
+    // 清除模型冷卻狀態
+    await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/gateway/reset-cooldowns`, { method: 'POST' });
+
+    // 清空 Key，加入會對 70b 觸發 400 degraded 的 key
+    apiKeys.getAll().forEach(k => apiKeys.delete(k.id));
+    apiKeys.add('key-trigger-400-degraded');
+
+    // 設定兩台模型順位 (70b 第一順位, 8b 第二順位)
+    modelsConfig.savePriorityList(['meta/llama3-70b-instruct', 'meta/llama3-8b-instruct']);
+
+    res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'patcher-main',
+        messages: [{ role: 'user', content: 'trigger degraded fallback' }]
+      })
+    });
+
+    data = await res.json();
+    console.log('Response Status:', res.status);
+    console.log('Response Model returned:', data.model);
+
+    if (res.status === 200 && data.model === 'patcher-main') {
+      console.log('=> TEST 11 PASSED (successfully degraded to 2nd priority model on 400 degraded function)');
+    } else {
+      throw new Error('TEST 11 FAILED');
     }
 
     console.log('\n>>> ALL INTEGRATION TESTS PASSED SUCCESSFULLY! <<<\n');
