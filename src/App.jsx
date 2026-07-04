@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Activity, Key, Cpu, FileText, Plus, Trash, Copy, Check,
@@ -69,6 +69,14 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const logsContainerRef = useRef(null);
   const shouldAutoFollowLogsRef = useRef(true);
+  const sseLogsBufferRef = useRef([]);
+  const sseLogsTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (sseLogsTimeoutRef.current) clearTimeout(sseLogsTimeoutRef.current);
+    };
+  }, []);
 
   const [isSyncingModels, setIsSyncingModels] = useState(false);
   const [isTestingKeys, setIsTestingKeys] = useState(false);
@@ -229,7 +237,19 @@ export default function App() {
   }, [keys, notifyAllKeysDown]);
 
   const sseConnected = useRealtimeEvents(GATEWAY_URL, adminToken, {
-    onLogs: (data) => { setLogs(prev => { const updated = [...prev, data]; return updated.length > 100 ? updated.slice(-100) : updated; }); },
+    onLogs: (data) => {
+      sseLogsBufferRef.current.push(data);
+      if (!sseLogsTimeoutRef.current) {
+        sseLogsTimeoutRef.current = setTimeout(() => {
+          setLogs(prev => {
+            const updated = [...prev, ...sseLogsBufferRef.current];
+            sseLogsBufferRef.current = [];
+            return updated.length > 100 ? updated.slice(-100) : updated;
+          });
+          sseLogsTimeoutRef.current = null;
+        }, 150);
+      }
+    },
     onStats: (data) => { setStats(data); },
     onKeys: (data) => { if (data.action !== 'test') fetchData(); },
     onModels: () => { fetchData(); },
@@ -307,33 +327,56 @@ export default function App() {
 
   const formatTaiwanParts = (value) => {
     if (!value) return null;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return null;
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Taipei',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23'
-    });
-    return formatter.formatToParts(date).reduce((acc, part) => {
-      if (part.type !== 'literal') acc[part.type] = part.value;
-      return acc;
-    }, {});
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+      });
+      return formatter.formatToParts(date).reduce((acc, part) => {
+        if (part.type !== 'literal') acc[part.type] = part.value;
+        return acc;
+      }, {});
+    } catch (e) {
+      console.error('formatTaiwanParts error:', e);
+      return null;
+    }
   };
 
   const formatTaiwanTime = (value) => {
+    if (!value) return '--';
     const parts = formatTaiwanParts(value);
-    if (!parts) return value ? String(value).substring(11, 19) : '--';
+    if (!parts) {
+      try {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '--';
+        return date.toLocaleTimeString('zh-TW', { hourCycle: 'h23' });
+      } catch (err) {
+        return typeof value === 'string' && value.length >= 19 ? value.substring(11, 19) : String(value);
+      }
+    }
     return `${parts.hour}:${parts.minute}:${parts.second}`;
   };
 
   const formatTaiwanDateTime = (value) => {
+    if (!value) return '--';
     const parts = formatTaiwanParts(value);
-    if (!parts) return '--';
+    if (!parts) {
+      try {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '--';
+        return date.toLocaleString('zh-TW', { hourCycle: 'h23' });
+      } catch (err) {
+        return String(value);
+      }
+    }
     return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
   };
 
@@ -751,7 +794,43 @@ export default function App() {
     el.scrollTo({ top: el.scrollHeight, behavior });
   };
 
+  const renderedLogRows = useMemo(() => {
+    const isLight = theme === 'theme-light';
+    return logs.map((log, index) => {
+      if (!log) return null;
 
+      let logColor = isLight ? '#1e3a8a' : '#dbeafe';
+      let icon = 'ℹ️';
+
+      if (log.type === 'success') {
+        logColor = isLight ? '#047857' : '#34d399';
+        icon = '✅';
+      } else if (log.type === 'warning') {
+        logColor = isLight ? '#b45309' : '#fbbf24';
+        icon = '⚠️';
+      } else if (log.type === 'error') {
+        logColor = isLight ? '#b91c1c' : '#f87171';
+        icon = '❌';
+      }
+
+      return (
+        <div key={`${log.timestamp || 'log'}-${log.id || index}`} className="terminal-log-line">
+          <span className="terminal-log-time">
+            [{formatTaiwanTime(log.timestamp)}]
+          </span>
+          <span className="terminal-log-icon">
+            {icon}
+          </span>
+          <span
+            className="terminal-log-message"
+            style={{ color: logColor }}
+          >
+            {translateLogMessage(log.message, i18n.language)}
+          </span>
+        </div>
+      );
+    });
+  }, [logs, theme, i18n.language]);
 
   const getModelEmoji = (modelId) => {
     const id = modelId.toLowerCase();
@@ -1259,39 +1338,7 @@ export default function App() {
                     className="terminal-log-lines"
                     onScroll={handleLogsScroll}
                   >
-                    {logs.map((log, index) => {
-                      const isLight = theme === 'theme-light';
-                      let logColor = isLight ? '#1e3a8a' : '#dbeafe';
-                      let icon = 'ℹ️';
-
-                      if (log.type === 'success') {
-                        logColor = isLight ? '#047857' : '#34d399';
-                        icon = '✅';
-                      } else if (log.type === 'warning') {
-                        logColor = isLight ? '#b45309' : '#fbbf24';
-                        icon = '⚠️';
-                      } else if (log.type === 'error') {
-                        logColor = isLight ? '#b91c1c' : '#f87171';
-                        icon = '❌';
-                      }
-
-                      return (
-                        <div key={`${log.timestamp}-${index}`} className="terminal-log-line">
-                          <span className="terminal-log-time">
-                            [{formatTaiwanTime(log.timestamp)}]
-                          </span>
-                          <span className="terminal-log-icon">
-                            {icon}
-                          </span>
-                          <span
-                            className="terminal-log-message"
-                            style={{ color: logColor }}
-                          >
-                            {translateLogMessage(log.message, i18n.language)}
-                          </span>
-                        </div>
-                      );
-                    })}
+                    {renderedLogRows}
                   </div>
                 )}
               </div>

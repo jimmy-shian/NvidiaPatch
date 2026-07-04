@@ -75,18 +75,13 @@ body,
 .terminal-log-panel, 
 .available-model-card, 
 nav button, 
-div, 
-span, 
-h1, 
-h2, 
-h3, 
-h4, 
-section, 
-p, 
 table, 
 th, 
 td,
-a {
+a,
+.sync-info-chip,
+.sync-notice,
+.token-detail-tab {
   transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
 }
 
@@ -472,6 +467,7 @@ input, textarea, pre, code, [contenteditable="true"] {
   border-radius: 8px;
   border: 1px solid var(--border-color);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  contain: layout paint;
 }
 
 .terminal-log-lines {
@@ -501,6 +497,10 @@ input, textarea, pre, code, [contenteditable="true"] {
   font-size: 14px;
   line-height: 1.6;
   overflow: visible;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 28px;
+  transition: none;
 }
 
 .terminal-log-line:hover {
