@@ -106,6 +106,7 @@ export default function App() {
   const [draggedModelIndex, setDraggedModelIndex] = useState(null);
   const [draggedAvailableModelId, setDraggedAvailableModelId] = useState(null);
   const [isPriorityDropActive, setIsPriorityDropActive] = useState(false);
+  const [priorityDropIndex, setPriorityDropIndex] = useState(null);
   const localModelOrderRef = useRef(null);
 
   const [dashboardSubTab, setDashboardSubTab] = useState('overview');
@@ -572,9 +573,44 @@ export default function App() {
     }
   };
 
-  const handleAddModelToPriority = (modelId) => {
+  const buildModelsFromOrder = useCallback((modelIds) => {
+    return modelIds.map((modelId, index) => {
+      const existing = models.find(m => m.model_id === modelId);
+      return {
+        ...(existing || {}),
+        id: existing?.id || modelId,
+        model_id: modelId,
+        priority: index + 1
+      };
+    });
+  }, [models]);
+
+  const getInsertOrder = useCallback((modelId, insertIndex, sourceOrder = models.map(m => m.model_id)) => {
+    if (!modelId) return sourceOrder;
+
+    const originalIndex = sourceOrder.indexOf(modelId);
+    const withoutDragged = sourceOrder.filter(id => id !== modelId);
+    let nextIndex = Math.max(0, Math.min(insertIndex, withoutDragged.length));
+
+    if (originalIndex !== -1 && insertIndex > originalIndex) {
+      nextIndex = Math.max(0, nextIndex - 1);
+    }
+
+    const updated = [...withoutDragged];
+    updated.splice(nextIndex, 0, modelId);
+    return updated;
+  }, [models]);
+
+  const getDropIndexFromEvent = useCallback((e, index) => {
+    if (index === null || index === undefined) return models.length;
+    const rect = e.currentTarget.getBoundingClientRect();
+    return e.clientY < rect.top + rect.height / 2 ? index : index + 1;
+  }, [models.length]);
+
+  const handleAddModelToPriority = (modelId, insertIndex = models.length) => {
     if (models.some(m => m.model_id === modelId)) return;
-    const updated = [...models.map(m => m.model_id), modelId];
+    const updated = getInsertOrder(modelId, insertIndex);
+    setModels(buildModelsFromOrder(updated));
     saveModelPriorities(updated);
   };
 
@@ -589,29 +625,53 @@ export default function App() {
   const handleAvailableModelDragEnd = () => {
     setDraggedAvailableModelId(null);
     setIsPriorityDropActive(false);
+    setPriorityDropIndex(null);
   };
 
-  const handlePriorityDragOver = (e) => {
-    const hasAvailableModel = draggedAvailableModelId || Array.from(e.dataTransfer.types || []).includes('application/x-nvidia-model-id');
-    if (!hasAvailableModel) return;
+  const handlePriorityDragOver = (e, index = null) => {
+    const types = Array.from(e.dataTransfer.types || []);
+    const hasAvailableModel = draggedAvailableModelId || types.includes('application/x-nvidia-model-id');
+    const hasPriorityModel = draggedModelIndex !== null || types.includes('application/x-nvidia-priority-index');
+    if (!hasAvailableModel && !hasPriorityModel) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+    e.dataTransfer.dropEffect = hasPriorityModel ? 'move' : 'copy';
     setIsPriorityDropActive(true);
+    setPriorityDropIndex(getDropIndexFromEvent(e, index));
   };
 
   const handlePriorityDragLeave = (e) => {
     if (e.currentTarget.contains(e.relatedTarget)) return;
     setIsPriorityDropActive(false);
+    setPriorityDropIndex(null);
   };
 
-  const handlePriorityDrop = (e) => {
-    const modelId = e.dataTransfer.getData('application/x-nvidia-model-id') || draggedAvailableModelId;
-    if (!modelId) return;
+  const handlePriorityDrop = async (e, index = null) => {
     e.preventDefault();
+    const modelId =
+      e.dataTransfer.getData('application/x-nvidia-model-id') ||
+      e.dataTransfer.getData('application/x-nvidia-priority-model-id') ||
+      draggedAvailableModelId;
+    if (!modelId) return;
+
+    const insertIndex = index === null ? (priorityDropIndex ?? models.length) : getDropIndexFromEvent(e, index);
+    const currentOrder = localModelOrderRef.current || models.map(m => m.model_id);
+    const isExistingPriorityModel = currentOrder.includes(modelId);
+    if (!isExistingPriorityModel && models.some(m => m.model_id === modelId)) return;
+
+    const previousModels = models;
+    const updated = getInsertOrder(modelId, insertIndex, currentOrder);
     setIsPriorityDropActive(false);
+    setPriorityDropIndex(null);
+    setDraggedModelIndex(null);
     setDraggedAvailableModelId(null);
-    if (!models.some(m => m.model_id === modelId)) {
-      handleAddModelToPriority(modelId);
+
+    try {
+      setModels(buildModelsFromOrder(updated));
+      await saveModelPriorities(updated);
+    } catch (err) {
+      setModels(previousModels);
+    } finally {
+      localModelOrderRef.current = null;
     }
   };
 
@@ -1934,19 +1994,23 @@ export default function App() {
                 <div
                   className={`priority-drop-zone ${isPriorityDropActive ? 'is-drag-over' : ''}`}
                   style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}
-                  onDragOver={handlePriorityDragOver}
+                  onDragOver={(e) => handlePriorityDragOver(e)}
                   onDragLeave={handlePriorityDragLeave}
-                  onDrop={handlePriorityDrop}
+                  onDrop={(e) => handlePriorityDrop(e)}
                 >
                   {models.length === 0 ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '15px' }}>
                       {t('models.noModels')}
                     </div>
                   ) : (
-                    models.map((m, index) => (
+                    <>
+                    {models.map((m, index) => (
+                      <React.Fragment key={m.id || m.model_id}>
+                      {priorityDropIndex === index && (
+                        <div className="priority-drop-indicator" aria-hidden="true" />
+                      )}
                       <div
-                        key={m.id}
-                        className="glass-panel"
+                        className={`glass-panel priority-model-card ${draggedModelIndex === index ? 'is-dragging' : ''}`}
                         style={{
                           padding: '12px 16px',
                           display: 'flex',
@@ -1956,8 +2020,6 @@ export default function App() {
                           borderLeft: `5px solid ${index === 0 ? 'var(--status-active)' : 'var(--status-cooldown)'}`,
                           borderRadius: '8px',
                           cursor: 'move',
-                          opacity: draggedModelIndex === index ? 0.5 : 1,
-                          transition: 'opacity 0.2s',
                           background: 'var(--bg-secondary)',
                           marginBottom: '4px'
                         }}
@@ -1966,37 +2028,24 @@ export default function App() {
                           setDraggedModelIndex(index);
                           localModelOrderRef.current = models.map(m2 => m2.model_id);
                           e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('application/x-nvidia-priority-index', String(index));
+                          e.dataTransfer.setData('application/x-nvidia-priority-model-id', m.model_id);
+                          e.dataTransfer.setData('text/plain', m.model_id);
                         }}
                         onDragOver={(e) => {
-                          e.preventDefault();
-                          if (draggedModelIndex === null || draggedModelIndex === index) return;
-                          const currentOrder = localModelOrderRef.current || models.map(m2 => m2.model_id);
-                          const updated = [...currentOrder];
-                          const temp = updated[draggedModelIndex];
-                          updated[draggedModelIndex] = updated[index];
-                          updated[index] = temp;
-                          localModelOrderRef.current = updated;
-                          const reorderedModels = updated.map((id, i) => ({ ...models.find(m2 => m2.model_id === id) || { model_id: id }, priority: i + 1 }));
-                          setModels(reorderedModels);
-                          setDraggedModelIndex(index);
+                          e.stopPropagation();
+                          handlePriorityDragOver(e, index);
                         }}
                         onDrop={(e) => {
-                          e.preventDefault();
-                          setDraggedModelIndex(null);
+                          e.stopPropagation();
+                          handlePriorityDrop(e, index);
                         }}
-                        onDragEnd={async () => {
+                        onDragEnd={() => {
                           setDraggedModelIndex(null);
-                          const finalOrder = localModelOrderRef.current;
-                          if (finalOrder) {
-                            const previousOrder = models.map(m2 => m2.model_id);
-                            try {
-                              await saveModelPriorities(finalOrder);
-                            } catch (err) {
-                              const restoredModels = previousOrder.map((id, i) => ({ ...models.find(m2 => m2.model_id === id) || { model_id: id }, priority: i + 1 }));
-                              setModels(restoredModels);
-                            }
-                            localModelOrderRef.current = null;
-                          }
+                          setDraggedAvailableModelId(null);
+                          setIsPriorityDropActive(false);
+                          setPriorityDropIndex(null);
+                          localModelOrderRef.current = null;
                         }}
                         title={t('common.dragToReorder')}
                       >
@@ -2027,7 +2076,12 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                    ))
+                      </React.Fragment>
+                    ))}
+                    {priorityDropIndex === models.length && (
+                      <div className="priority-drop-indicator" aria-hidden="true" />
+                    )}
+                    </>
                   )}
                 </div>
               </div>
