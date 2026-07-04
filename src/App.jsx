@@ -1504,6 +1504,12 @@ export default function App() {
                                     📋 Metadata
                                   </div>
                                   <div
+                                    className={`token-detail-tab ${activeDetailTab === 'prompts' ? 'active' : ''}`}
+                                    onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'prompts' })}
+                                  >
+                                    {t('dashboard.tabPrompts')}
+                                  </div>
+                                  <div
                                     className={`token-detail-tab ${activeDetailTab === 'model' ? 'active' : ''}`}
                                     onClick={() => setExpandedTokenLogTabs({ ...expandedTokenLogTabs, [log.id]: 'model' })}
                                   >
@@ -1537,6 +1543,80 @@ export default function App() {
                                       metadata: log.metadata || null
                                     }, null, 2)}
                                   </pre>
+                                )}
+
+                                {activeDetailTab === 'prompts' && (
+                                  <div className="token-chat-container">
+                                    {(() => {
+                                      try {
+                                        const renderContent = (content) => {
+                                          if (content === null || content === undefined) return '';
+                                          if (typeof content === 'string') return content;
+                                          if (Array.isArray(content)) {
+                                            return content.map((item) => {
+                                              if (typeof item === 'string') return item;
+                                              if (item && typeof item === 'object') {
+                                                if (item.type === 'text') return item.text || '';
+                                                return item.text || JSON.stringify(item);
+                                              }
+                                              return String(item);
+                                            }).join('\n');
+                                          }
+                                          if (typeof content === 'object') {
+                                            return content.text || JSON.stringify(content);
+                                          }
+                                          return String(content);
+                                        };
+
+                                        const chatItems = [];
+
+                                        let parsed = null;
+                                        if (typeof log.request_body === 'string') {
+                                          parsed = JSON.parse(log.request_body);
+                                        } else {
+                                          parsed = log.request_body;
+                                        }
+                                        let messages = null;
+                                        if (parsed) {
+                                          if (Array.isArray(parsed)) {
+                                            messages = parsed;
+                                          } else if (Array.isArray(parsed.messages)) {
+                                            messages = parsed.messages;
+                                          }
+                                        }
+                                        if (Array.isArray(messages)) {
+                                          messages.forEach((m) => {
+                                            chatItems.push({ role: m.role || 'unknown', content: renderContent(m.content) });
+                                          });
+                                        }
+
+                                        const output = log.response_content;
+                                        if (output) {
+                                          chatItems.push({ role: 'assistant', content: renderContent(output) });
+                                        }
+
+                                        if (chatItems.length === 0) {
+                                          return <div style={{ color: 'var(--text-muted)' }}>{t('dashboard.noInputData')}</div>;
+                                        }
+
+                                        return chatItems.map((item, idx) => {
+                                          const isUser = item.role === 'user';
+                                          const isAssistant = item.role === 'assistant';
+                                          const isTool = item.role === 'tool';
+                                          const isSystem = item.role === 'system';
+                                          const bubbleClass = isUser ? 'user' : (isAssistant ? 'assistant' : (isTool ? 'tool' : 'system'));
+                                          return (
+                                            <div key={idx} className={`token-chat-message ${bubbleClass}`}>
+                                              <div className="token-chat-role">{item.role}</div>
+                                              <pre className="token-chat-content">{item.content}</pre>
+                                            </div>
+                                          );
+                                        });
+                                      } catch (_) {
+                                        return <div style={{ color: 'var(--text-muted)' }}>{t('dashboard.noInputData')}</div>;
+                                      }
+                                    })()}
+                                  </div>
                                 )}
 
                                 {activeDetailTab === 'model' && (

@@ -1475,7 +1475,7 @@ function createGatewayApp() {
       stats.recordRequest(true);
       const durationMs = Date.now() - requestStartedAt;
       
-      // 記錄 Token 使用量與完整對話內容 (僅最近 5 個保留對話文字)
+      // 記錄 Token 使用量與完整對話內容 (僅最近 50 個保留對話文字)
       try {
         const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         let responseContent = '';

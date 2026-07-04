@@ -407,15 +407,19 @@ function initDatabase(dbPath) {
       prompt_tokens INTEGER DEFAULT 0,
       completion_tokens INTEGER DEFAULT 0,
       total_tokens INTEGER DEFAULT 0,
-      request_body TEXT DEFAULT ''
+      request_body TEXT DEFAULT '',
+      response_content TEXT DEFAULT ''
     )
   `);
 
-  // 7.1 確保舊表缺少 request_body 欄位時自動補上
+  // 7.1 確保舊表缺少 request_body 或 response_content 欄位時自動補上
   try {
     const tokenUsageCols = db.prepare("PRAGMA table_info(token_usage)").all();
     if (!tokenUsageCols.some(c => c.name === 'request_body')) {
       db.exec("ALTER TABLE token_usage ADD COLUMN request_body TEXT DEFAULT ''");
+    }
+    if (!tokenUsageCols.some(c => c.name === 'response_content')) {
+      db.exec("ALTER TABLE token_usage ADD COLUMN response_content TEXT DEFAULT ''");
     }
   } catch (_) { /* ignore */ }
 
@@ -1133,14 +1137,30 @@ const settings = {
 };
 
 const tokenUsage = {
-  addRecord(requestId, modelId, promptTokens, completionTokens, requestBody) {
+  addRecord(requestId, modelId, promptTokens, completionTokens, requestBody, responseContent) {
     const timestamp = getTaiwanISOString();
     const total = (promptTokens || 0) + (completionTokens || 0);
     const bodyStr = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody || {});
+    const respStr = responseContent || '';
     db.prepare(`
-      INSERT INTO token_usage (request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(requestId || null, timestamp, modelId, promptTokens || 0, completionTokens || 0, total, bodyStr);
+      INSERT INTO token_usage (request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body, response_content)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(requestId || null, timestamp, modelId, promptTokens || 0, completionTokens || 0, total, bodyStr, respStr);
+
+    // 唯獨最近 50 個顯示完整對話，更早之前的紀錄自動清除對話與回傳文字
+    try {
+      db.exec(`
+        UPDATE token_usage 
+        SET request_body = '', response_content = '' 
+        WHERE id NOT IN (
+          SELECT id FROM token_usage 
+          ORDER BY id DESC 
+          LIMIT 50
+        )
+      `);
+    } catch (err) {
+      console.error('Failed to prune old token_usage prompt contents:', err);
+    }
   },
   getStats() {
     return db.prepare(`
@@ -1157,7 +1177,7 @@ const tokenUsage = {
   },
   getLogs(limit = 100) {
     return db.prepare(`
-      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body
+      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body, response_content
       FROM token_usage
       ORDER BY id DESC
       LIMIT ?
@@ -1165,7 +1185,7 @@ const tokenUsage = {
   },
   getDetail(id) {
     return db.prepare(`
-      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body
+      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body, response_content
       FROM token_usage
       WHERE id = ?
     `).get(id);
