@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   restartGateway: () => ipcRenderer.send('restart-gateway'),
   restartApp: () => ipcRenderer.send('restart-app'),
   isGatewayRunning: () => ipcRenderer.invoke('is-gateway-running'),
+  sendNotification: (title, body) => ipcRenderer.send('send-notification', { title, body }),
   onGatewayRestarted: (callback) => {
     ipcRenderer.on('gateway-restarted', callback);
     return () => ipcRenderer.removeListener('gateway-restarted', callback);

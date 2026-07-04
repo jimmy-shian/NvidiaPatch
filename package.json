@@ -43,7 +43,8 @@
       "database.js",
       "gateway.js",
       "utils/**/*",
-      "package.json"
+      "package.json",
+      "icon.png"
     ],
     "win": {
       "target": [

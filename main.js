@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, clipboard, Notification: ElectronNotification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initDatabase, rules } = require('./database');
@@ -10,9 +10,11 @@ let server = null;
 let isQuitting = false;
 let gatewayApp = null;
 
-// 1. 生成 16x16 綠色小圖示的 NativeImage，防止 Tray 圖示遺失
+// 1. 載入高質感統一圖示，並保留 16x16 綠色小圖示作為備載
 const iconBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhElEQVR4nJ2S0Q2AMAhEhXQAXUq30uhWupTdQFMTkoZSjnhfDeX1rgQaDI3n/lj1vGykaxyFe3cUAb007DXd8wof4j/uNUM9WNyn68AJeiow+gZbxQIhZ1GqIaS6RwySLiDpvhQBvIGytZ5RFZblEEmi4S9BxMmbT+OMtlKnbRJ437HuXoAvOsGOPrPFAAAAAElFTkSuQmCC';
-const trayIcon = nativeImage.createFromBuffer(Buffer.from(iconBase64, 'base64'));
+const fallbackIcon = nativeImage.createFromBuffer(Buffer.from(iconBase64, 'base64'));
+const iconPath = path.join(__dirname, 'icon.png');
+const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : fallbackIcon;
 
 
 // 2. 初始化資料庫 (存放在 AppData/Roaming 目錄下)
@@ -88,7 +90,7 @@ function restartGateway() {
             tray.displayBalloon({
               title: 'NVIDIA NIM Gateway',
               content: `Gateway 服務已在埠號 ${portToUse} 重新啟動。`,
-              iconType: 'info'
+              icon: appIcon
             });
           }
           if (mainWindow && !mainWindow.isDestroyed()) {
@@ -111,6 +113,7 @@ function restartGateway() {
   }
 }
 
+// 🔁 重新啟動整個應用程式
 function restartApp() {
   isQuitting = true;
   app.relaunch();
@@ -131,10 +134,13 @@ function createMainWindow() {
     height: 800,
     frame: true, // 保留系統邊框以便操作
     title: 'NVIDIA NIM LLM Gateway',
+    backgroundColor: '#09090b',
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     },
     show: false
   });
@@ -165,7 +171,7 @@ function createMainWindow() {
         tray.displayBalloon({
           title: 'NVIDIA NIM Gateway',
           content: '服務已最小化至系統列，繼續在背景運行。',
-          iconType: 'info'
+          icon: appIcon
         });
       }
     }
@@ -193,7 +199,7 @@ function updateTrayMenu() {
       tray.displayBalloon({
         title: '複製成功',
         content: `已成功複製「${r.title}」至剪貼簿！`,
-        iconType: 'info'
+        icon: appIcon
       });
     }
   }));
@@ -247,7 +253,7 @@ function updateTrayMenu() {
 
 function createTray() {
   // 建立系統匣圖示
-  tray = new Tray(trayIcon);
+  tray = new Tray(appIcon);
   tray.setToolTip('NVIDIA NIM LLM Gateway');
   updateTrayMenu();
 
@@ -293,6 +299,20 @@ ipcMain.on('restart-app', () => {
 
 ipcMain.handle('is-gateway-running', () => {
   return server && server.listening;
+});
+
+// 監聽系統通知事件
+ipcMain.on('send-notification', (event, { title, body }) => {
+  try {
+    const notification = new ElectronNotification({
+      title,
+      body,
+      icon: appIcon
+    });
+    notification.show();
+  } catch (err) {
+    console.error('Failed to show native notification:', err);
+  }
 });
 
 // App 生命週期

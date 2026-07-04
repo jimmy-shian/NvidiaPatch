@@ -18,6 +18,15 @@ export default function useNotifications() {
     }
     lastNotifyRef.current[tag] = now;
 
+    if (window.electronAPI && typeof window.electronAPI.sendNotification === 'function') {
+      try {
+        window.electronAPI.sendNotification(title, body);
+        return null;
+      } catch (err) {
+        console.error('Failed to send notification via electronAPI:', err);
+      }
+    }
+
     if (permission === 'granted') {
       try {
         return new Notification(title, { body, tag });
