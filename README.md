@@ -44,6 +44,9 @@ NVIDIA NIM Models (integrate.api.nvidia.com)
   - 用戶可在 UI 點擊新增至優先級列表，並以「上移/下移」靈活調整第 1、第 2、第 3 順位。
 - **📝 Editor Rules 規範快捷鍵**：內建「Angular Commit Message 規範」、「Cline 開發規範」與「UI/UX 設計原則」，支援用戶新增/編輯自訂規範，在 UI 上提供一鍵複製至剪貼簿功能。
 - **🚀 隨插即用**：使用 Node.js v24 原生內建的 `node:sqlite` 資料庫，**無需透過 npm 安裝二進制編譯的 SQLite 驅動**，在 Windows 平台上 100% 執行成功。
+- **⚡ 效能與優化設計**：
+  - **SSE 事件節流 (Throttled Real-time Events)**：為了防止高頻率日誌（Logs）與流量狀態（Stats）更新造成 React 畫面頻繁重繪與 CPU 佔用率過高，前端在 `useRealtimeEvents.js` 中實作了 3 秒節流（Throttle）緩衝機制。事件會先暫存並每 3 秒整批更新一次，大幅提升大流量下的前端渲染效能。
+  - **批次合併 API 請求 (Cached Initial API Fetching)**：當使用者登入或首頁初始化時，`App.jsx` 會將多個獲取設定、金鑰、模型等 API 請求包裝在同一個 Cache Promise 緩衝中，避免短時間內對 Gateway 重複發起大量相同的併發 Request。
 
 ---
 
