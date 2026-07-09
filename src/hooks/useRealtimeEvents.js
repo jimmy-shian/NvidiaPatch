@@ -12,6 +12,100 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
   const handlerRef = useRef(handlers);
   handlerRef.current = handlers;
 
+  const throttleTimeoutRef = useRef(null);
+  const lastExecutionTimeRef = useRef(0);
+  const pendingUpdatesRef = useRef({
+    logs: [],
+    stats: null,
+    keys: null,
+    models: false,
+    rules: false,
+    settings: null,
+    tokenUsage: false,
+    health: null
+  });
+
+  const flushUpdates = useCallback(() => {
+    const pending = pendingUpdatesRef.current;
+    const handlers = handlerRef.current;
+
+    if (pending.logs.length > 0) {
+      if (handlers.onLogs) {
+        pending.logs.forEach(log => {
+          try { handlers.onLogs(log); } catch (e) { console.error(e); }
+        });
+      }
+      pending.logs = [];
+    }
+
+    if (pending.stats !== null) {
+      if (handlers.onStats) {
+        try { handlers.onStats(pending.stats); } catch (e) { console.error(e); }
+      }
+      pending.stats = null;
+    }
+
+    if (pending.keys !== null) {
+      if (handlers.onKeys) {
+        try { handlers.onKeys(pending.keys); } catch (e) { console.error(e); }
+      }
+      pending.keys = null;
+    }
+
+    if (pending.models) {
+      if (handlers.onModels) {
+        try { handlers.onModels(); } catch (e) { console.error(e); }
+      }
+      pending.models = false;
+    }
+
+    if (pending.rules) {
+      if (handlers.onRules) {
+        try { handlers.onRules(); } catch (e) { console.error(e); }
+      }
+      pending.rules = false;
+    }
+
+    if (pending.settings !== null) {
+      if (handlers.onSettings) {
+        try { handlers.onSettings(pending.settings); } catch (e) { console.error(e); }
+      }
+      pending.settings = null;
+    }
+
+    if (pending.tokenUsage) {
+      if (handlers.onTokenUsage) {
+        try { handlers.onTokenUsage(); } catch (e) { console.error(e); }
+      }
+      pending.tokenUsage = false;
+    }
+
+    if (pending.health !== null) {
+      if (handlers.onHealth) {
+        try { handlers.onHealth(pending.health); } catch (e) { console.error(e); }
+      }
+      pending.health = null;
+    }
+  }, []);
+
+  const requestUpdate = useCallback(() => {
+    if (throttleTimeoutRef.current) return;
+
+    const now = Date.now();
+    const timeSinceLast = now - lastExecutionTimeRef.current;
+
+    if (timeSinceLast >= 3000) {
+      flushUpdates();
+      lastExecutionTimeRef.current = Date.now();
+    } else {
+      throttleTimeoutRef.current = setTimeout(() => {
+        flushUpdates();
+        lastExecutionTimeRef.current = Date.now();
+        throttleTimeoutRef.current = null;
+      }, 3000 - timeSinceLast);
+    }
+  }, [flushUpdates]);
+
   const connect = useCallback(() => {
     if (!adminToken) return;
 
@@ -100,11 +194,23 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
       }, retryDelay);
     };
 
-    const addHandler = (event, handler) => {
+    const addHandler = (event, typeKey, hasData = true) => {
       es.addEventListener(event, (e) => {
         try {
-          const data = JSON.parse(e.data);
-          handler(data);
+          let data = null;
+          if (hasData) {
+            data = JSON.parse(e.data);
+          }
+          
+          if (typeKey === 'logs') {
+            pendingUpdatesRef.current.logs.push(data);
+          } else if (typeKey === 'models' || typeKey === 'rules' || typeKey === 'tokenUsage') {
+            pendingUpdatesRef.current[typeKey] = true;
+          } else {
+            pendingUpdatesRef.current[typeKey] = data;
+          }
+
+          requestUpdate();
         } catch (err) {
           console.error(`SSE ${event} parse error:`, err);
         }
@@ -114,27 +220,37 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
     es.addEventListener('open', onOpen);
     es.addEventListener('error', onError);
 
-    if (handlerRef.current.onLogs) addHandler('logs', handlerRef.current.onLogs);
-    if (handlerRef.current.onStats) addHandler('stats', handlerRef.current.onStats);
-    if (handlerRef.current.onKeys) addHandler('keys', handlerRef.current.onKeys);
-    if (handlerRef.current.onModels) addHandler('models', handlerRef.current.onModels);
-    if (handlerRef.current.onRules) addHandler('rules', handlerRef.current.onRules);
-    if (handlerRef.current.onSettings) addHandler('settings', handlerRef.current.onSettings);
-    if (handlerRef.current.onTokenUsage) addHandler('token-usage', handlerRef.current.onTokenUsage);
+    if (handlerRef.current.onLogs) addHandler('logs', 'logs');
+    if (handlerRef.current.onStats) addHandler('stats', 'stats');
+    if (handlerRef.current.onKeys) addHandler('keys', 'keys');
+    if (handlerRef.current.onModels) addHandler('models', 'models', false);
+    if (handlerRef.current.onRules) addHandler('rules', 'rules', false);
+    if (handlerRef.current.onSettings) addHandler('settings', 'settings');
+    if (handlerRef.current.onTokenUsage) addHandler('token-usage', 'tokenUsage', false);
     if (handlerRef.current.onHealth) {
-      addHandler('health', (data) => {
-        lastHealthTime = Date.now();
-        handlerRef.current.onHealth(data);
+      es.addEventListener('health', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          lastHealthTime = Date.now();
+          pendingUpdatesRef.current.health = data;
+          requestUpdate();
+        } catch (err) {
+          console.error('SSE health parse error:', err);
+        }
       });
     }
     es.addEventListener('connected', onOpen);
 
-  }, [gatewayUrl, adminToken]);
+  }, [gatewayUrl, adminToken, requestUpdate]);
 
   useEffect(() => {
     connect();
     return () => {
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+      if (throttleTimeoutRef.current) {
+        clearTimeout(throttleTimeoutRef.current);
+        throttleTimeoutRef.current = null;
+      }
       if (esRef.current) {
         esRef.current.close();
         esRef.current = null;

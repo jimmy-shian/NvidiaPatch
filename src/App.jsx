@@ -120,6 +120,7 @@ export default function App() {
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   const [restartNotice, setRestartNotice] = useState(null);
   const restartNoticeTimerRef = useRef(null);
+  const fetchDataPromiseRef = useRef(null);
 
   const { notifyAllKeysDown, notifyAllModelsDegraded } = useNotifications();
 
@@ -137,23 +138,34 @@ export default function App() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    try {
-      const promises = [
-        api.fetchKeys().then(data => setKeys(data)).catch(err => console.error('keys:', err)),
-        api.fetchModels().then(data => setModels(data)).catch(err => console.error('models:', err)),
-        api.fetchModelGroups().then(data => { setActiveModelGroup(data.activeGroup || 1); setModelGroups(data.groups || []); }).catch(err => console.error('modelGroups:', err)),
-        api.fetchAvailableModels().then(data => { setAvailableModels(data.models || []); setLastSyncTime(data.lastSyncTime || null); setLastSyncSource(data.lastSyncSource || null); setExpectedModelCount(data.expectedCount || null); setLastParsedModelCount(data.parsedCount ?? null); setLastSavedModelCount(data.savedCount ?? null); if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id); }).catch(err => console.error('availModels:', err)),
-        api.fetchRules().then(data => setRules(data)).catch(err => console.error('rules:', err)),
-        api.fetchSettings().then(data => setSettingsData(data)).catch(err => console.error('settings:', err)),
-        api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
-        api.fetchLogs().then(data => setLogs(data)).catch(err => console.error('logs:', err)),
-        api.fetchStats().then(data => setStats(data)).catch(err => console.error('stats:', err)),
-      ];
-      await Promise.all(promises);
-      setApiError('');
-    } catch (err) {
-      setApiError('Unable to connect to Gateway.');
+    if (fetchDataPromiseRef.current) {
+      return fetchDataPromiseRef.current;
     }
+
+    const runFetch = async () => {
+      try {
+        const promises = [
+          api.fetchKeys().then(data => setKeys(data)).catch(err => console.error('keys:', err)),
+          api.fetchModels().then(data => setModels(data)).catch(err => console.error('models:', err)),
+          api.fetchModelGroups().then(data => { setActiveModelGroup(data.activeGroup || 1); setModelGroups(data.groups || []); }).catch(err => console.error('modelGroups:', err)),
+          api.fetchAvailableModels().then(data => { setAvailableModels(data.models || []); setLastSyncTime(data.lastSyncTime || null); setLastSyncSource(data.lastSyncSource || null); setExpectedModelCount(data.expectedCount || null); setLastParsedModelCount(data.parsedCount ?? null); setLastSavedModelCount(data.savedCount ?? null); if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id); }).catch(err => console.error('availModels:', err)),
+          api.fetchRules().then(data => setRules(data)).catch(err => console.error('rules:', err)),
+          api.fetchSettings().then(data => setSettingsData(data)).catch(err => console.error('settings:', err)),
+          api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
+          api.fetchLogs().then(data => setLogs(data)).catch(err => console.error('logs:', err)),
+          api.fetchStats().then(data => setStats(data)).catch(err => console.error('stats:', err)),
+        ];
+        await Promise.all(promises);
+        setApiError('');
+      } catch (err) {
+        setApiError('Unable to connect to Gateway.');
+      } finally {
+        fetchDataPromiseRef.current = null;
+      }
+    };
+
+    fetchDataPromiseRef.current = runFetch();
+    return fetchDataPromiseRef.current;
   }, [api]);
 
   const handleLogin = useCallback(async (e) => {
