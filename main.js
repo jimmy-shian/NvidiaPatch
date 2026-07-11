@@ -14,6 +14,7 @@ let tray = null;
 let server = null;
 let isQuitting = false;
 let gatewayApp = null;
+let trayMenuUpdateTimer = null;
 
 // 1. 載入高質感統一圖示，並保留 16x16 綠色小圖示作為備載
 const iconBase64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhElEQVR4nJ2S0Q2AMAhEhXQAXUq30uhWupTdQFMTkoZSjnhfDeX1rgQaDI3n/lj1vGykaxyFe3cUAb007DXd8wof4j/uNUM9WNyn68AJeiow+gZbxQIhZ1GqIaS6RwySLiDpvhQBvIGytZ5RFZblEEmi4S9BxMmbT+OMtlKnbRJ437HuXoAvOsGOPrPFAAAAAElFTkSuQmCC';
@@ -190,72 +191,82 @@ function createMainWindow() {
 function updateTrayMenu() {
   if (!tray) return;
 
-  let allRules = [];
-  try {
-    allRules = rules.getAll();
-  } catch (err) {
-    console.error('Failed to query rules for tray:', err.message);
-  }
-
-  const ruleMenuItems = allRules.map(r => ({
-    label: `複製 ${r.title.substring(0, 16)}${r.title.length > 16 ? '...' : ''}`,
-    click: () => {
-      clipboard.writeText(r.content);
-      tray.displayBalloon({
-        title: '複製成功',
-        content: `已成功複製「${r.title}」至剪貼簿！`,
-        icon: appIcon
-      });
+  setImmediate(() => {
+    if (!tray) return;
+    let allRules = [];
+    try {
+      allRules = rules.getAll();
+    } catch (err) {
+      console.error('Failed to query rules for tray:', err.message);
     }
-  }));
 
-  const contextMenu = Menu.buildFromTemplate([
-    { 
-      label: '開啟主畫面', 
+    const ruleMenuItems = allRules.map(r => ({
+      label: `複製 ${r.title.substring(0, 16)}${r.title.length > 16 ? '...' : ''}`,
       click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
+        clipboard.writeText(r.content);
+        tray.displayBalloon({
+          title: '複製成功',
+          content: `已成功複製「${r.title}」至剪貼簿！`,
+          icon: appIcon
+        });
+      }
+    }));
+
+    const contextMenu = Menu.buildFromTemplate([
+      { 
+        label: '開啟主畫面', 
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        } 
+      },
+      { type: 'separator' },
+      {
+        label: '快捷複製開發規範',
+        submenu: ruleMenuItems.length > 0 ? ruleMenuItems : [{ label: '(無規範紀錄)', enabled: false }]
+      },
+      { type: 'separator' },
+      {
+        label: '🔄 重新啟動 Gateway 服務',
+        click: () => {
+          restartGateway();
+          updateTrayMenu();
         }
-      } 
-    },
-    { type: 'separator' },
-    {
-      label: '快捷複製開發規範',
-      submenu: ruleMenuItems.length > 0 ? ruleMenuItems : [{ label: '(無規範紀錄)', enabled: false }]
-    },
-    { type: 'separator' },
-    {
-      label: '🔄 重新啟動 Gateway 服務',
-      click: () => {
-        restartGateway();
-        updateTrayMenu();
+      },
+      {
+        label: '🔁 重新啟動整個應用程式',
+        click: () => {
+          restartApp();
+        }
+      },
+      { type: 'separator' },
+      { 
+        label: '系統狀態: 運行中', 
+        enabled: false 
+      },
+      { type: 'separator' },
+      { 
+        label: '結束程式', 
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        } 
       }
-    },
-    {
-      label: '🔁 重新啟動整個應用程式',
-      click: () => {
-        restartApp();
-      }
-    },
-    { type: 'separator' },
-    { 
-      label: '系統狀態: 運行中', 
-      enabled: false 
-    },
-    { type: 'separator' },
-    { 
-      label: '結束程式', 
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      } 
-    }
-  ]);
+    ]);
 
-  tray.setContextMenu(contextMenu);
+    tray.setContextMenu(contextMenu);
+  });
 }
 
+function scheduleTrayMenuUpdate() {
+  if (trayMenuUpdateTimer) clearTimeout(trayMenuUpdateTimer);
+  trayMenuUpdateTimer = setTimeout(() => {
+    trayMenuUpdateTimer = null;
+    updateTrayMenu();
+  }, 150);
+}
 function createTray() {
   // 建立系統匣圖示
   tray = new Tray(appIcon);
@@ -273,8 +284,8 @@ function createTray() {
 
 // 監聽來自 Preload 的視窗與規範異動指令
 ipcMain.on('rules-updated', () => {
-  console.log('[Tray] Rules database updated. Rebuilding Tray context menu...');
-  updateTrayMenu();
+  console.log('[Tray] Rules database updated. Scheduling Tray context menu rebuild...');
+  scheduleTrayMenuUpdate();
 });
 
 ipcMain.on('get-gateway-port', (event) => {
