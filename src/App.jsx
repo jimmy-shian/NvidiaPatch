@@ -947,7 +947,7 @@ export default function App() {
           </div>
         </div>
 
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', minHeight: 0, paddingRight: '4px' }}>
           <button
             className={`btn ${activeTab === 'dashboard' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}

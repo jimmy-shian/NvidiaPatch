@@ -1,6 +1,11 @@
 const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, clipboard, Notification: ElectronNotification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// 解決 Windows 上 Electron 視窗拖曳卡頓與 GPU 相關的黑屏/閃爍問題
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+
 const { initDatabase, rules } = require('./database');
 const { createGatewayApp } = require('./gateway');
 
