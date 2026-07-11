@@ -12,6 +12,7 @@ import useNotifications from './hooks/useNotifications';
 import ErrorBoundary from './components/shared/ErrorBoundary';
 import MarkdownContent from './components/shared/MarkdownContent';
 import RulesPanel from './components/Rules/RulesPanel';
+import ConfirmationModal from './components/shared/ConfirmationModal';
 import { translateLogMessage } from './i18n/logTranslator';
 
 const LANGUAGE_OPTIONS = [
@@ -121,6 +122,39 @@ export default function App() {
   const [restartNotice, setRestartNotice] = useState(null);
   const restartNoticeTimerRef = useRef(null);
   const fetchDataPromiseRef = useRef(null);
+  const lastFetchStartedAtRef = useRef(0);
+  const FETCH_DATA_DEDUPE_MS = 1500;
+
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmText: '',
+    cancelText: '',
+    type: 'danger',
+    onConfirm: () => {}
+  });
+
+  const showConfirm = useCallback((options) => {
+    return new Promise((resolve) => {
+      setConfirmModal({
+        isOpen: true,
+        title: options.title || '',
+        message: options.message || '',
+        confirmText: options.confirmText || '',
+        cancelText: options.cancelText || '',
+        type: options.type || 'danger',
+        onConfirm: () => {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          resolve(true);
+        },
+        onCancel: () => {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          resolve(false);
+        }
+      });
+    });
+  }, []);
 
   const { notifyAllKeysDown, notifyAllModelsDegraded } = useNotifications();
 
@@ -137,10 +171,16 @@ export default function App() {
     };
   }, []);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (options = {}) => {
     if (fetchDataPromiseRef.current) {
       return fetchDataPromiseRef.current;
     }
+
+    const now = Date.now();
+    if (!options.force && now - lastFetchStartedAtRef.current < FETCH_DATA_DEDUPE_MS) {
+      return Promise.resolve();
+    }
+    lastFetchStartedAtRef.current = now;
 
     const runFetch = async () => {
       try {
@@ -520,7 +560,12 @@ export default function App() {
   };
 
   const handleDeleteKey = async (id) => {
-    if (!confirm(t('keys.deleteConfirm'))) return;
+    const ok = await showConfirm({
+      title: t('common.confirm'),
+      message: t('keys.deleteConfirm'),
+      type: 'danger'
+    });
+    if (!ok) return;
     try {
       await api.deleteKey(id);
       fetchData();
@@ -724,7 +769,7 @@ export default function App() {
       await api.addRule(newRuleTitle.trim(), newRuleContent.trim());
       setNewRuleTitle('');
       setNewRuleContent('');
-      fetchData();
+      fetchData({ force: true });
       if (window.electronAPI?.notifyRulesUpdated) {
         window.electronAPI.notifyRulesUpdated();
       }
@@ -734,10 +779,10 @@ export default function App() {
   };
 
   const handleDeleteRule = async (id) => {
-    if (!confirm(t('rules.deleteConfirm'))) return;
     try {
       await api.deleteRule(id);
-      fetchData();
+      setRules(prev => prev.filter(rule => rule.id !== id));
+      fetchData({ force: true });
       if (window.electronAPI?.notifyRulesUpdated) {
         window.electronAPI.notifyRulesUpdated();
       }
@@ -747,10 +792,15 @@ export default function App() {
   };
 
   const handleUpdateRule = async (id, title, content) => {
-    await api.updateRule(id, title, content);
-    fetchData();
-    if (window.electronAPI?.notifyRulesUpdated) {
-      window.electronAPI.notifyRulesUpdated();
+    try {
+      await api.updateRule(id, title, content);
+      setRules(prev => prev.map(rule => rule.id === id ? { ...rule, title, content } : rule));
+      fetchData({ force: true });
+      if (window.electronAPI?.notifyRulesUpdated) {
+        window.electronAPI.notifyRulesUpdated();
+      }
+    } catch (err) {
+      alert('Update rule error');
     }
   };
 
@@ -764,7 +814,12 @@ export default function App() {
   };
 
   const clearTokenUsage = async () => {
-    if (!window.confirm(t('common.confirm'))) return;
+    const ok = await showConfirm({
+      title: t('common.confirm'),
+      message: t('common.confirm'),
+      type: 'danger'
+    });
+    if (!ok) return;
     try {
       await api.clearTokenUsage();
       const data = await api.fetchTokenUsage();
@@ -785,7 +840,12 @@ export default function App() {
 
   const handleRestartGateway = useCallback(async () => {
     if (isRestartingGateway) return;
-    if (!window.confirm(t('common.confirmRestartGateway'))) return;
+    const ok = await showConfirm({
+      title: t('common.confirm'),
+      message: t('common.confirmRestartGateway'),
+      type: 'danger'
+    });
+    if (!ok) return;
     setIsRestartingGateway(true);
     showRestartNotice('info', t('dashboard.restarting') + '...');
 
@@ -822,14 +882,19 @@ export default function App() {
     }
 
     setIsRestartingGateway(false);
-  }, [isRestartingGateway, api, checkGatewayHealth, showRestartNotice, fetchData, t]);
+  }, [isRestartingGateway, api, checkGatewayHealth, showRestartNotice, fetchData, t, showConfirm]);
 
-  const handleRestartApp = useCallback(() => {
-    if (!window.confirm(t('common.confirmRestartApp'))) return;
+  const handleRestartApp = useCallback(async () => {
+    const ok = await showConfirm({
+      title: t('common.confirm'),
+      message: t('common.confirmRestartApp'),
+      type: 'danger'
+    });
+    if (!ok) return;
     if (window.electronAPI?.restartApp) {
       window.electronAPI.restartApp();
     }
-  }, [t]);
+  }, [t, showConfirm]);
 
   const copyToClipboard = (text, id) => {
     navigator.clipboard.writeText(text);
@@ -2565,6 +2630,16 @@ export default function App() {
           </div>
         </div>
       )}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={confirmModal.onCancel}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        type={confirmModal.type}
+      />
     </div>
   );
 }

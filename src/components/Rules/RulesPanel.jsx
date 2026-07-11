@@ -22,6 +22,8 @@ export default function RulesPanel({
   const [editContent, setEditContent] = useState('');
   const [showPreview, setShowPreview] = useState(null);
   const [saveError, setSaveError] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const startEdit = (rule) => {
     if (rule.is_preset) return;
@@ -29,6 +31,7 @@ export default function RulesPanel({
     setEditTitle(rule.title);
     setEditContent(rule.content);
     setSaveError(null);
+    setConfirmDeleteId(null);
   };
 
   const cancelEdit = () => {
@@ -45,6 +48,19 @@ export default function RulesPanel({
       setSaveError(null);
     } catch (err) {
       setSaveError(err.message);
+    }
+  };
+
+  const confirmDelete = async (id) => {
+    setDeletingId(id);
+    try {
+      await onDeleteRule(id);
+      if (editingId === id) cancelEdit();
+      setConfirmDeleteId(null);
+    } catch (err) {
+      setSaveError(err.message || 'Delete rule error');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -107,7 +123,7 @@ export default function RulesPanel({
                         </button>
                       )}
                       {!r.is_preset && (
-                        <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => onDeleteRule(r.id)}>
+                        <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => setConfirmDeleteId(r.id)} title={t('rules.delete')}>
                           <Trash size={12} />
                         </button>
                       )}
@@ -115,6 +131,19 @@ export default function RulesPanel({
                   )}
                 </div>
               </div>
+              {confirmDeleteId === r.id && (
+                <div className="sync-notice sync-notice-error" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', fontSize: '13px' }}>
+                  <span>{t('rules.deleteConfirm')}</span>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '13px' }} onClick={() => confirmDelete(r.id)} disabled={deletingId === r.id}>
+                      <span>{t('rules.delete')}</span>
+                    </button>
+                    <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '13px' }} onClick={() => setConfirmDeleteId(null)} disabled={deletingId === r.id}>
+                      <span>{t('rules.cancel')}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
               {saveError && editingId === r.id && (
                 <div className="sync-notice sync-notice-error" style={{ fontSize: '13px' }}>{saveError}</div>
               )}

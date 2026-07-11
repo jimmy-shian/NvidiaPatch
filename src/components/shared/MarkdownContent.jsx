@@ -3,6 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 
+const markdownPlugins = [remarkGfm, remarkBreaks];
+
 const markdownComponents = {
   a: ({ node, ...props }) => (
     <a {...props} className="md-link" target="_blank" rel="noopener noreferrer" />
@@ -29,13 +31,15 @@ const markdownComponents = {
   hr: ({ node, ...props }) => <hr {...props} />
 };
 
-export default function MarkdownContent({ children }) {
+function MarkdownContent({ children }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks]}
+      remarkPlugins={markdownPlugins}
       components={markdownComponents}
     >
       {children || ''}
     </ReactMarkdown>
   );
 }
+
+export default React.memo(MarkdownContent);

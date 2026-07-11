@@ -2,6 +2,9 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 
 const SSE_HEALTH_TIMEOUT_MS = 35000;
 const SSE_MAX_RETRIES = 50;
+const LOG_FLUSH_MS = 1000;
+const STATE_FLUSH_MS = 5000;
+const MAX_PENDING_LOGS = 100;
 
 export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
   const [connected, setConnected] = useState(false);
@@ -12,8 +15,8 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
   const handlerRef = useRef(handlers);
   handlerRef.current = handlers;
 
-  const throttleTimeoutRef = useRef(null);
-  const lastExecutionTimeRef = useRef(0);
+  const logFlushTimeoutRef = useRef(null);
+  const stateFlushTimeoutRef = useRef(null);
   const pendingUpdatesRef = useRef({
     logs: [],
     stats: null,
@@ -25,91 +28,124 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
     health: null
   });
 
-  const flushUpdates = useCallback(() => {
+  const flushLogs = useCallback(() => {
+    logFlushTimeoutRef.current = null;
     const pending = pendingUpdatesRef.current;
     const handlers = handlerRef.current;
-
-    if (pending.logs.length > 0) {
-      if (handlers.onLogs) {
-        pending.logs.forEach(log => {
-          try { handlers.onLogs(log); } catch (e) { console.error(e); }
-        });
-      }
+    if (pending.logs.length === 0 || !handlers.onLogs) {
       pending.logs = [];
+      return;
+    }
+
+    const logs = pending.logs.splice(0, pending.logs.length);
+    logs.forEach(log => {
+      try { handlers.onLogs(log); } catch (e) { console.error(e); }
+    });
+  }, []);
+
+  const flushStateUpdates = useCallback(() => {
+    stateFlushTimeoutRef.current = null;
+    const pending = pendingUpdatesRef.current;
+    const tasks = [];
+
+    if (pending.health !== null) {
+      const h = pending.health;
+      tasks.push(() => {
+        if (handlerRef.current.onHealth) {
+          try { handlerRef.current.onHealth(h); } catch (e) { console.error(e); }
+        }
+      });
+      pending.health = null;
     }
 
     if (pending.stats !== null) {
-      if (handlers.onStats) {
-        try { handlers.onStats(pending.stats); } catch (e) { console.error(e); }
-      }
+      const s = pending.stats;
+      tasks.push(() => {
+        if (handlerRef.current.onStats) {
+          try { handlerRef.current.onStats(s); } catch (e) { console.error(e); }
+        }
+      });
       pending.stats = null;
     }
 
+    if (pending.settings !== null) {
+      const set = pending.settings;
+      tasks.push(() => {
+        if (handlerRef.current.onSettings) {
+          try { handlerRef.current.onSettings(set); } catch (e) { console.error(e); }
+        }
+      });
+      pending.settings = null;
+    }
+
     if (pending.keys !== null) {
-      if (handlers.onKeys) {
-        try { handlers.onKeys(pending.keys); } catch (e) { console.error(e); }
-      }
+      const k = pending.keys;
+      tasks.push(() => {
+        if (handlerRef.current.onKeys) {
+          try { handlerRef.current.onKeys(k); } catch (e) { console.error(e); }
+        }
+      });
       pending.keys = null;
     }
 
     if (pending.models) {
-      if (handlers.onModels) {
-        try { handlers.onModels(); } catch (e) { console.error(e); }
-      }
+      tasks.push(() => {
+        if (handlerRef.current.onModels) {
+          try { handlerRef.current.onModels(); } catch (e) { console.error(e); }
+        }
+      });
       pending.models = false;
     }
 
     if (pending.rules) {
-      if (handlers.onRules) {
-        try { handlers.onRules(); } catch (e) { console.error(e); }
-      }
+      tasks.push(() => {
+        if (handlerRef.current.onRules) {
+          try { handlerRef.current.onRules(); } catch (e) { console.error(e); }
+        }
+      });
       pending.rules = false;
     }
 
-    if (pending.settings !== null) {
-      if (handlers.onSettings) {
-        try { handlers.onSettings(pending.settings); } catch (e) { console.error(e); }
-      }
-      pending.settings = null;
-    }
-
     if (pending.tokenUsage) {
-      if (handlers.onTokenUsage) {
-        try { handlers.onTokenUsage(); } catch (e) { console.error(e); }
-      }
+      tasks.push(() => {
+        if (handlerRef.current.onTokenUsage) {
+          try { handlerRef.current.onTokenUsage(); } catch (e) { console.error(e); }
+        }
+      });
       pending.tokenUsage = false;
     }
 
-    if (pending.health !== null) {
-      if (handlers.onHealth) {
-        try { handlers.onHealth(pending.health); } catch (e) { console.error(e); }
-      }
-      pending.health = null;
+    if (tasks.length > 0) {
+      let index = 0;
+      const runNextTask = () => {
+        if (index < tasks.length) {
+          tasks[index]();
+          index++;
+          if (index < tasks.length) {
+            requestAnimationFrame(runNextTask);
+          }
+        }
+      };
+      runNextTask();
     }
   }, []);
 
-  const requestUpdate = useCallback(() => {
-    if (throttleTimeoutRef.current) return;
-
-    const now = Date.now();
-    const timeSinceLast = now - lastExecutionTimeRef.current;
-
-    if (timeSinceLast >= 3000) {
-      flushUpdates();
-      lastExecutionTimeRef.current = Date.now();
-    } else {
-      throttleTimeoutRef.current = setTimeout(() => {
-        flushUpdates();
-        lastExecutionTimeRef.current = Date.now();
-        throttleTimeoutRef.current = null;
-      }, 3000 - timeSinceLast);
+  const requestUpdate = useCallback((typeKey) => {
+    if (typeKey === 'logs') {
+      if (!logFlushTimeoutRef.current) {
+        logFlushTimeoutRef.current = setTimeout(flushLogs, LOG_FLUSH_MS);
+      }
+      return;
     }
-  }, [flushUpdates]);
+
+    if (!stateFlushTimeoutRef.current) {
+      stateFlushTimeoutRef.current = setTimeout(flushStateUpdates, STATE_FLUSH_MS);
+    }
+  }, [flushLogs, flushStateUpdates]);
 
   const connect = useCallback(() => {
     if (!adminToken) return;
 
-    // Clean up any existing connection/interval before starting a new one
     if (esRef.current) {
       try { esRef.current.close(); } catch (_) {}
       esRef.current = null;
@@ -131,8 +167,6 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
       const intervalElapsed = now - lastIntervalTime;
       lastIntervalTime = now;
 
-      // 如果 interval 被瀏覽器/OS 延遲了 (例如視窗移動、最小化、系統休眠)，
-      // 則不應該判定為伺服器斷線。我們將最後收到心跳的時間順延，避免觸發誤判的斷線重連。
       if (intervalElapsed > 18000) {
         console.warn(`[SSE] Health check interval delayed by ${intervalElapsed}ms due to client throttling/dragging. Adjusting lastHealthTime.`);
         lastHealthTime = now;
@@ -140,7 +174,7 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
       }
 
       if (now - lastHealthTime > SSE_HEALTH_TIMEOUT_MS) {
-        console.warn('[SSE] No health heartbeat received for', SSE_HEALTH_TIMEOUT_MS, 'ms — forcing reconnect');
+        console.warn('[SSE] No health heartbeat received for', SSE_HEALTH_TIMEOUT_MS, 'ms - forcing reconnect');
         setConnected(false);
         es.close();
         clearInterval(healthCheckInterval);
@@ -201,16 +235,19 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
           if (hasData) {
             data = JSON.parse(e.data);
           }
-          
+
           if (typeKey === 'logs') {
             pendingUpdatesRef.current.logs.push(data);
+            if (pendingUpdatesRef.current.logs.length > MAX_PENDING_LOGS) {
+              pendingUpdatesRef.current.logs.splice(0, pendingUpdatesRef.current.logs.length - MAX_PENDING_LOGS);
+            }
           } else if (typeKey === 'models' || typeKey === 'rules' || typeKey === 'tokenUsage') {
             pendingUpdatesRef.current[typeKey] = true;
           } else {
             pendingUpdatesRef.current[typeKey] = data;
           }
 
-          requestUpdate();
+          requestUpdate(typeKey);
         } catch (err) {
           console.error(`SSE ${event} parse error:`, err);
         }
@@ -233,7 +270,7 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
           const data = JSON.parse(e.data);
           lastHealthTime = Date.now();
           pendingUpdatesRef.current.health = data;
-          requestUpdate();
+          requestUpdate('health');
         } catch (err) {
           console.error('SSE health parse error:', err);
         }
@@ -247,9 +284,13 @@ export default function useRealtimeEvents(gatewayUrl, adminToken, handlers) {
     connect();
     return () => {
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
-      if (throttleTimeoutRef.current) {
-        clearTimeout(throttleTimeoutRef.current);
-        throttleTimeoutRef.current = null;
+      if (logFlushTimeoutRef.current) {
+        clearTimeout(logFlushTimeoutRef.current);
+        logFlushTimeoutRef.current = null;
+      }
+      if (stateFlushTimeoutRef.current) {
+        clearTimeout(stateFlushTimeoutRef.current);
+        stateFlushTimeoutRef.current = null;
       }
       if (esRef.current) {
         esRef.current.close();

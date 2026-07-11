@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 
 const FETCH_TIMEOUT_MS = 30000;
 
@@ -201,7 +201,7 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
     return res.ok;
   }, [gatewayUrl]);
 
-  return {
+  return useMemo(() => ({
     apiFetch, fetchKeys, addKey, deleteKey, testKeys,
     fetchModels, saveModelPriorities, fetchModelGroups, setActiveModelGroup,
     fetchAvailableModels, syncModels,
@@ -210,5 +210,5 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
     fetchTokenUsage, clearTokenUsage,
     fetchLogs, fetchStats,
     checkHealth, resetCooldowns, login
-  };
+  }), [gatewayUrl, adminToken]);
 }

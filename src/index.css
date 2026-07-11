@@ -67,22 +67,19 @@
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
 }
 
-/* 確保主題切換時的所有主要容器都有平滑漸變，避免閃爍 */
-body, 
-.glass-panel, 
-.btn, 
-.input, 
-.terminal-log-panel, 
-.available-model-card, 
-nav button, 
-table, 
-th, 
-td,
-a,
-.sync-info-chip,
-.sync-notice,
-.token-detail-tab {
-  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
+/* Keep theme changes smooth without forcing every panel/table/log repaint to animate. */
+body {
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+.btn:hover, .btn:focus-within, .btn:active,
+.input:hover, .input:focus-within, .input:active,
+nav button:hover, nav button:focus-within,
+a:hover,
+.sync-info-chip:hover,
+.sync-notice:hover,
+.token-detail-tab:hover {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, filter 160ms ease;
 }
 
 * {
@@ -514,9 +511,7 @@ input, textarea, pre, code, [contenteditable="true"] {
   font-size: 14px;
   line-height: 1.6;
   overflow: visible;
-  contain: layout paint style;
-  content-visibility: auto;
-  contain-intrinsic-size: 28px;
+  contain: paint;
   transition: none;
 }
 
@@ -754,7 +749,7 @@ input, textarea, pre, code, [contenteditable="true"] {
   color: var(--text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  transition: all 150ms ease;
+  transition: color 150ms ease, border-color 150ms ease;
 }
 .token-detail-tab:hover {
   color: var(--text-primary);
@@ -888,7 +883,7 @@ input, textarea, pre, code, [contenteditable="true"] {
   font-weight: 600;
   line-height: 1.4;
   border: 1px solid transparent;
-  transition: all 0.25s ease;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
 /* Green chip for Last Sync */
