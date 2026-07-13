@@ -90,7 +90,7 @@ function restartGateway() {
       console.log('Gateway Server stopped. Restarting...');
       setTimeout(() => {
         gatewayAppInstance = createGatewayApp();
-        server = gatewayAppInstance.listen(portToUse, '127.0.0.1', () => {
+        server = gatewayAppInstance.listen(portToUse, '0.0.0.0', () => {
           console.log(`LLM Gateway Server restarted on http://localhost:${portToUse}`);
           if (tray) {
             tray.displayBalloon({
@@ -110,7 +110,7 @@ function restartGateway() {
     });
   } else {
     gatewayAppInstance = createGatewayApp();
-    server = gatewayAppInstance.listen(portToUse, '127.0.0.1', () => {
+    server = gatewayAppInstance.listen(portToUse, '0.0.0.0', () => {
       console.log(`LLM Gateway Server started on http://localhost:${portToUse}`);
     }).on('error', (err) => {
       console.error('Gateway start failed:', err.message);
@@ -128,7 +128,7 @@ function restartApp() {
 
 function startServer() {
   const portToUse = loadPortFromDb();
-  server = gatewayAppInstance.listen(portToUse, '127.0.0.1', () => {
+  server = gatewayAppInstance.listen(portToUse, '0.0.0.0', () => {
     console.log(`LLM Gateway Server running on http://localhost:${portToUse}`);
   });
   trackConnections(server);
