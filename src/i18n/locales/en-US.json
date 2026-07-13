@@ -187,6 +187,7 @@
     "info": "Info",
     "ok": "OK",
     "confirm": "Confirm",
+    "cancel": "Cancel",
     "confirmRestartApp": "Restart the application? This will close and restart the entire app.",
     "confirmRestartGateway": "Restart the Gateway service?",
     "toggleTheme": "Toggle theme",
