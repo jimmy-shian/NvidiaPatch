@@ -15,6 +15,7 @@ import TokensPanel from './components/Dashboard/TokensPanel';
 import KeysPanel from './components/Keys/KeysPanel';
 import ModelsPanel from './components/Models/ModelsPanel';
 import PlaygroundPanel from './components/Playground/PlaygroundPanel';
+import { buildSkillSystemMessage } from './components/Playground/divinationSkills';
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -95,6 +96,7 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
+  const [selectedSkillIds, setSelectedSkillIds] = useState([]);
 
   const [dashboardSubTab, setDashboardSubTab] = useState('overview');
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
@@ -354,7 +356,11 @@ export default function App() {
     const assistantMsg = { role: 'assistant', content: '' };
 
     setChatHistory(prev => [...prev, userMsg, assistantMsg]);
-    const targetMessages = [...chatHistory, userMsg];
+    const skillSystemMessage = buildSkillSystemMessage(selectedSkillIds);
+    const baseMessages = skillSystemMessage
+      ? [{ role: 'system', content: skillSystemMessage }, ...chatHistory, userMsg]
+      : [...chatHistory, userMsg];
+    const targetMessages = baseMessages;
     setChatInput('');
     setIsChatting(true);
 
@@ -874,6 +880,8 @@ export default function App() {
             chatInput={chatInput}
             setChatInput={setChatInput}
             isChatting={isChatting}
+            selectedSkillIds={selectedSkillIds}
+            setSelectedSkillIds={setSelectedSkillIds}
             handleSendTestMessage={handleSendTestMessage}
           />
         )}

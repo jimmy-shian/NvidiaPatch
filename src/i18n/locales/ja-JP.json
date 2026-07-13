@@ -408,6 +408,12 @@
     "streaming": "ストリーミング中...",
     "enterMessage": "選択したモデルをテストするには、下にメッセージを入力してください。",
     "userLabel": "ユーザー",
-    "assistantLabel": "NIM ({{model}})"
+    "assistantLabel": "NIM ({{model}})",
+    "skillSelectorTitle": "占いスキルを有効化：",
+    "skillSelectorDesc": "複数選択または選択なし。選択したスキルの完全なシステムプロンプト（10サブシステムのアルゴリズム定義を含む）が自動的に注入されます。",
+    "skillBazi": "八字 Grandmaster",
+    "skillZiwei": "紫微斗数 Grandmaster",
+    "skillTarot": "タロット Grandmaster",
+    "clearSkills": "選択クリア"
   }
 }

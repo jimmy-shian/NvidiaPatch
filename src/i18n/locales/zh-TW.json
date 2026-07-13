@@ -408,6 +408,12 @@
     "streaming": "串流回應中...",
     "enterMessage": "輸入訊息以測試選定的模型。",
     "userLabel": "使用者",
-    "assistantLabel": "NIM（{{model}}）"
+    "assistantLabel": "NIM（{{model}}）",
+    "skillSelectorTitle": "啟用命理技能：",
+    "skillSelectorDesc": "可多選、亦可不選。選取後會自動注入該技能的完整系統提示詞（含 10 子系統演算法定義）。",
+    "skillBazi": "八字 Grandmaster",
+    "skillZiwei": "紫微斗數 Grandmaster",
+    "skillTarot": "塔羅 Grandmaster",
+    "clearSkills": "清除已選技能"
   }
 }

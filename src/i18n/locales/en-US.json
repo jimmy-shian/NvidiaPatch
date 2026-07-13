@@ -213,6 +213,12 @@
     "streaming": "Streaming...",
     "enterMessage": "Enter a message below to test the selected model.",
     "userLabel": "User",
-    "assistantLabel": "NIM ({{model}})"
+    "assistantLabel": "NIM ({{model}})",
+    "skillSelectorTitle": "Enable Divination Skills:",
+    "skillSelectorDesc": "Multi-select or none. Selected skills inject their full system prompt with 10-subsystem algorithm definitions.",
+    "skillBazi": "Bazi Grandmaster",
+    "skillZiwei": "Ziwei Doushu Grandmaster",
+    "skillTarot": "Tarot Grandmaster",
+    "clearSkills": "Clear Skills"
   }
 }
