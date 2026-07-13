@@ -162,11 +162,11 @@ export default function RulesPanel({
                         className="markdown-body"
                         style={{
                           flex: 1,
-                          background: 'rgba(0,0,0,0.3)',
+                          background: 'var(--terminal-bg)',
                           padding: '12px',
                           borderRadius: '6px',
                           fontSize: '14px',
-                          border: '1px solid rgba(255,255,255,0.03)',
+                          border: '1px solid var(--border-color)',
                           color: 'var(--text-secondary)',
                           lineHeight: '1.6',
                           maxHeight: '300px',
@@ -181,11 +181,11 @@ export default function RulesPanel({
                   <div
                     className="markdown-body"
                     style={{
-                      background: 'rgba(0,0,0,0.3)',
+                      background: 'var(--terminal-bg)',
                       padding: '12px',
                       borderRadius: '6px',
                       fontSize: '14px',
-                      border: '1px solid rgba(255,255,255,0.03)',
+                      border: '1px solid var(--border-color)',
                       color: 'var(--text-secondary)',
                       lineHeight: '1.6',
                       maxHeight: '200px',

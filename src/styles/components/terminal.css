@@ -1,0 +1,71 @@
+/* Gateway 即時日誌：真正可捲動的容器是 .terminal-log-lines，
+   這樣 App.jsx 的 logsContainerRef / onScroll 才能正確判斷是否位於底部。 */
+.terminal-log-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--terminal-bg);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  contain: layout paint;
+}
+
+.terminal-log-lines {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scroll-behavior: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.terminal-log-line {
+  display: grid;
+  grid-template-columns: 86px 24px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  min-height: auto;
+  height: auto;
+  padding: 4px 4px 5px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: visible;
+  contain: paint;
+  transition: none;
+}
+
+.terminal-log-line:hover {
+  background: var(--bg-tertiary);
+}
+
+.terminal-log-time {
+  color: var(--text-muted);
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.terminal-log-icon {
+  width: 20px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.terminal-log-message {
+  display: block;
+  min-width: 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

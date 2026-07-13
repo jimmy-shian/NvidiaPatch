@@ -1,0 +1,153 @@
+/* Token 使用量專用表格樣式 — 可點擊列、展開詳情面板 */
+.token-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: normal;
+  font-size: 13px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.token-usage-table th,
+.token-usage-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  vertical-align: middle;
+  text-align: left;
+}
+
+.token-usage-table th:last-child,
+.token-usage-table td:last-child {
+  border-right: none;
+}
+
+.token-usage-table tr:last-child td {
+  border-bottom: none;
+}
+
+.token-usage-table thead th {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-weight: 700;
+  border-bottom: 2px solid var(--border-color);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.token-usage-table tbody tr {
+  cursor: pointer;
+  transition: background 150ms ease;
+  background: var(--bg-secondary);
+}
+
+.token-usage-table tbody tr:hover {
+  background: var(--bg-active);
+}
+
+.token-usage-table tbody tr.token-row-expanded {
+  background: var(--accent-glow);
+}
+
+/* Token 明細日誌標題列 */
+.token-log-header {
+  display: grid;
+  grid-template-columns: 72px 70px 1fr 70px 90px 70px 80px;
+  gap: 0;
+  align-items: center;
+  padding: 10px 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-bottom: 2px solid var(--accent-color);
+  border-radius: 8px 8px 0 0;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* Token 詳情展開面板 */
+.token-detail-panel {
+  animation: fadeIn 0.2s ease-out forwards;
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+  margin-bottom: 6px;
+  box-shadow: var(--panel-shadow);
+}
+
+.token-detail-panel pre {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  max-height: 400px;
+}
+
+/* Model Card 在 Token 詳情面板中 */
+.token-model-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+}
+
+.token-model-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* Token 花費金額樣式 */
+.token-cost {
+  color: var(--text-cooldown);
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, sans-serif;
+}
+
+.token-cost-total {
+  color: var(--accent-color);
+  font-weight: 700;
+  font-family: 'Outfit', system-ui, sans-serif;
+}
+
+/* 詳情頁籤導覽列 */
+.token-detail-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 12px;
+  gap: 4px;
+}
+.token-detail-tab {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.token-detail-tab:hover {
+  color: var(--text-primary);
+}
+.token-detail-tab.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}

@@ -31,7 +31,7 @@ export default function ConfirmationModal({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.65)',
+        backgroundColor: 'var(--modal-overlay)',
         backdropFilter: 'blur(4px)',
         display: 'flex',
         alignItems: 'center',
@@ -51,9 +51,9 @@ export default function ConfirmationModal({
           display: 'flex',
           flexDirection: 'column',
           gap: '18px',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          background: 'rgba(20, 24, 33, 0.95)',
+          boxShadow: 'var(--card-shadow)',
+          border: '1px solid var(--border-color)',
+          background: 'var(--bg-secondary)',
           transform: 'scale(1)',
           transition: 'transform 0.2s ease-out'
         }}

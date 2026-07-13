@@ -1,0 +1,37 @@
+/* 簡單動畫 */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+@keyframes modelGroupMarquee {
+  0% {
+    transform: translateX(0);
+  }
+  12% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+/* Gateway 狀態指示燈呼吸動畫 */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px var(--status-active-glow-start); }
+  50% { box-shadow: 0 0 8px var(--status-active-glow-end); }
+}
+
+/* Loader2 旋轉動畫（Animate.css 互補） */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}

@@ -1,0 +1,116 @@
+/* 同步 / 重啟通知樣式 */
+.sync-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.sync-notice-info {
+  background: var(--bg-active);
+  color: var(--text-active);
+  border: 1px solid var(--border-active);
+}
+
+.sync-notice-success {
+  background: var(--bg-active);
+  color: var(--text-active);
+  border: 1px solid var(--border-active);
+}
+
+.sync-notice-warning {
+  background: var(--bg-cooldown);
+  color: var(--text-cooldown);
+  border: 1px solid var(--border-cooldown);
+}
+
+.sync-notice-error {
+  background: var(--bg-inactive);
+  color: var(--text-inactive);
+  border: 1px solid var(--border-inactive);
+}
+
+/* Model sync info chips styling */
+.sync-info-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.sync-info-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px; /* Capsule shape */
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid transparent;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+/* Green chip for Last Sync */
+.sync-info-chip.last-sync {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.15);
+}
+:root.theme-light .sync-info-chip.last-sync {
+  background: rgba(5, 150, 105, 0.08);
+  color: #059669;
+  border-color: rgba(5, 150, 105, 0.15);
+}
+
+/* Blue/Indigo chips for parsed/saved/expected counts */
+.sync-info-chip.parsed {
+  background: rgba(59, 130, 246, 0.08);
+  color: #3b82f6;
+  border-color: rgba(59, 130, 246, 0.15);
+}
+:root.theme-light .sync-info-chip.parsed {
+  background: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.15);
+}
+
+.sync-info-chip.saved {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+  border-color: rgba(99, 102, 241, 0.15);
+}
+:root.theme-light .sync-info-chip.saved {
+  background: rgba(79, 70, 229, 0.08);
+  color: #4f46e5;
+  border-color: rgba(79, 70, 229, 0.15);
+}
+
+.sync-info-chip.expected {
+  background: rgba(245, 158, 11, 0.08);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.15);
+}
+:root.theme-light .sync-info-chip.expected {
+  background: rgba(217, 119, 6, 0.08);
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.15);
+}
+
+/* Gray chip for sync source */
+.sync-info-chip.source {
+  background: rgba(113, 113, 122, 0.08);
+  color: var(--text-muted);
+  border-color: rgba(113, 113, 122, 0.15);
+}
+:root.theme-light .sync-info-chip.source {
+  background: rgba(161, 161, 170, 0.08);
+  color: var(--text-muted);
+  border-color: rgba(161, 161, 170, 0.15);
+}

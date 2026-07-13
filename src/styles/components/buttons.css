@@ -1,0 +1,91 @@
+/* 按鈕樣式 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 16px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn-primary {
+  background: var(--accent-color);
+  color: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+.btn-primary:active {
+  filter: brightness(0.95);
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+.btn-secondary:hover {
+  background: var(--bg-secondary);
+  border-color: var(--text-muted);
+}
+
+.btn-danger {
+  background: var(--bg-inactive);
+  border: 1px solid var(--border-inactive);
+  color: var(--text-inactive);
+}
+.btn-danger:hover {
+  background: var(--bg-inactive);
+  filter: brightness(1.05);
+}
+
+/* 輸入框 */
+.input {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 16px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.input:focus {
+  border-color: var(--accent-color);
+}
+
+/* 狀態微標章 - 使用自適應語意色彩 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-active {
+  background: var(--bg-active);
+  color: var(--text-active);
+  border: 1px solid var(--border-active);
+}
+
+.badge-cooldown {
+  background: var(--bg-cooldown);
+  color: var(--text-cooldown);
+  border: 1px solid var(--border-cooldown);
+}
+
+.badge-inactive {
+  background: var(--bg-inactive);
+  color: var(--text-inactive);
+  border: 1px solid var(--border-inactive);
+}

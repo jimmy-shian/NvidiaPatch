@@ -1,0 +1,64 @@
+/* Keep theme changes smooth without forcing every panel/table/log repaint to animate. */
+body {
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+.btn:hover, .btn:focus-within, .btn:active,
+.input:hover, .input:focus-within, .input:active,
+nav button:hover, nav button:focus-within,
+a:hover,
+.sync-info-chip:hover,
+.sync-notice:hover,
+.token-detail-tab:hover {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', 'Outfit', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* 捲軸美化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 改為純色與邊框構成的扁平專業卡片面板，去除了毛玻璃特效 */
+.glass-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+}
+
+input, textarea, pre, code, [contenteditable="true"] {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}

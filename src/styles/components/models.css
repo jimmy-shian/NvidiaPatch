@@ -1,0 +1,89 @@
+/* 模型順位組別摘要：長模型名稱使用自動跑馬燈，避免撐開卡片並擠壓右側模型庫 */
+.model-group-summary-line {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.88;
+}
+
+.model-group-count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.model-group-marquee {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+  display: block;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+
+.model-group-marquee-track {
+  display: inline-flex;
+  align-items: center;
+  min-width: max-content;
+  will-change: transform;
+  animation: modelGroupMarquee 9s linear infinite;
+}
+
+.model-group-marquee-spacer {
+  flex: 0 0 auto;
+}
+
+/* 右側模型庫支援拖曳新增到左側順位區 */
+.available-model-card {
+  cursor: grab;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+  will-change: transform;
+}
+
+.available-model-card:hover:not(.is-added) {
+  transform: translateY(-1px);
+  border-color: var(--border-active) !important;
+  background: var(--bg-active) !important;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+.available-model-card:active:not(.is-added) {
+  cursor: grabbing;
+}
+
+.available-model-card.is-added {
+  cursor: default;
+}
+
+.priority-drop-zone {
+  position: relative;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.priority-drop-zone.is-drag-over {
+  border-color: var(--accent-color) !important;
+  background: var(--accent-glow) !important;
+  box-shadow: inset 0 0 0 1px var(--border-active), 0 0 22px var(--accent-glow);
+}
+
+.priority-model-card {
+  transition: border-color 120ms ease, opacity 120ms ease, transform 120ms ease, background-color 120ms ease;
+}
+
+.priority-model-card.is-dragging {
+  opacity: 0.46;
+  transform: scale(0.995);
+}
+
+.priority-drop-indicator {
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--glow-active-border), 0 0 16px var(--glow-active);
+}
