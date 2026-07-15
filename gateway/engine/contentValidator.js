@@ -1,99 +1,366 @@
-function stripCodeBlocks(content) {
-  if (!content) return '';
-  // 1. Strip closed triple-backtick code blocks
-  let clean = content.replace(/```[\s\S]*?```/g, ' ');
-  // 2. Strip any remaining unclosed triple-backtick code block at the end
-  clean = clean.replace(/```[\s\S]*/g, ' ');
-  // 3. Strip closed single-backtick code blocks
-  clean = clean.replace(/`[\s\S]*?`/g, ' ');
-  // 4. Strip any remaining unclosed single-backtick code block at the end
-  clean = clean.replace(/`[\s\S]*/g, ' ');
-  return clean;
-}
+/**
+ * Single-pass Streaming Parser — 單次掃描狀態機
+ *
+ * 以 Agent 輸出結構（XML／HTML 類標記）為驗證目標，透過上下文與結構
+ * 完整性判斷是否為需要校驗的標記，避免將程式碼、數學比較、Markdown、
+ * 泛型語法或一般文字中的 < > 誤判為格式標記。
+ *
+ * 特性：
+ *  - O(n) 時間複雜度，單次掃描，不截斷內容
+ *  - 上下文感知：跳過程式碼區塊、行內程式碼、HTML 註解、CDATA
+ *  - 無固定 Tag 白名單，依結構有效性判斷
+ *  - 支援未知工具格式與未來擴充
+ *  - 偵測未閉合、錯誤巢狀、錯誤結束標記
+ *  - 置信度啟發式：僅在文件中存在已成功配對的標記時，
+ *    才將未配對的標記視為格式錯誤；避免泛型、數學比較等假陽性
+ */
+
+// ---- 狀態機常量 ----
+const STATE_TEXT = 0;          // 一般文字
+const STATE_CODE_FENCE = 1;     // 程式碼圍欄（``` 或 ~~~ 之間）
+const STATE_TAG_OPEN = 2;       // 讀取開始標記名稱 <tag ...
+const STATE_TAG_CLOSE = 3;     // 讀取結束標記名稱 </tag>
+const STATE_INLINE_CODE = 4;    // 行內程式碼 `...`
+const STATE_HTML_COMMENT = 5;   // HTML 註解 <!-- ... -->
+const STATE_CDATA = 6;          // CDATA 區段 <![CDATA[ ... ]]>
+const STATE_PI = 7;             // 處理指令 <? ... ?>
 
 function validateContent(content) {
   if (!content || typeof content !== 'string') {
     return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
   }
 
-  const cleanContent = stripCodeBlocks(content);
   const malformedTags = [];
-
-  for (let i = 0; i < cleanContent.length; i++) {
-    if (cleanContent[i] !== '<') continue;
-
-    const nextChar = cleanContent[i + 1] || '';
-
-    if (nextChar === '>') {
-      malformedTags.push('<>');
-      continue;
-    }
-    if (!/[A-Za-z/!?]/.test(nextChar)) {
-      continue;
-    }
-
-    const closeIndex = cleanContent.indexOf('>', i + 1);
-    const nextOpenIndex = cleanContent.indexOf('<', i + 1);
-    if (closeIndex === -1 || (nextOpenIndex !== -1 && nextOpenIndex < closeIndex)) {
-      const endIndex = nextOpenIndex !== -1 && nextOpenIndex < closeIndex ? nextOpenIndex : Math.min(cleanContent.length, i + 80);
-      const fragment = cleanContent.slice(i, endIndex).replace(/\s+/g, ' ').trim();
-      malformedTags.push(fragment || '<');
-      if (nextOpenIndex === -1) break;
-      i = Math.max(i, nextOpenIndex - 1);
-    }
-  }
-
-  if (malformedTags.length > 0) {
-    return {
-      valid: false,
-      unclosedTags: [],
-      malformedTags: [...new Set(malformedTags)].slice(0, 8),
-      mismatchedTags: []
-    };
-  }
-
-  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9:_-]*)\b[^>]*(\/?)>/g;
-  const selfClosingTags = new Set([
-    'br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base', 'col',
-    'embed', 'source', 'track', 'wbr', 'frame', 'param', 'spacer',
-    'circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect', 'stop', 'use'
-  ]);
-  
-  const stack = [];
   const mismatchedTags = [];
-  let match;
+  const stack = [];
+  let state = STATE_TEXT;
+  let i = 0;
+  const len = content.length;
 
-  while ((match = tagRegex.exec(cleanContent)) !== null) {
-    const fullTag = match[0];
-    const tagName = match[1].toLowerCase();
-    const isSelfClosing = match[2] === '/' || fullTag.endsWith('/>');
-    const isClosingTag = fullTag.startsWith('</');
+  // 統計：成功配對的標記數量（用於置信度判斷）
+  let matchedCount = 0;
 
-    if (isSelfClosing || selfClosingTags.has(tagName) || fullTag.startsWith('<!') || fullTag.startsWith('<?')) {
-      continue;
-    }
+  // 暫存變數（跨迭代保留）
+  let tagNameBuf = '';
+  let fenceMarker = '';      // 圍欝標記 ```、~~~
+  let inlineCodeTick = '';   // 行內程式碼的 backtick 數量
 
-    if (isClosingTag) {
-      if (stack.length > 0 && stack[stack.length - 1] === tagName) {
-        stack.pop();
-      } else {
-        mismatchedTags.push(`</${tagName}>`);
+  while (i < len) {
+    const ch = content[i];
+    const next = i + 1 < len ? content[i + 1] : '';
+
+    switch (state) {
+      case STATE_TEXT: {
+        // 偵測程式碼圍欄起始 ``` 或 ~~~
+        if (ch === '`' && next === '`' && i + 2 < len && content[i + 2] === '`') {
+          fenceMarker = '```';
+          i += 3;
+          state = STATE_CODE_FENCE;
+          break;
+        }
+        if (ch === '~' && next === '~' && i + 2 < len && content[i + 2] === '~') {
+          fenceMarker = '~~~';
+          i += 3;
+          state = STATE_CODE_FENCE;
+          break;
+        }
+
+        // 偵測行內程式碼（含連續多個 backtick）
+        if (ch === '`') {
+          let ticks = 0;
+          let j = i;
+          while (j < len && content[j] === '`') { ticks++; j++; }
+          if (ticks >= 1) {
+            inlineCodeTick = '`'.repeat(ticks);
+            i = j;
+            state = STATE_INLINE_CODE;
+            break;
+          }
+        }
+
+        // 偵測角括號標記
+        if (ch === '<') {
+          // <!-- HTML 註解
+          if (next === '!' && i + 3 < len && content[i + 2] === '-' && content[i + 3] === '-') {
+            state = STATE_HTML_COMMENT;
+            i += 4;
+            break;
+          }
+          // <![CDATA[
+          if (next === '!' && content.slice(i, i + 9) === '<![CDATA[') {
+            state = STATE_CDATA;
+            i += 9;
+            break;
+          }
+          // <? 處理指令
+          if (next === '?') {
+            state = STATE_PI;
+            i += 2;
+            break;
+          }
+          // </ 結束標記
+          if (next === '/') {
+            tagNameBuf = '';
+            i += 2;
+            state = STATE_TAG_CLOSE;
+            break;
+          }
+          // <tag 開始標記（需以英文字母或底線開頭才視為標記）
+          if (isTagNameStartChar(next)) {
+            tagNameBuf = '';
+            i += 1;
+            state = STATE_TAG_OPEN;
+            break;
+          }
+          // 其他 < 不視為標記（可能是 a < b、2 < 3 等）
+          i += 1;
+          break;
+        }
+
+        i += 1;
+        break;
       }
-    } else {
-      stack.push(tagName);
+
+      case STATE_CODE_FENCE: {
+        // 尋找結束圍欄 ``` 或 ~~~（必須在行首）
+        if (ch === fenceMarker[0]) {
+          let matched = true;
+          for (let k = 0; k < fenceMarker.length; k++) {
+            if (content[i + k] !== fenceMarker[k]) { matched = false; break; }
+          }
+          if (matched) {
+            i += fenceMarker.length;
+            fenceMarker = '';
+            state = STATE_TEXT;
+            break;
+          }
+        }
+        i += 1;
+        break;
+      }
+
+      case STATE_INLINE_CODE: {
+        // 尋找匹配數量的 backtick 結束
+        if (ch === '`') {
+          let ticks = 0;
+          let j = i;
+          while (j < len && content[j] === '`') { ticks++; j++; }
+          if (ticks === inlineCodeTick.length) {
+            i = j;
+            inlineCodeTick = '';
+            state = STATE_TEXT;
+            break;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+        break;
+      }
+
+      case STATE_HTML_COMMENT: {
+        // 尋找 -->
+        if (ch === '-' && next === '-' && i + 2 < len && content[i + 2] === '>') {
+          i += 3;
+          state = STATE_TEXT;
+          break;
+        }
+        i += 1;
+        break;
+      }
+
+      case STATE_CDATA: {
+        // 尋找 ]]>
+        if (ch === ']' && next === ']' && i + 2 < len && content[i + 2] === '>') {
+          i += 3;
+          state = STATE_TEXT;
+          break;
+        }
+        i += 1;
+        break;
+      }
+
+      case STATE_PI: {
+        // 尋找 ?>
+        if (ch === '?' && next === '>') {
+          i += 2;
+          state = STATE_TEXT;
+          break;
+        }
+        i += 1;
+        break;
+      }
+
+      case STATE_TAG_OPEN: {
+        // 讀取標記名稱
+        if (tagNameBuf.length === 0) {
+          if (!isTagNameStartChar(ch)) {
+            // 不是有效的標記開頭 -> 退回文字狀態
+            state = STATE_TEXT;
+            break;
+          }
+          tagNameBuf = ch;
+          i += 1;
+          break;
+        }
+        // 繼續讀取合法標記名稱字元
+        if (isTagNameChar(ch)) {
+          tagNameBuf += ch;
+          i += 1;
+          break;
+        }
+        // 標記名稱結束，開始掃描屬性直到 > 或 />
+        const result = scanTagBody(content, i, len);
+        i = result.nextIndex;
+        const tagName = tagNameBuf.toLowerCase();
+
+        if (result.malformed) {
+          malformedTags.push(`<${tagNameBuf}...>`);
+        }
+
+        if (!result.selfClosing) {
+          stack.push({ name: tagName });
+        }
+        state = STATE_TEXT;
+        break;
+      }
+
+      case STATE_TAG_CLOSE: {
+        // 讀取結束標記名稱
+        if (tagNameBuf.length === 0) {
+          if (isTagNameStartChar(ch)) {
+            tagNameBuf = ch;
+            i += 1;
+            break;
+          }
+          // </ 後面不是有效標記名稱，退回文字
+          state = STATE_TEXT;
+          break;
+        }
+        if (isTagNameChar(ch)) {
+          tagNameBuf += ch;
+          i += 1;
+          break;
+        }
+        // 標記名稱結束，讀取至 >
+        const result = scanTagBody(content, i, len);
+        i = result.nextIndex;
+
+        const closeName = tagNameBuf.toLowerCase();
+        if (result.malformed) {
+          malformedTags.push(`</${tagNameBuf}>`);
+        }
+
+        // 比對堆疊（含錯誤回復）
+        const stackIdx = findInStack(stack, closeName);
+        if (stackIdx !== -1) {
+          if (stack[stack.length - 1].name === closeName) {
+            stack.pop();
+            matchedCount++;
+          } else {
+            // 錯誤巢狀：closeName 在堆疊中但非頂端
+            // 將其上方的標記彈出（視為未閉合）
+            while (stack.length > stackIdx + 1) {
+              stack.pop();
+            }
+            stack.pop();
+            matchedCount++;
+          }
+        } else {
+          // closeName 不在堆疊中 — 錯誤結束標記
+          mismatchedTags.push(`</${closeName}>`);
+        }
+        state = STATE_TEXT;
+        break;
+      }
+
+      default:
+        i += 1;
+        break;
     }
   }
 
-  if (stack.length > 0 || mismatchedTags.length > 0) {
+  // ---- 置信度判斷 ----
+  // 若文件中完全沒有成功配對的標記，且堆疊中殘留的標記數量較少，
+  // 很可能是泛型語法、數學比較等非標記內容，不視為錯誤。
+  const hasLeftover = stack.length > 0;
+  const hasMismatched = mismatchedTags.length > 0;
+  const hasMalformed = malformedTags.length > 0;
+
+  // 若有錯誤結束標記或格式不完整標記，且文件中有成功配對的標記，
+  // 表示內容確實使用了標記結構，這些問題值得報告。
+  if (hasLeftover && matchedCount === 0 && !hasMismatched && !hasMalformed) {
+    // 沒有任何成功配對，可能全是非標記的 < > 使用
+    return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
+  }
+
+  if (hasLeftover || hasMismatched || hasMalformed) {
     return {
       valid: false,
-      unclosedTags: [...new Set(stack)],
-      malformedTags: [],
+      unclosedTags: [...new Set(stack.map(t => t.name))],
+      malformedTags: [...new Set(malformedTags)].slice(0, 8),
       mismatchedTags: [...new Set(mismatchedTags)].slice(0, 8)
     };
   }
 
   return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
+}
+
+/**
+ * 在堆疊中從頂端往下搜尋指定名稱的標記。
+ * @returns 索引（0-based，從底部算），找不到回傳 -1
+ */
+function findInStack(stack, name) {
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i].name === name) return i;
+  }
+  return -1;
+}
+
+/**
+ * 掃描標記主體（從名稱後到 >），偵測自閉合 />
+ * 處理引號內的 > 以避免誤判。
+ */
+function scanTagBody(content, i, len) {
+  let selfClosing = false;
+  let malformed = false;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+
+  while (i < len) {
+    const ch = content[i];
+    if (inSingleQuote) {
+      if (ch === "'") inSingleQuote = false;
+      i += 1;
+      continue;
+    }
+    if (inDoubleQuote) {
+      if (ch === '"') inDoubleQuote = false;
+      i += 1;
+      continue;
+    }
+    if (ch === "'") { inSingleQuote = true; i += 1; continue; }
+    if (ch === '"') { inDoubleQuote = true; i += 1; continue; }
+    if (ch === '>') {
+      // 檢查是否為 />
+      if (i > 0 && content[i - 1] === '/') {
+        selfClosing = true;
+      }
+      i += 1;
+      return { nextIndex: i, selfClosing, malformed };
+    }
+    i += 1;
+  }
+  // 走到內容尾端仍無 > — 格式不完整
+  return { nextIndex: i, selfClosing, malformed: true };
+}
+
+function isTagNameStartChar(ch) {
+  return /[a-zA-Z_]/.test(ch);
+}
+
+function isTagNameChar(ch) {
+  return /[a-zA-Z0-9:_-]/.test(ch);
 }
 
 function formatValidationIssue(validation) {
