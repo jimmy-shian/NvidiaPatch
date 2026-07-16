@@ -25,9 +25,16 @@ const STATE_HTML_COMMENT = 5;   // HTML 註解 <!-- ... -->
 const STATE_CDATA = 6;          // CDATA 區段 <![CDATA[ ... ]]>
 const STATE_PI = 7;             // 處理指令 <? ... ?>
 
-function validateContent(content) {
+function validateContent(content, options = {}) {
   if (!content || typeof content !== 'string') {
     return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
+  }
+
+  const maxErrors = options.maxErrors || 20;
+  const maxLength = options.maxLength || content.length;
+
+  if (content.length > maxLength) {
+    content = content.slice(0, maxLength);
   }
 
   const malformedTags = [];
@@ -37,13 +44,15 @@ function validateContent(content) {
   let i = 0;
   const len = content.length;
 
-  // 統計：成功配對的標記數量（用於置信度判斷）
   let matchedCount = 0;
 
-  // 暫存變數（跨迭代保留）
   let tagNameBuf = '';
-  let fenceMarker = '';      // 圍欝標記 ```、~~~
-  let inlineCodeTick = '';   // 行內程式碼的 backtick 數量
+  let fenceMarker = '';
+  let inlineCodeTick = '';
+
+  if (!/<[a-zA-Z_]/.test(content)) {
+    return { valid: true, unclosedTags: [], malformedTags: [], mismatchedTags: [] };
+  }
 
   while (i < len) {
     const ch = content[i];
@@ -216,6 +225,14 @@ function validateContent(content) {
 
         if (result.malformed) {
           malformedTags.push(`<${tagNameBuf}...>`);
+          if (malformedTags.length >= maxErrors) {
+            return {
+              valid: false,
+              unclosedTags: [...new Set(stack.map(t => t.name))],
+              malformedTags: [...new Set(malformedTags)].slice(0, 8),
+              mismatchedTags: [...new Set(mismatchedTags)].slice(0, 8)
+            };
+          }
         }
 
         if (!result.selfClosing) {
@@ -269,6 +286,14 @@ function validateContent(content) {
         } else {
           // closeName 不在堆疊中 — 錯誤結束標記
           mismatchedTags.push(`</${closeName}>`);
+          if (mismatchedTags.length >= maxErrors) {
+            return {
+              valid: false,
+              unclosedTags: [...new Set(stack.map(t => t.name))],
+              malformedTags: [...new Set(malformedTags)].slice(0, 8),
+              mismatchedTags: [...new Set(mismatchedTags)].slice(0, 8)
+            };
+          }
         }
         state = STATE_TEXT;
         break;
@@ -377,7 +402,24 @@ function formatValidationIssue(validation) {
   return issues.join(', ') || 'unknown tag issue';
 }
 
+function quickValidate(content) {
+  if (!content || typeof content !== 'string') return true;
+
+  const hasOpen = /<[a-zA-Z_]/.test(content);
+  const hasClose = /<\//.test(content);
+
+  if (!hasOpen) return true;
+  if (!hasClose) return false;
+
+  const openCount = (content.match(/<[a-zA-Z_][a-zA-Z0-9:_-]*/g) || []).length;
+  const closeCount = (content.match(/<\//g) || []).length;
+  const selfClose = (content.match(/\/>/g) || []).length;
+
+  return Math.abs(openCount - selfClose - closeCount) <= 2;
+}
+
 module.exports = {
   validateContent,
-  formatValidationIssue
+  formatValidationIssue,
+  quickValidate
 };
