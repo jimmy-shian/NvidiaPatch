@@ -6,7 +6,7 @@ const { isModelInFailureCooldown, markModelFailureCooldown, getNextRequestSequen
 const { requireAdminAuth } = require('../middleware/auth');
 const { resolveModelGroupFromRequest, buildOpenAiModelsListForGroup } = require('../utils/modelGroup');
 const { sanitizeChatCompletionBody } = require('../utils/sanitize');
-const { validateContent, formatValidationIssue } = require('../engine/contentValidator');
+const { validateContent, formatValidationIssue, smartValidate } = require('../engine/contentValidator');
 const ContentValidationError = require('../errors/ContentValidationError');
 
 const router = express.Router();
@@ -336,11 +336,14 @@ router.post('/v1/chat/completions', async (req, res) => {
           }
         }
 
-        if (streamBuffer.trim()) {
-          consumeLine(streamBuffer);
+        if (!fullContent || !fullContent.trim()) {
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為回傳失敗，改用下一把 Key 重試同一模型。`);
+          apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+          stats.recordRequest(false);
+          return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：回傳內容為空` };
         }
 
-              const validation = validateContent(fullContent, { maxLength: 10000 });
+        const validation = smartValidate(fullContent, { maxLength: 10000 });
         if (!validation.valid) {
           const validationIssue = formatValidationIssue(validation);
           addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
@@ -387,7 +390,7 @@ router.post('/v1/chat/completions', async (req, res) => {
       const json = await result.response.json();
       const contentToCheck = json?.choices?.[0]?.message?.content || '';
 
-        const validation = validateContent(contentToCheck, { maxLength: 10000 });
+        const validation = smartValidate(contentToCheck, { maxLength: 10000 });
       if (!validation.valid) {
         const validationIssue = formatValidationIssue(validation);
         addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
@@ -894,7 +897,12 @@ router.post('/api/test/chat', requireAdminAuth, async (req, res) => {
         function readTestChunk() {
           return reader.read().then(({ done, value }) => {
             if (done) {
-        const validation = validateContent(fullContent, { maxLength: 10000 });
+              if (!fullContent || !fullContent.trim()) {
+                validationFailed = true;
+                addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
+                throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+              }
+              const validation = smartValidate(fullContent, { maxLength: 10000 });
               if (!validation.valid) {
                 validationFailed = true;
                 addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${formatValidationIssue(validation)}。`);
@@ -956,7 +964,7 @@ router.post('/api/test/chat', requireAdminAuth, async (req, res) => {
           contentToCheck = json.choices[0].message.content;
         }
         
-      const validation = validateContent(contentToCheck, { maxLength: 10000 });
+      const validation = smartValidate(contentToCheck, { maxLength: 10000 });
         if (!validation.valid) {
           const validationIssue = formatValidationIssue(validation);
           addLog('error', `[模型測試｜內容校驗] 非串流回應被拒收：偵測到不合法或未閉合標籤：${validationIssue}，改用下一把 Key 重新生成。`);

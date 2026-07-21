@@ -21,12 +21,28 @@ export default function PlaygroundPanel({
 }) {
   const { t } = useTranslation();
   const chatEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatHistory, isChatting]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    const computed = getComputedStyle(textarea);
+    let lineHeight = parseFloat(computed.lineHeight);
+    if (Number.isNaN(lineHeight)) {
+      lineHeight = parseFloat(computed.fontSize) * 1.2;
+    }
+    const paddingTop = parseFloat(computed.paddingTop);
+    const paddingBottom = parseFloat(computed.paddingBottom);
+    const maxHeight = lineHeight * 4 + paddingTop + paddingBottom;
+    textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
+  }, [chatInput]);
 
   return (
     <ErrorBoundary name="Playground">
@@ -210,19 +226,26 @@ export default function PlaygroundPanel({
           </div>
 
           <form onSubmit={handleSendTestMessage} style={{ display: 'flex', gap: '10px' }}>
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               placeholder={selectedTestModel ? "Enter message..." : "Sync models first"}
               className="input"
-              style={{ flex: 1, fontSize: '15px', padding: '12px 16px' }}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendTestMessage(e);
+                }
+              }}
               disabled={!selectedTestModel || isChatting}
+              style={{ flex: 1, fontSize: '15px', padding: '12px 16px', resize: 'none', minHeight: '44px' }}
             />
             <button
-              type="submit"
+              type="button"
               className="btn btn-primary"
               style={{ padding: '0 24px', fontSize: '15px' }}
+              onClick={() => handleSendTestMessage({ preventDefault: () => {} })}
               disabled={!selectedTestModel || !chatInput.trim() || isChatting}
             >
               Send
