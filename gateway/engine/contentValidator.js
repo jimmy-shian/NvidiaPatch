@@ -402,24 +402,69 @@ function formatValidationIssue(validation) {
   return issues.join(', ') || 'unknown tag issue';
 }
 
-function quickValidate(content) {
-  if (!content || typeof content !== 'string') return true;
+function quickValidate(content, options = {}) {
+  if (!content || typeof content !== 'string') return { valid: true };
 
-  const hasOpen = /<[a-zA-Z_]/.test(content);
-  const hasClose = /<\//.test(content);
+  const maxLength = options.maxLength || content.length;
+  if (content.length > maxLength) {
+    content = content.slice(0, maxLength);
+  }
 
-  if (!hasOpen) return true;
-  if (!hasClose) return false;
+  if (!/<[a-zA-Z/]/.test(content)) return { valid: true };
 
-  const openCount = (content.match(/<[a-zA-Z_][a-zA-Z0-9:_-]*/g) || []).length;
-  const closeCount = (content.match(/<\//g) || []).length;
-  const selfClose = (content.match(/\/>/g) || []).length;
+  let paren = 0, brace = 0, bracket = 0;
+  let tagOpen = 0, tagClose = 0, selfClose = 0;
+  const len = content.length;
 
-  return Math.abs(openCount - selfClose - closeCount) <= 2;
+  for (let i = 0; i < len; i++) {
+    const ch = content[i];
+    if (ch === '(') { paren++; }
+    else if (ch === ')') { paren--; }
+    else if (ch === '{') { brace++; }
+    else if (ch === '}') { brace--; }
+    else if (ch === '[') { bracket++; }
+    else if (ch === ']') { bracket--; }
+    else if (ch === '<') {
+      if (i + 1 < len) {
+        const next = content[i + 1];
+        if (next === '/') {
+          tagClose++;
+        } else if ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') || next === '_') {
+          tagOpen++;
+        }
+      }
+    }
+    else if (ch === '/' && i + 1 < len && content[i + 1] === '>' && (i === 0 || content[i - 1] !== '<')) {
+      selfClose++;
+    }
+  }
+
+  if (tagClose === 0) return { valid: true };
+
+  const valid = paren === 0 && brace === 0 && bracket === 0 && tagOpen === tagClose + selfClose;
+  return { valid };
+}
+
+function smartValidate(content, options = {}) {
+  if (!content || typeof content !== 'string') return { valid: true };
+
+  const maxLength = options.maxLength || content.length;
+  const sampleSize = Math.min(options.sampleSize || 5000, maxLength);
+
+  if (content.length > maxLength) {
+    content = content.slice(0, maxLength);
+  }
+
+  const quick = quickValidate(content);
+  if (quick.valid) return quick;
+
+  const sample = content.slice(0, sampleSize);
+  return validateContent(sample, { maxLength: sampleSize });
 }
 
 module.exports = {
   validateContent,
   formatValidationIssue,
-  quickValidate
+  quickValidate,
+  smartValidate
 };
