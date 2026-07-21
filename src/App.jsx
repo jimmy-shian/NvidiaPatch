@@ -530,12 +530,18 @@ export default function App() {
 
   const handleSwitchModelGroup = async (groupId) => {
     if (groupId === activeModelGroup) return;
+    setActiveModelGroup(groupId);
     try {
       await api.setActiveModelGroup(groupId);
-      setActiveModelGroup(groupId);
-      fetchData();
+      const [modelsData, groupsData] = await Promise.all([
+        api.fetchModels().catch(err => { console.error('fetchModels err:', err); return null; }),
+        api.fetchModelGroups().catch(err => { console.error('fetchModelGroups err:', err); return null; })
+      ]);
+      if (modelsData) setModels(modelsData);
+      if (groupsData) setModelGroups(groupsData.groups || []);
     } catch (err) {
       alert(`Switch group failed: ${err.message}`);
+      fetchData();
     }
   };
 
