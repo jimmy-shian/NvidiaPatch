@@ -36,7 +36,7 @@ function sanitizeChatCompletionBody(body) {
     sanitized.messages = sanitized.messages.map(msg => {
       if (msg && typeof msg === 'object') {
         const cleanMsg = {};
-        const standardMsgKeys = ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'function_call', 'refusal'];
+        const standardMsgKeys = ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'function_call', 'refusal', 'reasoning_content'];
         for (const key of standardMsgKeys) {
           if (msg[key] !== undefined) {
             cleanMsg[key] = msg[key];

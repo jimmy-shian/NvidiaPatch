@@ -104,13 +104,22 @@ router.post('/v1/chat/completions', async (req, res) => {
     const now = Date.now();
     const nextAllowedTime = global.keyNextRequestTimes.get(key.id) || 0;
     const concurrencyDelayMs = Number(activeConfig.KEY_CONCURRENCY_DELAY_MS || 5000);
+    const maxAllowedWaitMs = Math.max(Number(activeConfig.REQUEST_TIMEOUT_MS || 60000), 60000);
 
     let waitMs = 0;
     let scheduledTime = now;
 
     if (now < nextAllowedTime) {
-      waitMs = nextAllowedTime - now;
-      scheduledTime = nextAllowedTime;
+      const diff = nextAllowedTime - now;
+      if (diff > maxAllowedWaitMs) {
+        addLog('warning', `請求 #${requestId}：金鑰 ID ${key.id} 排隊等待時間過大（${(diff / 1000).toFixed(2)} 秒 > 上限 ${(maxAllowedWaitMs / 1000).toFixed(0)} 秒），自動清空該金鑰之排隊記憶體。`);
+        global.keyNextRequestTimes.delete(key.id);
+        scheduledTime = now;
+        waitMs = 0;
+      } else {
+        waitMs = diff;
+        scheduledTime = nextAllowedTime;
+      }
     }
 
     global.keyNextRequestTimes.set(key.id, scheduledTime + concurrencyDelayMs);
@@ -310,6 +319,9 @@ router.post('/v1/chat/completions', async (req, res) => {
             if (chunk?.choices?.[0]?.delta?.content) {
               fullContent += chunk.choices[0].delta.content;
             }
+            if (chunk?.choices?.[0]?.delta?.reasoning_content) {
+              fullContent += chunk.choices[0].delta.reasoning_content;
+            }
             if (chunk?.usage) {
               streamUsage = chunk.usage;
             }
@@ -388,7 +400,7 @@ router.post('/v1/chat/completions', async (req, res) => {
 
     try {
       const json = await result.response.json();
-      const contentToCheck = json?.choices?.[0]?.message?.content || '';
+      const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
 
         const validation = smartValidate(contentToCheck, { maxLength: 10000 });
       if (!validation.valid) {
@@ -429,9 +441,20 @@ router.post('/v1/chat/completions', async (req, res) => {
       return { success: false, noHealthyKeys: true, errorText: '目前沒有健康的 API Key。' };
     }
 
+    const sortNow = Date.now();
+    const maxSortWaitMs = Math.max(Number(activeConfig.REQUEST_TIMEOUT_MS || 60000), 60000);
+
     availableKeys.sort((a, b) => {
-      const timeA = global.keyNextRequestTimes?.get(a.id) || 0;
-      const timeB = global.keyNextRequestTimes?.get(b.id) || 0;
+      let timeA = global.keyNextRequestTimes?.get(a.id) || 0;
+      let timeB = global.keyNextRequestTimes?.get(b.id) || 0;
+      if (timeA > 0 && timeA - sortNow > maxSortWaitMs) {
+        global.keyNextRequestTimes.delete(a.id);
+        timeA = 0;
+      }
+      if (timeB > 0 && timeB - sortNow > maxSortWaitMs) {
+        global.keyNextRequestTimes.delete(b.id);
+        timeB = 0;
+      }
       return timeA - timeB;
     });
 
@@ -843,9 +866,11 @@ router.post('/api/test/chat', requireAdminAuth, async (req, res) => {
     addLog('info', `[模型測試] 使用 Key ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} 測試模型「${model}」（第 ${keyIndex + 1}/${activeKeys.length} 把）。`);
 
     let abortController = new AbortController();
+    const testTimeoutMs = settings.get().TEST_TIMEOUT_MS || 60000;
+    addLog('info', `[模型測試] 使用測試逾時 ${testTimeoutMs / 1000} 秒（TEST_TIMEOUT_MS）。`);
     const timeoutId = setTimeout(() => {
       abortController.abort();
-    }, 60000);
+    }, testTimeoutMs);
 
     try {
       const response = await fetch(`${nvidiaBaseUrl}/chat/completions`, {
@@ -928,6 +953,9 @@ router.post('/api/test/chat', requireAdminAuth, async (req, res) => {
                   if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) {
                     fullContent += parsed.choices[0].delta.content;
                   }
+                  if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.reasoning_content) {
+                    fullContent += parsed.choices[0].delta.reasoning_content;
+                  }
                 } catch (e) {
                   // ignore
                 }
@@ -962,6 +990,9 @@ router.post('/api/test/chat', requireAdminAuth, async (req, res) => {
         let contentToCheck = '';
         if (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) {
           contentToCheck = json.choices[0].message.content;
+        }
+        if (!contentToCheck && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.reasoning_content) {
+          contentToCheck = json.choices[0].message.reasoning_content;
         }
         
       const validation = smartValidate(contentToCheck, { maxLength: 10000 });
