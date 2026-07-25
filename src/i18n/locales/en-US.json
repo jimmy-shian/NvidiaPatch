@@ -34,7 +34,8 @@
     "cancel": "Cancel",
     "saved": "Settings saved!",
     "portNotice": "Port changes require app restart.",
-    "settingsButton": "Settings"
+    "settingsButton": "Settings",
+    "resetConfirm": "Reset all parameters to default values?"
   },
   "keys": {
     "title": "NVIDIA NIM API Keys Pool",

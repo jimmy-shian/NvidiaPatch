@@ -2,6 +2,23 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
+const DEFAULT_SETTINGS = {
+  NVIDIA_API_URL: 'https://integrate.api.nvidia.com/v1',
+  PORT: 4000,
+  MAX_ROUNDS_PER_MODEL: 2,
+  ROUND_DELAY_MS: 15000,
+  REQUEST_TIMEOUT_MS: 120000,
+  STREAM_READ_TIMEOUT_MS: 120000,
+  TEST_TIMEOUT_MS: 60000,
+  MODEL_FAILURE_COOLDOWN_MS: 60000,
+  KEY_CONCURRENCY_DELAY_MS: 5000,
+  PRICE_PER_MILLION_PROMPT_TOKENS: 0.30,
+  PRICE_PER_MILLION_COMPLETION_TOKENS: 0.60,
+  REF_PRICE_PER_MILLION_PROMPT_TOKENS: 5.00,
+  REF_PRICE_PER_MILLION_COMPLETION_TOKENS: 15.00,
+  CURRENCY_SYMBOL: 'USD'
+};
+
 export default function SettingsModal({
   isOpen,
   tempSettings,
@@ -14,9 +31,13 @@ export default function SettingsModal({
 
   if (!isOpen || !tempSettings) return null;
 
+  const handleReset = () => {
+    if (!window.confirm(t('settings.resetConfirm') || '確定要重設所有參數為預設值嗎？')) return;
+    setTempSettings({ ...DEFAULT_SETTINGS });
+  };
+
   return (
     <div
-      onClick={() => setIsSettingsModalOpen(false)}
       style={{
         position: 'fixed',
         top: 0, left: 0, right: 0, bottom: 0,
@@ -201,6 +222,9 @@ export default function SettingsModal({
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+          <button className="btn btn-secondary" onClick={handleReset}>
+            重設
+          </button>
           <button className="btn btn-secondary" onClick={() => setIsSettingsModalOpen(false)}>
             {t('settings.cancel')}
           </button>
