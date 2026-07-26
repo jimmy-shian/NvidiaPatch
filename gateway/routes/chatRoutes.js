@@ -62,6 +62,50 @@ router.post('/v1/chat/completions', async (req, res) => {
     : `使用目前啟用的第 ${groupSelection.groupId} 組`;
   addLog('info', `請求 #${requestId} 已收到（stream=${stream}），${groupSourceText}模型順位，開始調度。`);
 
+  // 假串流機制：每 10 秒傳一字，避免前端自己斷線（參考請求 #253）
+  const fakeCannedMessage = '我正在思考中，請稍候，這是一個假串流測試訊息，用來避免前端自己斷線，每十秒傳一個字。';
+  const fakeIntervalMs = 10000;
+  let fakeCharIndex = 0;
+  let fakeTimer = null;
+  let fakeStreamActive = false;
+
+  function sendFakeStreamChar() {
+    if (!fakeStreamActive) return;
+    if (fakeCharIndex >= fakeCannedMessage.length) {
+      fakeCharIndex = 0;
+    }
+    if (isClientGone() || res.writableEnded || res.destroyed) {
+      fakeStreamActive = false;
+      return;
+    }
+    const char = fakeCannedMessage[fakeCharIndex];
+    fakeCharIndex += 1;
+    const chunkData = JSON.stringify({
+      id: `chatcmpl-gateway-${requestId}-fake`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: originalBody.model || 'patcher-main',
+      choices: [{ index: 0, delta: { content: char }, finish_reason: null }]
+    });
+    try {
+      res.write(`data: ${chunkData}\n\n`);
+    } catch (e) {
+      fakeStreamActive = false;
+    }
+  }
+
+  if (stream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    fakeStreamActive = true;
+    fakeTimer = setInterval(() => sendFakeStreamChar(), fakeIntervalMs);
+    sendFakeStreamChar();
+  }
+
   const activeConfig = settings.get();
   const dbMaxRounds = Number(activeConfig.MAX_ROUNDS_PER_MODEL);
   const MAX_ROUNDS_PER_MODEL = (Number.isFinite(dbMaxRounds) && dbMaxRounds >= 1 && dbMaxRounds <= 10) ? dbMaxRounds : 2;
@@ -316,11 +360,24 @@ router.post('/v1/chat/completions', async (req, res) => {
           try {
             const dataStr = trimmed.slice(5).trim();
             const chunk = JSON.parse(dataStr);
+            // Check various possible content locations for compatibility
             if (chunk?.choices?.[0]?.delta?.content) {
               fullContent += chunk.choices[0].delta.content;
             }
             if (chunk?.choices?.[0]?.delta?.reasoning_content) {
               fullContent += chunk.choices[0].delta.reasoning_content;
+            }
+            // Alternative: message.content (some APIs)
+            if (chunk?.choices?.[0]?.message?.content) {
+              fullContent += chunk.choices[0].message.content;
+            }
+            // Alternative: text field
+            if (chunk?.choices?.[0]?.text) {
+              fullContent += chunk.choices[0].text;
+            }
+            // Alternative: content directly in choices[0]
+            if (chunk?.choices?.[0]?.content) {
+              fullContent += chunk.choices[0].content;
             }
             if (chunk?.usage) {
               streamUsage = chunk.usage;
@@ -346,22 +403,22 @@ router.post('/v1/chat/completions', async (req, res) => {
           for (const line of lines) {
             consumeLine(line);
           }
-        }
+}
 
-        if (!fullContent || !fullContent.trim()) {
-          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為回傳失敗，改用下一把 Key 重試同一模型。`);
+        if (fullContent === null || fullContent === undefined || fullContent === '') {
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為回傳失敗，立即切換下一個模型。`);
           apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
           stats.recordRequest(false);
-          return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：回傳內容為空` };
+          return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
         }
 
         const validation = smartValidate(fullContent, { maxLength: 10000 });
         if (!validation.valid) {
           const validationIssue = formatValidationIssue(validation);
-          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
           apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
           stats.recordRequest(false);
-          return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
+          return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
         }
 
         if (!streamUsage) {
@@ -383,7 +440,13 @@ router.post('/v1/chat/completions', async (req, res) => {
           // ignore
         }
 
+        const isClientDisconnect = err.message.includes('客戶端已中斷連線');
         const isTimeout = err.message.includes('逾時') || err.message.toLowerCase().includes('timeout');
+        if (isClientDisconnect) {
+          apiKeys.recordFailure(selectedKey.id, `客戶端中斷連線：${err.message}`);
+          stats.recordRequest(false);
+          return { success: false, clientGone: true, errorText: err.message };
+        }
         if (isTimeout) {
           addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取發生逾時（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
           apiKeys.recordFailure(selectedKey.id, `串流讀取逾時：${err.message}`);
@@ -403,13 +466,13 @@ router.post('/v1/chat/completions', async (req, res) => {
       const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
 
         const validation = smartValidate(contentToCheck, { maxLength: 10000 });
-      if (!validation.valid) {
-        const validationIssue = formatValidationIssue(validation);
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
-        apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-        stats.recordRequest(false);
-        return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: `內容校驗失敗：${validationIssue}` };
-      }
+        if (!validation.valid) {
+          const validationIssue = formatValidationIssue(validation);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+          apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+          stats.recordRequest(false);
+          return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+        }
 
       let usage = json?.usage;
       if (!usage) {
@@ -474,7 +537,7 @@ router.post('/v1/chat/completions', async (req, res) => {
         const validated = await validateSuccessfulResponse(model, selectedKey, result, roundNumber);
         if (validated.success) return validated;
 
-        if (validated.contentValidationFailed) {
+        if (validated.contentValidationFailed && validated.retryScope === 'key') {
           addLog('info', `請求 #${requestId}：模型「${modelId}」回傳格式失敗（${validated.errorText}），觸發同模型重試。`);
           return {
             success: false,
@@ -617,6 +680,40 @@ router.post('/v1/chat/completions', async (req, res) => {
     });
   }
 
+  function sendStreamError(errorPayload) {
+    fakeStreamActive = false;
+    if (fakeTimer) {
+      clearInterval(fakeTimer);
+      fakeTimer = null;
+    }
+    if (res.writableEnded || res.destroyed) return;
+    if (!res.headersSent) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+    }
+    try {
+      res.write(`data: ${JSON.stringify({
+        id: `chatcmpl-gateway-${requestId}-error`,
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model: originalBody.model || 'patcher-main',
+        choices: [{
+          index: 0,
+          delta: { content: `\n\n[Gateway Error] ${errorPayload.message || ''}${errorPayload.detail ? ` (${errorPayload.detail})` : ''}` },
+          finish_reason: 'stop'
+        }]
+      })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (e) {
+      // ignore
+    }
+  }
+
   async function sendValidatedResponse(result, currentModel) {
     const modelId = currentModel.model_id;
     const clientModelId = originalBody.model || 'patcher-main';
@@ -632,20 +729,23 @@ router.post('/v1/chat/completions', async (req, res) => {
       }
 
       await waitForResponseFinish(() => {
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream; charset=utf-8',
-          'Cache-Control': 'no-cache, no-transform',
-          'Connection': 'keep-alive',
-          'X-Accel-Buffering': 'no'
-        });
-        
         const chunks = ssePayload.split('\n\n');
+        let firstChunk = true;
         for (const chunk of chunks) {
           if (chunk.trim()) {
+            if (firstChunk) {
+              res.write('==\n\n');
+              firstChunk = false;
+            }
             res.write(chunk + '\n\n');
           }
         }
         res.end();
+        fakeStreamActive = false;
+        if (fakeTimer) {
+          clearInterval(fakeTimer);
+          fakeTimer = null;
+        }
       });
     } else {
       const json = result.jsonData;
@@ -735,10 +835,35 @@ router.post('/v1/chat/completions', async (req, res) => {
               markModelFailureCooldown(modelId, `Gateway 回傳包裝失敗：${err.message}`);
               break;
             }
-            try {
-              res.end();
-            } catch (endErr) {
-              // ignore
+            if (stream && res.headersSent) {
+              fakeStreamActive = false;
+              if (fakeTimer) {
+                clearInterval(fakeTimer);
+                fakeTimer = null;
+              }
+              try {
+                res.write(`data: ${JSON.stringify({
+                  id: `chatcmpl-gateway-${requestId}-error`,
+                  object: 'chat.completion.chunk',
+                  created: Math.floor(Date.now() / 1000),
+                  model: originalBody.model || 'patcher-main',
+                  choices: [{
+                    index: 0,
+                    delta: { content: `\n\n[Gateway Error] 包裝回傳失敗：${err.message}` },
+                    finish_reason: 'stop'
+                  }]
+                })}\n\n`);
+                res.write('data: [DONE]\n\n');
+                res.end();
+              } catch (endErr) {
+                // ignore
+              }
+            } else {
+              try {
+                res.end();
+              } catch (endErr) {
+                // ignore
+              }
             }
             return;
           }
@@ -746,6 +871,12 @@ router.post('/v1/chat/completions', async (req, res) => {
 
         if (result.noHealthyKeys) {
           addLog('error', `請求 #${requestId}：目前沒有健康的 API Key，停止模型切換。`);
+          if (stream && res.headersSent) {
+            return sendStreamError({
+              message: 'Gateway 目前沒有健康的 API Key。',
+              detail: result.errorText || '所有 Key 可能都已停用或正在冷卻。'
+            });
+          }
           return res.status(503).json({
             error: {
               message: 'Gateway 目前沒有健康的 API Key。',
@@ -758,6 +889,12 @@ router.post('/v1/chat/completions', async (req, res) => {
 
         if (result.fatal) {
           addLog('error', `請求 #${requestId}：遇到不可重試錯誤 HTTP ${result.statusCode}，停止調度。`);
+          if (stream && res.headersSent) {
+            return sendStreamError({
+              message: result.errorText || '不可重試錯誤',
+              detail: `HTTP ${result.statusCode}`
+            });
+          }
           return res.status(result.statusCode || 400).json({
             error: {
               message: result.errorText || '不可重試錯誤',
@@ -798,6 +935,12 @@ router.post('/v1/chat/completions', async (req, res) => {
 
     const cooldownText = skippedByCooldown > 0 ? `，其中 ${skippedByCooldown} 個模型因近期模型層級失敗被暫時跳過` : '';
     addLog('error', `請求 #${requestId}：所有模型都無法完成請求${cooldownText}。`);
+    if (stream && res.headersSent) {
+      return sendStreamError({
+        message: '所有設定中的模型都無法完成請求，請檢查 Gateway 日誌。',
+        detail: `所有模型都無法完成請求${cooldownText}。`
+      });
+    }
     return res.status(503).json({
       error: {
         message: '所有設定中的模型都無法完成請求，請檢查 Gateway 日誌。',
@@ -813,6 +956,13 @@ router.post('/v1/chat/completions', async (req, res) => {
   } catch (err) {
     addLog('error', `請求 #${requestId}：Gateway 調度流程發生未預期錯誤：${err.stack || err.message}`);
     stats.recordRequest(false);
+
+    if (stream && res.headersSent) {
+      return sendStreamError({
+        message: 'Gateway dispatch crashed before a response could be sent.',
+        detail: err.message
+      });
+    }
 
     if (!res.headersSent && !res.writableEnded) {
       return res.status(502).json({
