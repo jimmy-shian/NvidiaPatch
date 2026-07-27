@@ -82,7 +82,7 @@ router.get('/api/settings', requireAdminAuth, (req, res) => {
 });
 
 router.post('/api/settings', requireAdminAuth, (req, res) => {
-  const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, TEST_TIMEOUT_MS, MODEL_FAILURE_COOLDOWN_MS, KEY_CONCURRENCY_DELAY_MS, PRICE_PER_MILLION_PROMPT_TOKENS, PRICE_PER_MILLION_COMPLETION_TOKENS, REF_PRICE_PER_MILLION_PROMPT_TOKENS, REF_PRICE_PER_MILLION_COMPLETION_TOKENS, CURRENCY_SYMBOL } = req.body;
+  const { ROUND_DELAY_MS, REQUEST_TIMEOUT_MS, STREAM_READ_TIMEOUT_MS, NVIDIA_API_URL, PORT, MAX_ROUNDS_PER_MODEL, MAX_EMPTY_RESPONSE_RETRIES, TEST_TIMEOUT_MS, MODEL_FAILURE_COOLDOWN_MS, KEY_CONCURRENCY_DELAY_MS, PRICE_PER_MILLION_PROMPT_TOKENS, PRICE_PER_MILLION_COMPLETION_TOKENS, REF_PRICE_PER_MILLION_PROMPT_TOKENS, REF_PRICE_PER_MILLION_COMPLETION_TOKENS, CURRENCY_SYMBOL } = req.body;
   const current = settings.get();
 
   const validationErrors = [];
@@ -134,6 +134,12 @@ router.post('/api/settings', requireAdminAuth, (req, res) => {
       validationErrors.push('最大重試輪數必須是 1～10 之間的整數。');
     }
   }
+  if (MAX_EMPTY_RESPONSE_RETRIES !== undefined) {
+    const val = Number(MAX_EMPTY_RESPONSE_RETRIES);
+    if (!Number.isFinite(val) || val < 1 || val > 10 || !Number.isInteger(val)) {
+      validationErrors.push('空回傳重試次數必須是 1～10 之間的整數。');
+    }
+  }
   if (PRICE_PER_MILLION_PROMPT_TOKENS !== undefined && Number(PRICE_PER_MILLION_PROMPT_TOKENS) < 0) {
     validationErrors.push('Prompt 實際價格不可小於 0。');
   }
@@ -157,6 +163,7 @@ router.post('/api/settings', requireAdminAuth, (req, res) => {
     NVIDIA_API_URL: NVIDIA_API_URL !== undefined ? String(NVIDIA_API_URL).trim() : current.NVIDIA_API_URL,
     PORT: PORT !== undefined ? Number(PORT) : current.PORT,
     MAX_ROUNDS_PER_MODEL: MAX_ROUNDS_PER_MODEL !== undefined ? Number(MAX_ROUNDS_PER_MODEL) : current.MAX_ROUNDS_PER_MODEL,
+    MAX_EMPTY_RESPONSE_RETRIES: MAX_EMPTY_RESPONSE_RETRIES !== undefined ? Number(MAX_EMPTY_RESPONSE_RETRIES) : current.MAX_EMPTY_RESPONSE_RETRIES,
     TEST_TIMEOUT_MS: TEST_TIMEOUT_MS !== undefined ? Math.round(Number(TEST_TIMEOUT_MS) * 1000) : current.TEST_TIMEOUT_MS,
     MODEL_FAILURE_COOLDOWN_MS: MODEL_FAILURE_COOLDOWN_MS !== undefined ? Math.round(Number(MODEL_FAILURE_COOLDOWN_MS) * 1000) : current.MODEL_FAILURE_COOLDOWN_MS,
     KEY_CONCURRENCY_DELAY_MS: KEY_CONCURRENCY_DELAY_MS !== undefined ? Math.round(Number(KEY_CONCURRENCY_DELAY_MS) * 1000) : current.KEY_CONCURRENCY_DELAY_MS,
@@ -167,7 +174,7 @@ router.post('/api/settings', requireAdminAuth, (req, res) => {
     CURRENCY_SYMBOL: CURRENCY_SYMBOL !== undefined ? String(CURRENCY_SYMBOL).trim() : current.CURRENCY_SYMBOL
   });
   
-  addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, 模型失敗冷卻 ${(updated.MODEL_FAILURE_COOLDOWN_MS / 1000)}秒, 金鑰防併發等待 ${(updated.KEY_CONCURRENCY_DELAY_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪`);
+  addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, 模型失敗冷卻 ${(updated.MODEL_FAILURE_COOLDOWN_MS / 1000)}秒, 金鑰防併發等待 ${(updated.KEY_CONCURRENCY_DELAY_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪, 空回傳重試: ${updated.MAX_EMPTY_RESPONSE_RETRIES}次`);
 
   eventManager.broadcast('settings', {
     ...updated,

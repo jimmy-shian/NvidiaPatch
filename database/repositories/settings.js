@@ -9,6 +9,7 @@ const settings = {
     const nvidiaUrl = db.prepare("SELECT value FROM metadata WHERE key = 'NVIDIA_API_URL'").get();
     const port = db.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
     const maxRounds = db.prepare("SELECT value FROM metadata WHERE key = 'MAX_ROUNDS_PER_MODEL'").get();
+    const maxEmptyRetries = db.prepare("SELECT value FROM metadata WHERE key = 'MAX_EMPTY_RESPONSE_RETRIES'").get();
     const testTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'TEST_TIMEOUT_MS'").get();
     const modelFailureCooldown = db.prepare("SELECT value FROM metadata WHERE key = 'MODEL_FAILURE_COOLDOWN_MS'").get();
     const keyConcurrencyDelay = db.prepare("SELECT value FROM metadata WHERE key = 'KEY_CONCURRENCY_DELAY_MS'").get();
@@ -19,6 +20,7 @@ const settings = {
       NVIDIA_API_URL: nvidiaUrl?.value || 'https://integrate.api.nvidia.com/v1',
       PORT: Number(port?.value || 4000),
       MAX_ROUNDS_PER_MODEL: Number(maxRounds?.value || 2),
+      MAX_EMPTY_RESPONSE_RETRIES: Number(maxEmptyRetries?.value || 3),
       TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000),
       MODEL_FAILURE_COOLDOWN_MS: Number(modelFailureCooldown?.value || 60000),
       KEY_CONCURRENCY_DELAY_MS: Number(keyConcurrencyDelay?.value || 5000),
@@ -48,6 +50,9 @@ const settings = {
     }
     if (config.MAX_ROUNDS_PER_MODEL !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', ?)").run(String(config.MAX_ROUNDS_PER_MODEL));
+    }
+    if (config.MAX_EMPTY_RESPONSE_RETRIES !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MAX_EMPTY_RESPONSE_RETRIES', ?)").run(String(config.MAX_EMPTY_RESPONSE_RETRIES));
     }
     if (config.TEST_TIMEOUT_MS !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', ?)").run(String(config.TEST_TIMEOUT_MS));

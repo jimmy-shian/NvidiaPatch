@@ -97,6 +97,7 @@ function runMigrations(db) {
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('NVIDIA_API_URL', 'https://integrate.api.nvidia.com/v1')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('PORT', '4000')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', '2')").run();
+  db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MAX_EMPTY_RESPONSE_RETRIES', '3')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', '60000')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('MODEL_FAILURE_COOLDOWN_MS', '60000')").run();
   db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('KEY_CONCURRENCY_DELAY_MS', '5000')").run();

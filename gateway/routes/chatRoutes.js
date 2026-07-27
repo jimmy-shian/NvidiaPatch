@@ -63,7 +63,7 @@ router.post('/v1/chat/completions', async (req, res) => {
   addLog('info', `請求 #${requestId} 已收到（stream=${stream}），${groupSourceText}模型順位，開始調度。`);
 
   // 假串流機制：每 10 秒傳一字，避免前端自己斷線（參考請求 #253）
-  const fakeCannedMessage = '我正在思考中，請稍候，這是一個假串流測試訊息，用來避免前端自己斷線，每十秒傳一個字。';
+  const fakeCannedMessage = '---Thinking---Please---Wait';
   const fakeIntervalMs = 10000;
   let fakeCharIndex = 0;
   let fakeTimer = null;
@@ -109,6 +109,8 @@ router.post('/v1/chat/completions', async (req, res) => {
   const activeConfig = settings.get();
   const dbMaxRounds = Number(activeConfig.MAX_ROUNDS_PER_MODEL);
   const MAX_ROUNDS_PER_MODEL = (Number.isFinite(dbMaxRounds) && dbMaxRounds >= 1 && dbMaxRounds <= 10) ? dbMaxRounds : 2;
+  const dbMaxEmptyRetries = Number(activeConfig.MAX_EMPTY_RESPONSE_RETRIES);
+  const MAX_EMPTY_RESPONSE_RETRIES = (Number.isFinite(dbMaxEmptyRetries) && dbMaxEmptyRetries >= 1 && dbMaxEmptyRetries <= 10) ? dbMaxEmptyRetries : 3;
   const ROUND_DELAY_MS = activeConfig.ROUND_DELAY_MS;
   const REQUEST_TIMEOUT_MS = activeConfig.REQUEST_TIMEOUT_MS;
   const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
@@ -406,10 +408,10 @@ router.post('/v1/chat/completions', async (req, res) => {
 }
 
         if (fullContent === null || fullContent === undefined || fullContent === '') {
-          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為回傳失敗，立即切換下一個模型。`);
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
           apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
           stats.recordRequest(false);
-          return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+          return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
         }
 
         const validation = smartValidate(fullContent, { maxLength: 10000 });
@@ -464,6 +466,13 @@ router.post('/v1/chat/completions', async (req, res) => {
     try {
       const json = await result.response.json();
       const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
+
+        if (contentToCheck === '') {
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
+          apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+          stats.recordRequest(false);
+          return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+        }
 
         const validation = smartValidate(contentToCheck, { maxLength: 10000 });
         if (!validation.valid) {
@@ -554,6 +563,80 @@ router.post('/v1/chat/completions', async (req, res) => {
             forceRetrySameModel: true,
             streamReadFailed: true,
             errorText: validated.errorText || '串流讀取失敗'
+          };
+        }
+
+        if (validated.emptyResponse && validated.forceRetrySameModelOnEmpty) {
+          let emptyRetryCount = 1;
+          let lastValidated = validated;
+          while (emptyRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
+            addLog('info', `請求 #${requestId}：模型「${modelId}」回傳為空（空回傳第 ${emptyRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES} 次），立即重試同一模型。`);
+            const retryResult = await sendSingleRequest(model, selectedKey, keyIndex, availableKeys);
+            if (retryResult.clientGone) {
+              return { success: false, clientGone: true, errorText: retryResult.errorText || '客戶端已中斷連線' };
+            }
+            if (retryResult.success) {
+              const validatedRetry = await validateSuccessfulResponse(model, selectedKey, retryResult, roundNumber);
+              if (validatedRetry.success) return validatedRetry;
+              lastValidated = validatedRetry;
+              if (validatedRetry.emptyResponse && validatedRetry.forceRetrySameModelOnEmpty) {
+                emptyRetryCount += 1;
+                continue;
+              }
+              if (validatedRetry.contentValidationFailed && validatedRetry.retryScope === 'key') {
+                addLog('info', `請求 #${requestId}：模型「${modelId}」空回傳重試轉為格式失敗，觸發同模型重試。`);
+                return {
+                  success: false,
+                  forceRetrySameModel: true,
+                  contentValidationFailed: true,
+                  errorText: validatedRetry.errorText || '回傳格式失敗'
+                };
+              }
+              if (validatedRetry.streamReadFailed) {
+                addLog('warning', `請求 #${requestId}：模型「${modelId}」空回傳重試轉為串流讀取失敗，將觸發等待後重試。`);
+                return {
+                  success: false,
+                  forceRetrySameModel: true,
+                  streamReadFailed: true,
+                  errorText: validatedRetry.errorText || '串流讀取失敗'
+                };
+              }
+              if (validatedRetry.forceFallbackModel || validatedRetry.retryScope === 'model') {
+                return {
+                  success: false,
+                  forceFallbackModel: true,
+                  errorText: validatedRetry.errorText || '模型回傳內容無效'
+                };
+              }
+              continue;
+            }
+            if (retryResult.fatal || retryResult.retryScope === 'fatal') {
+              return {
+                success: false,
+                fatal: true,
+                statusCode: retryResult.statusCode,
+                errorText: retryResult.errorText,
+                response: retryResult.response
+              };
+            }
+            if (retryResult.shouldFallbackModel || retryResult.retryScope === 'model') {
+              addLog('warning', `請求 #${requestId}：模型「${modelId}」空回傳重試期間發生模型層級失敗，立即切換下一個模型。`);
+              return {
+                success: false,
+                forceFallbackModel: true,
+                statusCode: retryResult.statusCode,
+                errorText: retryResult.errorText || `HTTP ${retryResult.statusCode}`
+              };
+            }
+            addLog('info', `請求 #${requestId}：模型「${modelId}」空回傳重試遇到 Key 層級錯誤，繼續嘗試下一把 Key。`);
+            lastValidated = { emptyResponse: true, forceRetrySameModelOnEmpty: true, errorText: retryResult.errorText };
+            emptyRetryCount += 1;
+          }
+          addLog('warning', `請求 #${requestId}：模型「${modelId}」連續 ${emptyRetryCount} 次空回傳，已達上限（${MAX_EMPTY_RESPONSE_RETRIES} 次），判定為模型層級失敗，切換下一個模型。`);
+          return {
+            success: false,
+            forceFallbackModel: true,
+            errorText: lastValidated?.errorText || `連續空回傳 ${emptyRetryCount} 次`
           };
         }
 
