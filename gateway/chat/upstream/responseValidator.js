@@ -1,0 +1,236 @@
+/**
+ * 回傳校驗（Response Validator）
+ *
+ * 當 sendSingleRequest 拿到 HTTP 200 的 response 後，此模組負責：
+ *
+ *  1. 串流模式：消費 reader，逐行解析 SSE chunk，將多種可能欄位
+ *     (delta.content / delta.reasoning_content / message.content / text / content)
+ *     合併為 fullContent；最終交給 smartValidate 校驗。
+ *     - 空內容 → 重試同一模型（forceRetrySameModelOnEmpty）
+ *     - 校驗失敗 → 切換模型（forceFallbackModel）
+ *     - 逾時 / 客戶端中斷 → 對應分支
+ *
+ *  2. 非串流模式：await response.json() 後校驗 choices[0].message.content
+ *     - 空內容 / 校驗失敗 → 同上
+ *     - JSON 解析失敗 → 換下一把 Key（retryScope='key'）
+ */
+
+const { apiKeys, stats } = require('../../../database');
+const { addLog } = require('../../logs/logger');
+const { smartValidate, formatValidationIssue } = require('../../engine/contentValidator');
+const { isFakeStreamContent } = require('../utils/fakeStreamFilter');
+
+function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`串流讀取逾時 ${STREAM_READ_TIMEOUT_MS / 1000} 秒`));
+    }, STREAM_READ_TIMEOUT_MS);
+
+    reader.read()
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+function consumeSseLine(rawLine, sseLines, fullContentRef) {
+  const cleanLine = String(rawLine || '').endsWith('\r')
+    ? String(rawLine || '').slice(0, -1)
+    : String(rawLine || '');
+
+  sseLines.push(cleanLine);
+
+  const trimmed = cleanLine.trim();
+  if (!trimmed.startsWith('data:') || trimmed.includes('[DONE]')) return;
+
+  try {
+    const dataStr = trimmed.slice(5).trim();
+    const chunk = JSON.parse(dataStr);
+
+    // 過濾僅含假串流字元 \uE000 的 chunk，避免汙染校驗用的 fullContent。
+    const fakeCandidate = chunk?.choices?.[0]?.delta?.content
+      || chunk?.choices?.[0]?.message?.content
+      || chunk?.choices?.[0]?.text
+      || chunk?.choices?.[0]?.content;
+    if (typeof fakeCandidate === 'string' && isFakeStreamContent(fakeCandidate)) {
+      return chunk?.usage || null;
+    }
+
+    // 支援多種可能欄位
+    if (chunk?.choices?.[0]?.delta?.content) {
+      fullContentRef.value += chunk.choices[0].delta.content;
+    }
+    if (chunk?.choices?.[0]?.delta?.reasoning_content) {
+      fullContentRef.value += chunk.choices[0].delta.reasoning_content;
+    }
+    if (chunk?.choices?.[0]?.message?.content) {
+      fullContentRef.value += chunk.choices[0].message.content;
+    }
+    if (chunk?.choices?.[0]?.text) {
+      fullContentRef.value += chunk.choices[0].text;
+    }
+    if (chunk?.choices?.[0]?.content) {
+      fullContentRef.value += chunk.choices[0].content;
+    }
+    return chunk?.usage || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function validateStreamResponse({ context, model, selectedKey, result }) {
+  const { requestId, originalBody, activeConfig, isClientGone } = context;
+  const modelId = model.model_id;
+  const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
+
+  const reader = result.response.body.getReader();
+  const decoder = new TextDecoder();
+  let streamBuffer = '';
+  const sseLines = [];
+  const fullContentRef = { value: '' };
+  let streamUsage = null;
+
+  try {
+    while (true) {
+      if (isClientGone()) {
+        throw new Error('客戶端已中斷連線');
+      }
+      const { done, value } = await readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS);
+      if (done) break;
+
+      streamBuffer += decoder.decode(value, { stream: true });
+      const lines = streamBuffer.split('\n');
+      streamBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const usage = consumeSseLine(line, sseLines, fullContentRef);
+        if (usage) streamUsage = usage;
+      }
+    }
+
+    const fullContent = fullContentRef.value;
+
+    if (fullContent === null || fullContent === undefined || fullContent === '') {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+    }
+
+    const validation = smartValidate(fullContent, { maxLength: 10000 });
+    if (!validation.valid) {
+      const validationIssue = formatValidationIssue(validation);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+    }
+
+    if (!streamUsage) {
+      const promptText = JSON.stringify(originalBody.messages || '');
+      const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+      const estimatedCompletion = Math.max(1, Math.round(fullContent.length / 3.2));
+      streamUsage = {
+        prompt_tokens: estimatedPrompt,
+        completion_tokens: estimatedCompletion,
+        total_tokens: estimatedPrompt + estimatedCompletion
+      };
+    }
+
+    return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
+  } catch (err) {
+    try {
+      reader.cancel().catch(() => {});
+    } catch (cancelErr) {
+      // ignore
+    }
+
+    const isClientDisconnect = err.message.includes('客戶端已中斷連線');
+    const isTimeout = err.message.includes('逾時') || err.message.toLowerCase().includes('timeout');
+    if (isClientDisconnect) {
+      apiKeys.recordFailure(selectedKey.id, `客戶端中斷連線：${err.message}`);
+      stats.recordRequest(false);
+      return { success: false, clientGone: true, errorText: err.message };
+    }
+    if (isTimeout) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取發生逾時（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `串流讀取逾時：${err.message}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: err.message };
+    }
+
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
+    apiKeys.recordFailure(selectedKey.id, `串流讀取錯誤：${err.message}`);
+    stats.recordRequest(false);
+    return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
+  }
+}
+
+async function validateJsonResponse({ context, model, selectedKey, result }) {
+  const { requestId, originalBody } = context;
+  const modelId = model.model_id;
+
+  try {
+    const json = await result.response.json();
+    const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
+
+    if (contentToCheck === '') {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+    }
+
+    const validation = smartValidate(contentToCheck, { maxLength: 10000 });
+    if (!validation.valid) {
+      const validationIssue = formatValidationIssue(validation);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+    }
+
+    let usage = json?.usage;
+    if (!usage) {
+      const promptText = JSON.stringify(originalBody.messages || '');
+      const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+      const estimatedCompletion = Math.max(1, Math.round(contentToCheck.length / 3.2));
+      usage = {
+        prompt_tokens: estimatedPrompt,
+        completion_tokens: estimatedCompletion,
+        total_tokens: estimatedPrompt + estimatedCompletion
+      };
+    }
+
+    return { success: true, response: result.response, jsonData: json, usage };
+  } catch (err) {
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 解析失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
+    apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
+    stats.recordRequest(false);
+    return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: err.message };
+  }
+}
+
+/**
+ * 校驗 NVIDIA HTTP 200 回應（串流 / 非串流分支）。
+ *
+ * @returns 與原始 validateSuccessfulResponse 相同的結果物件結構
+ */
+async function validateSuccessfulResponse({ context, model, selectedKey, result, roundNumber }) {
+  const isStream = !!context.originalBody.stream;
+  if (isStream) {
+    return validateStreamResponse({ context, model, selectedKey, result });
+  }
+  return validateJsonResponse({ context, model, selectedKey, result });
+}
+
+module.exports = {
+  validateSuccessfulResponse,
+  readStreamChunkWithTimeout,
+  consumeSseLine
+};
