@@ -5,9 +5,9 @@
 const translationRules = [
   // 1. Settings & API actions
   {
-    regex: /已更新參數設定：每輪等待 (.*?)秒, 請求逾時 (.*?)秒, 串流逾時 (.*?)秒, 測試逾時 (.*?)秒, 模型失敗冷卻 (.*?)秒, 金鑰防併發等待 (.*?)秒, URL: (.*?), PORT: (.*?), 最大重試: (.*?)輪, 空回傳重試: (.*?)次/,
-    en: "Updated settings: Round delay $1s, Request timeout $2s, Stream timeout $3s, Test timeout $4s, Model cooldown $5s, Key concurrency delay $6s, URL: $7, PORT: $8, Max retry: $9 rounds, Empty response retry: $10 times",
-    ja: "設定を更新しました：ラウンド遅延 $1秒、要求タイムアウト $2秒、ストリームタイムアウト $3秒、テストタイムアウト $4秒、モデルクールダウン $5秒、キー同時実行遅延 $6秒、URL: $7、PORT: $8、最大試行: $9ラウンド、空レスポンス再試行: $10回"
+    regex: /已更新參數設定：每輪等待 (.*?)秒, 請求逾時 (.*?)秒, 串流逾時 (.*?)秒, 測試逾時 (.*?)秒, 模型失敗冷卻 (.*?)秒, 金鑰防併發等待 (.*?)秒, URL: (.*?), PORT: (.*?), 最大重試: (.*?)輪, 空回傳重試: (.*?)次, 內容校驗: (.*?), 實際單價: Prompt (.*?) \/ Completion (.*?) \((.*?)\/百萬tokens\), 參考單價: Prompt (.*?) \/ Completion (.*?)$/,
+    en: "Updated settings: Round delay $1s, Request timeout $2s, Stream timeout $3s, Test timeout $4s, Model cooldown $5s, Key concurrency delay $6s, URL: $7, PORT: $8, Max retry: $9 rounds, Empty response retry: $10 times, Content validation: $11, Actual pricing: Prompt $12 / Completion $13 ($14/M tokens), Reference pricing: Prompt $15 / Completion $16",
+    ja: "設定を更新しました：ラウンド遅延 $1秒、要求タイムアウト $2秒、ストリームタイムアウト $3秒、テストタイムアウト $4秒、モデルクールダウン $5秒、キー同時実行遅延 $6秒、URL: $7、PORT: $8、最大試行: $9ラウンド、空レスポンス再試行: $10回、コンテンツ検証: $11、実際価格: プロンプト $12 / 補完 $13 ($14/百万tokens)、参考価格: プロンプト $15 / 補完 $16"
   },
   {
     regex: /已清空 Token 累加計數與使用量日誌。/,
@@ -350,11 +350,25 @@ export function translateLogMessage(message, lang) {
   const isJa = lang.startsWith("ja");
   const isEn = lang.startsWith("en");
 
+  // Common word translations applied after regex replacement
+  const translateCommonWords = (text) => {
+    if (isEn) {
+      return text
+        .replace(/啟用/g, "enabled")
+        .replace(/停用/g, "disabled");
+    } else if (isJa) {
+      return text
+        .replace(/啟用/g, "有効")
+        .replace(/停用/g, "無効");
+    }
+    return text;
+  };
+
   for (const rule of translationRules) {
     if (rule.regex.test(message)) {
       const replacement = isJa ? rule.ja : (isEn ? rule.en : null);
       if (replacement) {
-        return message.replace(rule.regex, replacement);
+        return translateCommonWords(message.replace(rule.regex, replacement));
       }
     }
   }
@@ -377,5 +391,5 @@ export function translateLogMessage(message, lang) {
       .replace(/已刪除自訂規範/g, "カスタム開発規範を削除しました");
   }
 
-  return translated;
+  return translateCommonWords(translated);
 }

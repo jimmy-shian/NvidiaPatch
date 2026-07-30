@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   TEST_TIMEOUT_MS: 60000,
   MODEL_FAILURE_COOLDOWN_MS: 60000,
   KEY_CONCURRENCY_DELAY_MS: 5000,
+  ENABLE_CONTENT_VALIDATION: true,
   PRICE_PER_MILLION_PROMPT_TOKENS: 0.30,
   PRICE_PER_MILLION_COMPLETION_TOKENS: 0.60,
   REF_PRICE_PER_MILLION_PROMPT_TOKENS: 5.00,
@@ -165,6 +166,27 @@ export default function SettingsModal({
                 onChange={(e) => setTempSettings({ ...tempSettings, KEY_CONCURRENCY_DELAY_MS: Number(e.target.value) })}
               />
             </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0' }}>
+            <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.enableContentValidation')}</label>
+            <button
+              type="button"
+              onClick={() => setTempSettings({ ...tempSettings, ENABLE_CONTENT_VALIDATION: !tempSettings.ENABLE_CONTENT_VALIDATION })}
+              style={{
+                padding: '6px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: '600',
+                background: tempSettings.ENABLE_CONTENT_VALIDATION ? 'var(--status-active)' : 'var(--status-inactive)',
+                color: '#fff',
+                transition: 'background 150ms ease'
+              }}
+            >
+              {tempSettings.ENABLE_CONTENT_VALIDATION ? 'ON' : 'OFF'}
+            </button>
           </div>
 
           <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontWeight: '700', color: 'var(--accent-color)', fontSize: '15px' }}>

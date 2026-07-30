@@ -35,7 +35,8 @@
     "saved": "Settings saved!",
     "portNotice": "Port changes require app restart.",
     "settingsButton": "Settings",
-    "resetConfirm": "Reset all parameters to default values?"
+    "resetConfirm": "Reset all parameters to default values?",
+    "enableContentValidation": "Enable Content Validation"
   },
   "keys": {
     "title": "NVIDIA NIM API Keys Pool",
@@ -220,6 +221,7 @@
     "skillBazi": "Bazi Grandmaster",
     "skillZiwei": "Ziwei Doushu Grandmaster",
     "skillTarot": "Tarot Grandmaster",
-    "clearSkills": "Clear Skills"
+    "clearSkills": "Clear Skills",
+    "thinkLabel": "Think Process"
   }
 }

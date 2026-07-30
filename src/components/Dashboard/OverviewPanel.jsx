@@ -19,7 +19,7 @@ export default function OverviewPanel({
   const gatewayUrl = getGatewayUrl();
 
   return (
-    <>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', minHeight: 0 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
         <div
           className="glass-panel"
@@ -189,6 +189,6 @@ export default function OverviewPanel({
         hoveredHourlyIndex={hoveredHourlyIndex}
         setHoveredHourlyIndex={setHoveredHourlyIndex}
       />
-    </>
+    </div>
   );
 }

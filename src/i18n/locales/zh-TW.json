@@ -35,7 +35,8 @@
     "saved": "系統設定已儲存！",
     "portNotice": "提示：變更連接埠需要重啟應用程式才會生效。",
     "settingsButton": "系統設定",
-    "resetConfirm": "確定要重設所有參數為預設值嗎？"
+    "resetConfirm": "確定要重設所有參數為預設值嗎？",
+    "enableContentValidation": "啟用回傳內容校驗"
   },
   "keys": {
     "title": "NVIDIA NIM API Keys 管理池",
@@ -220,6 +221,7 @@
     "skillBazi": "八字 Grandmaster",
     "skillZiwei": "紫微斗數 Grandmaster",
     "skillTarot": "塔羅 Grandmaster",
-    "clearSkills": "清除已選技能"
+    "clearSkills": "清除已選技能",
+    "thinkLabel": "思考過程"
   }
 }
