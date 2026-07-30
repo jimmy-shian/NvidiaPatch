@@ -120,6 +120,11 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
 
     if (response.ok) {
       apiKeys.recordSuccess(key.id);
+      const passthroughEligible = activeConfig.ENABLE_CONTENT_VALIDATION === false;
+      if (passthroughEligible && context.stream) {
+        addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到 NVIDIA HTTP 200，校驗已關閉，改採即時透傳以降低延遲。`);
+        return { success: true, response, retryScope: 'none', passthrough: true };
+      }
       addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到 NVIDIA HTTP 200，開始校驗回傳內容。`);
       return { success: true, response, retryScope: 'none' };
     }

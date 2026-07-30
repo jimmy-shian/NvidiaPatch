@@ -115,6 +115,20 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
 
     const fullContent = fullContentRef.value;
 
+    if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
+      if (!streamUsage) {
+        const promptText = JSON.stringify(originalBody.messages || '');
+        const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+        const estimatedCompletion = Math.max(1, Math.round(fullContent.length / 3.2));
+        streamUsage = {
+          prompt_tokens: estimatedPrompt,
+          completion_tokens: estimatedCompletion,
+          total_tokens: estimatedPrompt + estimatedCompletion
+        };
+      }
+      return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
+    }
+
     if (fullContent === null || fullContent === undefined || fullContent === '') {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
@@ -172,12 +186,27 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
 }
 
 async function validateJsonResponse({ context, model, selectedKey, result }) {
-  const { requestId, originalBody } = context;
+  const { requestId, originalBody, activeConfig } = context;
   const modelId = model.model_id;
 
   try {
     const json = await result.response.json();
     const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
+
+    if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
+      let usage = json?.usage;
+      if (!usage) {
+        const promptText = JSON.stringify(originalBody.messages || '');
+        const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+        const estimatedCompletion = Math.max(1, Math.round(contentToCheck.length / 3.2));
+        usage = {
+          prompt_tokens: estimatedPrompt,
+          completion_tokens: estimatedCompletion,
+          total_tokens: estimatedPrompt + estimatedCompletion
+        };
+      }
+      return { success: true, response: result.response, jsonData: json, usage };
+    }
 
     if (contentToCheck === '') {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
@@ -229,8 +258,121 @@ async function validateSuccessfulResponse({ context, model, selectedKey, result,
   return validateJsonResponse({ context, model, selectedKey, result });
 }
 
+/**
+ * 即時透傳上游串流：邊讀邊直接寫到 res，不累積 fullContent。
+ *
+ * 只在 ENABLE_CONTENT_VALIDATION === false 且客戶端 stream=true 時呼叫。
+ *
+ * - 逐 chunk 從上游 reader 讀出，立即 pipe 給 responseWriter。
+ * - 解析每個 data chunk，嘗試抓 usage；累計 content 字數供 fallback 估算。
+ * - 客戶端中斷 / 讀取逾時 / 其他錯誤統一回傳失敗物件，由 dispatch 處理。
+ *
+ * 此函式本身不會對 res 做任何寫入或 end()，僅把 chunks 與 metadata
+ * 交給 responseWriter.sendPassthroughResponse。
+ */
+async function passthroughStreamResponse({ context, model, selectedKey, result }) {
+  const { requestId, originalBody, activeConfig, isClientGone } = context;
+  const modelId = model.model_id;
+  const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
+
+  const reader = result.response.body.getReader();
+  const decoder = new TextDecoder();
+  let streamBuffer = '';
+  let upstreamUsage = null;
+  let contentLength = 0;
+  let lastChunkBytes = null;
+  let rawLines = [];
+
+  try {
+    while (true) {
+      if (isClientGone()) {
+        throw new Error('客戶端已中斷連線');
+      }
+      const { done, value } = await readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS);
+      if (done) break;
+
+      lastChunkBytes = value;
+      rawLines.push(value);
+
+      const text = decoder.decode(value, { stream: true });
+      streamBuffer += text;
+
+      let newlineIdx;
+      while ((newlineIdx = streamBuffer.indexOf('\n')) !== -1) {
+        const rawLine = streamBuffer.slice(0, newlineIdx);
+        streamBuffer = streamBuffer.slice(newlineIdx + 1);
+
+        const cleanLine = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+        const trimmed = cleanLine.trim();
+        if (!trimmed.startsWith('data:') || trimmed.includes('[DONE]')) continue;
+
+        try {
+          const chunk = JSON.parse(trimmed.slice(5).trim());
+          if (chunk?.usage) upstreamUsage = chunk.usage;
+
+          const c = chunk?.choices?.[0]?.delta?.content
+            || chunk?.choices?.[0]?.message?.content
+            || chunk?.choices?.[0]?.text
+            || chunk?.choices?.[0]?.content
+            || '';
+          if (typeof c === 'string') contentLength += c.length;
+        } catch (e) {
+          // 解析失敗不影響透傳
+        }
+      }
+    }
+
+    let usage = upstreamUsage;
+    if (!usage) {
+      const promptText = JSON.stringify(originalBody.messages || '');
+      const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
+      const estimatedCompletion = Math.max(1, Math.round(contentLength / 3.2));
+      usage = {
+        prompt_tokens: estimatedPrompt,
+        completion_tokens: estimatedCompletion,
+        total_tokens: estimatedPrompt + estimatedCompletion
+      };
+    }
+
+    return {
+      success: true,
+      response: result.response,
+      streamContent: '',
+      rawChunks: rawLines,
+      lastChunkBytes,
+      usage
+    };
+  } catch (err) {
+    try {
+      reader.cancel().catch(() => {});
+    } catch (cancelErr) {
+      // ignore
+    }
+
+    const isClientDisconnect = err.message.includes('客戶端已中斷連線');
+    const isTimeout = err.message.includes('逾時') || err.message.toLowerCase().includes('timeout');
+    if (isClientDisconnect) {
+      apiKeys.recordFailure(selectedKey.id, `客戶端中斷連線：${err.message}`);
+      stats.recordRequest(false);
+      return { success: false, clientGone: true, errorText: err.message };
+    }
+    if (isTimeout) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」透傳串流讀取發生逾時（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `透傳串流讀取逾時：${err.message}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: err.message };
+    }
+
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」透傳串流讀取失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
+    apiKeys.recordFailure(selectedKey.id, `透傳串流讀取錯誤：${err.message}`);
+    stats.recordRequest(false);
+    return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
+  }
+}
+
 module.exports = {
   validateSuccessfulResponse,
+  passthroughStreamResponse,
   readStreamChunkWithTimeout,
   consumeSseLine
 };

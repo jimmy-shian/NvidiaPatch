@@ -13,6 +13,7 @@ const settings = {
     const testTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'TEST_TIMEOUT_MS'").get();
     const modelFailureCooldown = db.prepare("SELECT value FROM metadata WHERE key = 'MODEL_FAILURE_COOLDOWN_MS'").get();
     const keyConcurrencyDelay = db.prepare("SELECT value FROM metadata WHERE key = 'KEY_CONCURRENCY_DELAY_MS'").get();
+    const enableContentValidation = db.prepare("SELECT value FROM metadata WHERE key = 'ENABLE_CONTENT_VALIDATION'").get();
     return {
       ROUND_DELAY_MS: Number(roundDelay?.value || 15000),
       REQUEST_TIMEOUT_MS: Number(reqTimeout?.value || 120000),
@@ -24,6 +25,7 @@ const settings = {
       TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000),
       MODEL_FAILURE_COOLDOWN_MS: Number(modelFailureCooldown?.value || 60000),
       KEY_CONCURRENCY_DELAY_MS: Number(keyConcurrencyDelay?.value || 5000),
+      ENABLE_CONTENT_VALIDATION: enableContentValidation?.value !== 'false',
       PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 0.30),
       PRICE_PER_MILLION_COMPLETION_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_COMPLETION_TOKENS'").get()?.value || 0.60),
       REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'REF_PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 5.00),
@@ -62,6 +64,9 @@ const settings = {
     }
     if (config.KEY_CONCURRENCY_DELAY_MS !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('KEY_CONCURRENCY_DELAY_MS', ?)").run(String(config.KEY_CONCURRENCY_DELAY_MS));
+    }
+    if (config.ENABLE_CONTENT_VALIDATION !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('ENABLE_CONTENT_VALIDATION', ?)").run(String(config.ENABLE_CONTENT_VALIDATION));
     }
     if (config.PRICE_PER_MILLION_PROMPT_TOKENS !== undefined) {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_PROMPT_TOKENS', ?)").run(String(config.PRICE_PER_MILLION_PROMPT_TOKENS));

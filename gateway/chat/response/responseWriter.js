@@ -115,6 +115,10 @@ async function sendValidatedResponse({ context, result, currentModel }) {
     throw new Error('客戶端已中斷連線，略過回傳。');
   }
 
+  if (result.passthrough && stream) {
+    return sendPassthroughResponse({ context, result, currentModel });
+  }
+
   if (stream) {
     const ssePayload = buildSafeSsePayload({
       requestId,
@@ -183,8 +187,56 @@ async function sendValidatedResponse({ context, result, currentModel }) {
   }
 }
 
+/**
+ * 即時透傳上游串流回客戶端（僅在 ENABLE_CONTENT_VALIDATION === false 時使用）。
+ *
+ * 流程：
+ *  - 寫 SSE header 與 `==\n\n` 起始標記（與原串流格式對齊）
+ *  - 逐 chunk 將原始位元組寫到 res，不重新組裝
+ *  - end() 後計算耗時、寫 token usage、廣播 SSE
+ *  - 客戶端中斷 / 寫入失敗拋出，由 dispatchRequest 處理
+ */
+async function sendPassthroughResponse({ context, result, currentModel }) {
+  const { requestId, requestStartedAt, originalBody, res, fakeStreamController } = context;
+  const modelId = currentModel.model_id;
+  const clientModelId = originalBody.model || 'patcher-main';
+
+  if (!res.headersSent) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+  }
+
+  await waitForResponseFinish(res, () => {
+    res.write('==\n\n');
+    const rawChunks = Array.isArray(result.rawChunks) ? result.rawChunks : [];
+    for (const chunk of rawChunks) {
+      if (chunk && chunk.length) res.write(Buffer.from(chunk));
+    }
+    res.end();
+    if (fakeStreamController) fakeStreamController.stop();
+  });
+
+  stats.recordRequest(true);
+  const durationMs = Date.now() - requestStartedAt;
+
+  try {
+    const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, originalBody.messages, '');
+    eventManager.broadcast('token-usage', { action: 'add', modelId, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });
+    addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）以即時透傳完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
+  } catch (tokenErr) {
+    console.error('Failed to record token usage:', tokenErr);
+    addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）以即時透傳完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。`);
+  }
+}
+
 module.exports = {
   waitForResponseFinish,
   sendValidatedResponse,
+  sendPassthroughResponse,
   sendStreamError
 };

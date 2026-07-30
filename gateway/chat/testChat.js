@@ -18,6 +18,7 @@ const NVIDIA_BASE_URL = process.env.NVIDIA_API_URL || 'https://integrate.api.nvi
 
 async function handleTestChat(req, res) {
   const { model, messages, stream, response_format } = req.body;
+  const enableContentValidation = settings.get().ENABLE_CONTENT_VALIDATION;
 
   if (!model || !messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Model and messages array are required' });
@@ -99,31 +100,48 @@ async function handleTestChat(req, res) {
           let fullContent = '';
           const contentBuffer = [];
           let validationFailed = false;
+          const noValidation = !enableContentValidation;
+
+          if (noValidation) {
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+          }
 
           function readTestChunk() {
             return reader.read().then(({ done, value }) => {
               if (done) {
-                if (!fullContent || !fullContent.trim()) {
-                  validationFailed = true;
-                  addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
-                  throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+                if (!noValidation) {
+                  if (!fullContent || !fullContent.trim()) {
+                    validationFailed = true;
+                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
+                    throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+                  }
+                  const validation = smartValidate(fullContent, { maxLength: 10000 });
+                  if (!validation.valid) {
+                    validationFailed = true;
+                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${formatValidationIssue(validation)}。`);
+                    throw new ContentValidationError(fullContent);
+                  }
+                  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+                  res.setHeader('Cache-Control', 'no-cache');
+                  res.setHeader('Connection', 'keep-alive');
+                  for (const chunk of contentBuffer) {
+                    res.write(chunk);
+                  }
+                  res.end();
+                } else {
+                  res.end();
                 }
-                const validation = smartValidate(fullContent, { maxLength: 10000 });
-                if (!validation.valid) {
-                  validationFailed = true;
-                  addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${formatValidationIssue(validation)}。`);
-                  throw new ContentValidationError(fullContent);
-                }
-                res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-                res.setHeader('Cache-Control', 'no-cache');
-                res.setHeader('Connection', 'keep-alive');
-                for (const chunk of contentBuffer) {
-                  res.write(chunk);
-                }
-                res.end();
                 return;
               }
-              const text = new TextDecoder().decode(value);
+
+              if (noValidation) {
+                res.write(value);
+                return readTestChunk();
+              }
+
+              const text = new TextDecoder().decode(value, { stream: true });
               const lines = text.split('\n');
               for (const line of lines) {
                 const trimmed = line.trim();
@@ -173,28 +191,30 @@ async function handleTestChat(req, res) {
           }
           res.end();
         }
-      } else {
-        const json = await response.json();
-        // 非串流：清理假串流字元後再校驗與回傳。
-        const stripFake = (c) => {
-          if (typeof c === 'string') return c.replace(/\uE000+/g, '');
-          return c;
-        };
-        const target = json?.choices?.[0]?.message;
-        if (target) {
-          if (typeof target.content === 'string') target.content = stripFake(target.content);
-          if (typeof target.reasoning_content === 'string') target.reasoning_content = stripFake(target.reasoning_content);
-        }
-        let contentToCheck = target?.content || target?.reasoning_content || '';
+       } else {
+         const json = await response.json();
+         // 非串流：清理假串流字元後再校驗與回傳。
+         const stripFake = (c) => {
+           if (typeof c === 'string') return c.replace(/\uE000+/g, '');
+           return c;
+         };
+         const target = json?.choices?.[0]?.message;
+         if (target) {
+           if (typeof target.content === 'string') target.content = stripFake(target.content);
+           if (typeof target.reasoning_content === 'string') target.reasoning_content = stripFake(target.reasoning_content);
+         }
+         let contentToCheck = target?.content || target?.reasoning_content || '';
 
-        const validation = smartValidate(contentToCheck, { maxLength: 10000 });
-        if (!validation.valid) {
-          const validationIssue = formatValidationIssue(validation);
-          addLog('error', `[模型測試｜內容校驗] 非串流回應被拒收：偵測到不合法或未閉合標籤：${validationIssue}，改用下一把 Key 重新生成。`);
-          return attemptTestChat(keyIndex + 1);
-        }
+         if (enableContentValidation) {
+           const validation = smartValidate(contentToCheck, { maxLength: 10000 });
+           if (!validation.valid) {
+             const validationIssue = formatValidationIssue(validation);
+             addLog('error', `[模型測試｜內容校驗] 非串流回應被拒收：偵測到不合法或未閉合標籤：${validationIssue}，改用下一把 Key 重新生成。`);
+             return attemptTestChat(keyIndex + 1);
+           }
+         }
 
-        res.json(json);
+         res.json(json);
       }
     } catch (err) {
       clearTimeout(timeoutId);
