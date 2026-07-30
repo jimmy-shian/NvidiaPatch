@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import packageJson from '../package.json';
 import useGatewayApi from './hooks/useGatewayApi';
@@ -353,7 +353,7 @@ export default function App() {
     if (!chatInput.trim() || !selectedTestModel || isChatting) return;
 
     const userMsg = { role: 'user', content: chatInput.trim() };
-    const assistantMsg = { role: 'assistant', content: '' };
+    const assistantMsg = { role: 'assistant', content: '', thinkingContent: '' };
 
     setChatHistory(prev => [...prev, userMsg, assistantMsg]);
     const skillSystemMessage = buildSkillSystemMessage(selectedSkillIds);
@@ -408,13 +408,25 @@ export default function App() {
             if (dataStr === '[DONE]') continue;
             try {
               const chunk = JSON.parse(dataStr);
-              if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
-                const deltaText = chunk.choices[0].delta.content;
-                setChatHistory(prev => {
-                  const updated = [...prev];
-                  updated[updated.length - 1].content += deltaText;
-                  return updated;
-                });
+              if (chunk.choices && chunk.choices[0].delta) {
+                const delta = chunk.choices[0].delta;
+                if (delta.reasoning_content) {
+                  setChatHistory(prev => {
+                    const updated = [...prev];
+                    const lastMsg = updated[updated.length - 1];
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                      lastMsg.thinkingContent += delta.reasoning_content;
+                    }
+                    return updated;
+                  });
+                }
+                if (delta.content) {
+                  setChatHistory(prev => {
+                    const updated = [...prev];
+                    updated[updated.length - 1].content += delta.content;
+                    return updated;
+                  });
+                }
               }
             } catch (err) {
               // ignore parse errors
@@ -527,6 +539,18 @@ export default function App() {
       };
     });
   }, [models]);
+
+  const playgroundModels = useMemo(() => {
+    const order = models.map(m => m.model_id);
+    return [...availableModels].sort((a, b) => {
+      const aIdx = order.indexOf(a.id);
+      const bIdx = order.indexOf(b.id);
+      if (aIdx === -1 && bIdx === -1) return 0;
+      if (aIdx === -1) return 1;
+      if (bIdx === -1) return -1;
+      return aIdx - bIdx;
+    });
+  }, [availableModels, models]);
 
   const handleSwitchModelGroup = async (groupId) => {
     if (groupId === activeModelGroup) return;
@@ -878,7 +902,7 @@ export default function App() {
 
         {activeTab === 'playground' && (
           <PlaygroundPanel
-            availableModels={availableModels}
+            availableModels={playgroundModels}
             selectedTestModel={selectedTestModel}
             setSelectedTestModel={setSelectedTestModel}
             chatHistory={chatHistory}

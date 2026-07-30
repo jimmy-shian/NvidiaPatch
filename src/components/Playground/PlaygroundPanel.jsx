@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Cpu, RefreshCw } from 'lucide-react';
+import { Cpu, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import ErrorBoundary from '../shared/ErrorBoundary';
 import MarkdownContent from '../shared/MarkdownContent';
 import { DIVINATION_SKILLS } from './divinationSkills';
@@ -22,6 +22,16 @@ export default function PlaygroundPanel({
   const { t } = useTranslation();
   const chatEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const [expandedThinkIds, setExpandedThinkIds] = useState(new Set());
+
+  const toggleThink = (index) => {
+    setExpandedThinkIds(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -212,11 +222,63 @@ export default function PlaygroundPanel({
                           {msg.content}
                         </div>
                       ) : (
-                        <div className="markdown-body" style={{ fontSize: '14px', lineHeight: '1.6' }}>
-                          <MarkdownContent>{msg.content}</MarkdownContent>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {msg.thinkingContent ? (
+                            <div style={{
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '8px',
+                              background: 'var(--bg-secondary)',
+                              overflow: 'hidden'
+                            }}>
+                              <button
+                                onClick={() => toggleThink(index)}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  padding: '6px 10px',
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  fontSize: '12px',
+                                  fontWeight: '700',
+                                  color: 'var(--text-muted)',
+                                  width: '100%',
+                                  textAlign: 'left'
+                                }}
+                              >
+                                {expandedThinkIds.has(index)
+                                  ? <ChevronDown size={12} />
+                                  : <ChevronRight size={12} />
+                                }
+                                <span>🧠 {t('playground.thinkLabel')}</span>
+                                {isChatting && index === chatHistory.length - 1 && (
+                                  <RefreshCw size={10} className="animate-spin" style={{ marginLeft: 'auto' }} />
+                                )}
+                              </button>
+                              {expandedThinkIds.has(index) && (
+                                <div style={{
+                                  padding: '0 10px 10px 10px',
+                                  fontSize: '13px',
+                                  lineHeight: '1.6',
+                                  color: 'var(--text-secondary)',
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word'
+                                }}>
+                                  <MarkdownContent>{msg.thinkingContent}</MarkdownContent>
+                                </div>
+                              )}
+                            </div>
+                          ) : isChatting && !msg.content && index === chatHistory.length - 1 ? (
+                            <div style={{ fontSize: '13px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                              Thinking...
+                            </div>
+                          ) : null}
+                          <div className="markdown-body" style={{ fontSize: '14px', lineHeight: '1.6' }}>
+                            <MarkdownContent>{msg.content}</MarkdownContent>
+                          </div>
                         </div>
                       )}
-                      {isChatting && !msg.content && index === chatHistory.length - 1 && 'Thinking...'}
                     </div>
                   </div>
                 );
