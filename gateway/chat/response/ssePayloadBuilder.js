@@ -38,8 +38,8 @@ function buildSafeSsePayload({ requestId, sseLines, clientModelId = 'patcher-mai
 
       // 建構後再檢查：剔除僅含假串流字元的 chunk，避免下游污染。
       const contentField =
-        (chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) ||
-        (chunk.choices[0] && chunk.choices[0].message && chunk.choices[0].message.content) ||
+        (chunk.choices[0] && chunk.choices[0].delta && (chunk.choices[0].delta.content || chunk.choices[0].delta.reasoning_content)) ||
+        (chunk.choices[0] && chunk.choices[0].message && (chunk.choices[0].message.content || chunk.choices[0].message.reasoning_content)) ||
         (chunk.choices[0] && chunk.choices[0].text) ||
         (chunk.choices[0] && chunk.choices[0].content) ||
         '';

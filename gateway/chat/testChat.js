@@ -98,14 +98,34 @@ async function handleTestChat(req, res) {
         if (stream) {
           const reader = response.body.getReader();
           let fullContent = '';
-          const contentBuffer = [];
-          let validationFailed = false;
           const noValidation = !enableContentValidation;
 
-          if (noValidation) {
-            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
+          function writeStreamError(message, detail) {
+            try {
+              if (!res.headersSent) {
+                res.writeHead(200, {
+                  'Content-Type': 'text/event-stream; charset=utf-8',
+                  'Cache-Control': 'no-cache, no-transform',
+                  'Connection': 'keep-alive',
+                  'X-Accel-Buffering': 'no'
+                });
+              }
+              res.write(`data: ${JSON.stringify({
+                id: `chatcmpl-test-${Date.now()}-error`,
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model,
+                choices: [{
+                  index: 0,
+                  delta: { content: `\n\n[Gateway Error] ${message || ''}${detail ? ` (${detail})` : ''}` },
+                  finish_reason: 'stop'
+                }]
+              })}\n\n`);
+              res.write('data: [DONE]\n\n');
+              res.end();
+            } catch (e) {
+              // ignore
+            }
           }
 
           function readTestChunk() {
@@ -113,27 +133,36 @@ async function handleTestChat(req, res) {
               if (done) {
                 if (!noValidation) {
                   if (!fullContent || !fullContent.trim()) {
-                    validationFailed = true;
                     addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
-                    throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+                    if (!res.headersSent) {
+                      throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+                    }
+                    writeStreamError('模型回傳空內容');
+                    return;
                   }
                   const validation = smartValidate(fullContent, { maxLength: 10000 });
                   if (!validation.valid) {
-                    validationFailed = true;
-                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${formatValidationIssue(validation)}。`);
-                    throw new ContentValidationError(fullContent);
+                    const issue = formatValidationIssue(validation);
+                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${issue}。`);
+                    if (!res.headersSent) {
+                      throw new ContentValidationError(fullContent);
+                    }
+                    writeStreamError('內容校驗失敗', issue);
+                    return;
                   }
-                  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-                  res.setHeader('Cache-Control', 'no-cache');
-                  res.setHeader('Connection', 'keep-alive');
-                  for (const chunk of contentBuffer) {
-                    res.write(chunk);
-                  }
-                  res.end();
-                } else {
-                  res.end();
                 }
+                res.write('data: [DONE]\n\n');
+                res.end();
                 return;
+              }
+
+              if (!res.headersSent) {
+                res.writeHead(200, {
+                  'Content-Type': 'text/event-stream; charset=utf-8',
+                  'Cache-Control': 'no-cache, no-transform',
+                  'Connection': 'keep-alive',
+                  'X-Accel-Buffering': 'no'
+                });
               }
 
               if (noValidation) {
@@ -167,7 +196,7 @@ async function handleTestChat(req, res) {
                   }
                 }
               }
-              contentBuffer.push(value);
+              res.write(value);
               return readTestChunk();
             });
           }
@@ -189,7 +218,7 @@ async function handleTestChat(req, res) {
               }
             });
           }
-          res.end();
+          try { res.end(); } catch (e) { /* ignore */ }
         }
        } else {
          const json = await response.json();

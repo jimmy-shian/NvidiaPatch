@@ -54,7 +54,9 @@ function consumeSseLine(rawLine, sseLines, fullContentRef) {
 
     // 過濾僅含假串流字元 \uE000 的 chunk，避免汙染校驗用的 fullContent。
     const fakeCandidate = chunk?.choices?.[0]?.delta?.content
+      || chunk?.choices?.[0]?.delta?.reasoning_content
       || chunk?.choices?.[0]?.message?.content
+      || chunk?.choices?.[0]?.message?.reasoning_content
       || chunk?.choices?.[0]?.text
       || chunk?.choices?.[0]?.content;
     if (typeof fakeCandidate === 'string' && isFakeStreamContent(fakeCandidate)) {
@@ -311,7 +313,9 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
           if (chunk?.usage) upstreamUsage = chunk.usage;
 
           const c = chunk?.choices?.[0]?.delta?.content
+            || chunk?.choices?.[0]?.delta?.reasoning_content
             || chunk?.choices?.[0]?.message?.content
+            || chunk?.choices?.[0]?.message?.reasoning_content
             || chunk?.choices?.[0]?.text
             || chunk?.choices?.[0]?.content
             || '';
