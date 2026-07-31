@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import packageJson from '../package.json';
 import useGatewayApi from './hooks/useGatewayApi';
 import useRealtimeEvents from './hooks/useRealtimeEvents';
 import useNotifications from './hooks/useNotifications';
-import ErrorBoundary from './components/shared/ErrorBoundary';
+import usePlaygroundChat from './hooks/usePlaygroundChat';
 import ConfirmationModal from './components/shared/ConfirmationModal';
 import RulesPanel from './components/Rules/RulesPanel';
 import Sidebar from './components/shared/Sidebar';
@@ -15,10 +14,9 @@ import TokensPanel from './components/Dashboard/TokensPanel';
 import KeysPanel from './components/Keys/KeysPanel';
 import ModelsPanel from './components/Models/ModelsPanel';
 import PlaygroundPanel from './components/Playground/PlaygroundPanel';
-import { buildSkillSystemMessage } from './components/Playground/divinationSkills';
 
 export default function App() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   const getGatewayUrl = () => {
     if (window.electronAPI && window.electronAPI.getGatewayPort) {
@@ -33,9 +31,7 @@ export default function App() {
   };
   const GATEWAY_URL = getGatewayUrl();
 
-  const [adminToken, setAdminToken] = useState('bypass');
-  const [loginInput, setLoginInput] = useState('');
-  const [authError, setAuthError] = useState('');
+  const [adminToken] = useState('bypass');
 
   const api = useGatewayApi(GATEWAY_URL, adminToken);
 
@@ -92,11 +88,18 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
 
-  const [selectedTestModel, setSelectedTestModel] = useState('');
-  const [chatHistory, setChatHistory] = useState([]);
-  const [chatInput, setChatInput] = useState('');
-  const [isChatting, setIsChatting] = useState(false);
-  const [selectedSkillIds, setSelectedSkillIds] = useState([]);
+  const {
+    selectedTestModel,
+    setSelectedTestModel,
+    chatHistory,
+    setChatHistory,
+    chatInput,
+    setChatInput,
+    isChatting,
+    selectedSkillIds,
+    setSelectedSkillIds,
+    handleSendTestMessage
+  } = usePlaygroundChat(GATEWAY_URL, adminToken);
 
   const [dashboardSubTab, setDashboardSubTab] = useState('overview');
   const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
@@ -144,7 +147,7 @@ export default function App() {
     });
   }, []);
 
-  const { notifyAllKeysDown, notifyAllModelsDegraded } = useNotifications();
+  const { notifyAllKeysDown } = useNotifications();
 
   useEffect(() => {
     document.documentElement.className = theme;
@@ -194,29 +197,7 @@ export default function App() {
 
     fetchDataPromiseRef.current = runFetch();
     return fetchDataPromiseRef.current;
-  }, [api]);
-
-  const handleLogin = useCallback(async (e) => {
-    e.preventDefault();
-    if (!loginInput.trim()) return;
-    setAuthError('');
-    try {
-      const ok = await api.login(loginInput.trim());
-      if (ok) {
-        localStorage.setItem('gateway_admin_token', loginInput.trim());
-        setAdminToken(loginInput.trim());
-        setLoginInput('');
-      } else {
-        setAuthError(t('auth.invalidToken'));
-      }
-    } catch (err) {
-      if (err.message === 'AUTH_REQUIRED' || err.message?.includes('401')) {
-        setAuthError(t('auth.invalidToken'));
-      } else {
-        setAuthError(t('auth.connectionFailed'));
-      }
-    }
-  }, [loginInput, api, t]);
+  }, [api, setSelectedTestModel]);
 
   useEffect(() => {
     if (adminToken) {
@@ -237,7 +218,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const handleSyncModelsSilently = async () => {
+  const handleSyncModelsSilently = useCallback(async () => {
     setIsSyncingModels(true);
     try {
       const data = await api.syncModels();
@@ -247,13 +228,13 @@ export default function App() {
     } finally {
       setIsSyncingModels(false);
     }
-  };
+  }, [api, fetchData]);
 
   useEffect(() => {
     if (activeTab === 'models' && availableModels.length === 0 && !isSyncingModels) {
       handleSyncModelsSilently();
     }
-  }, [activeTab, availableModels.length]);
+  }, [activeTab, availableModels.length, isSyncingModels, handleSyncModelsSilently]);
 
   const checkGatewayHealth = useCallback(async () => {
     try {
@@ -340,109 +321,12 @@ export default function App() {
     }, type === 'error' ? 10000 : 7000);
   };
 
-  const formatModelSyncSummary = ({ parsedCount, savedCount, expectedCount, source }) => {
+  const formatModelSyncSummary = ({ parsedCount, savedCount, expectedCount }) => {
     const parts = [];
     if (Number.isFinite(Number(parsedCount))) parts.push(`${t('models.parsed')}: ${Number(parsedCount)}`);
     if (Number.isFinite(Number(savedCount))) parts.push(`${t('models.saved')}: ${Number(savedCount)}`);
     if (Number.isFinite(Number(expectedCount))) parts.push(`${t('models.expected')}: ${Number(expectedCount)}`);
     return parts.join(' | ') || t('models.syncComplete');
-  };
-
-  const handleSendTestMessage = async (e) => {
-    if (e) e.preventDefault();
-    if (!chatInput.trim() || !selectedTestModel || isChatting) return;
-
-    const userMsg = { role: 'user', content: chatInput.trim() };
-    const assistantMsg = { role: 'assistant', content: '', thinkingContent: '' };
-
-    setChatHistory(prev => [...prev, userMsg, assistantMsg]);
-    const skillSystemMessage = buildSkillSystemMessage(selectedSkillIds);
-    const baseMessages = skillSystemMessage
-      ? [{ role: 'system', content: skillSystemMessage }, ...chatHistory, userMsg]
-      : [...chatHistory, userMsg];
-    const targetMessages = baseMessages;
-    setChatInput('');
-    setIsChatting(true);
-
-    try {
-      const res = await fetch(GATEWAY_URL + '/api/test/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(adminToken ? { 'Authorization': `Bearer ${adminToken}` } : {})
-        },
-        body: JSON.stringify({
-          model: selectedTestModel,
-          messages: targetMessages,
-          stream: true
-        })
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        setChatHistory(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1].content = `Error (HTTP ${res.status}): ${text || 'Unable to test model'}`;
-          return updated;
-        });
-        setIsChatting(false);
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('data:')) {
-            const dataStr = trimmed.slice(5).trim();
-            if (dataStr === '[DONE]') continue;
-            try {
-              const chunk = JSON.parse(dataStr);
-              if (chunk.choices && chunk.choices[0].delta) {
-                const delta = chunk.choices[0].delta;
-                if (delta.reasoning_content) {
-                  setChatHistory(prev => {
-                    const updated = [...prev];
-                    const lastMsg = updated[updated.length - 1];
-                    if (lastMsg && lastMsg.role === 'assistant') {
-                      lastMsg.thinkingContent += delta.reasoning_content;
-                    }
-                    return updated;
-                  });
-                }
-                if (delta.content) {
-                  setChatHistory(prev => {
-                    const updated = [...prev];
-                    updated[updated.length - 1].content += delta.content;
-                    return updated;
-                  });
-                }
-              }
-            } catch (err) {
-              // ignore parse errors
-            }
-          }
-        }
-      }
-    } catch (err) {
-      setChatHistory(prev => {
-        const updated = [...prev];
-        updated[updated.length - 1].content = `Connection error: ${err.message}`;
-        return updated;
-      });
-    } finally {
-      setIsChatting(false);
-    }
   };
 
   const handleAddKey = async (e) => {
