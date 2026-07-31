@@ -810,6 +810,8 @@ export default function App() {
             onAddRule={handleAddRule}
             onDeleteRule={handleDeleteRule}
             onUpdateRule={handleUpdateRule}
+            onCopy={copyToClipboard}
+            copiedId={copiedId}
           />
         )}
       </div>
