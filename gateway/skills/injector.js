@@ -19,11 +19,12 @@
  *   - source?  : 出處 URL（選填，僅用於 log）
  */
 
-const path = require('path');
 const iHaveAdhdZhTw = require('./i-have-adhd-zh-tw');
+const fanOutSubtasks = require('./fan-out-subtasks');
 
 const DEFAULT_SKILLS = [
-  iHaveAdhdZhTw
+  iHaveAdhdZhTw,
+  fanOutSubtasks
 ];
 
 const SYSTEM_ROLE = 'system';
