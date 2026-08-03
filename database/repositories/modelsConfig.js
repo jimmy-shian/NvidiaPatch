@@ -1,5 +1,6 @@
 const { getDb } = require('../connection');
 const { getTaiwanISOString } = require('../../utils/date');
+const { fetchNvidiaIntegrateModelsCatalog } = require('../crawler/nvidiaIntegrateCrawler');
 const { fetchNvidiaBuildFreeEndpointCatalog } = require('../crawler/nvidiaBuildCrawler');
 const { fetchNvidiaFeaturedModelsCatalog } = require('../crawler/nvidiaFeaturedCrawler');
 
@@ -101,55 +102,67 @@ const modelsConfig = {
     const db = getDb();
     try {
       let catalog;
+      let lastErr = null;
+
       try {
         catalog = await fetchNvidiaBuildFreeEndpointCatalog();
-      } catch (buildErr) {
-        let fallbackError = buildErr;
+      } catch (err) {
+        lastErr = err;
+      }
+
+      if (!catalog) {
+        try {
+          catalog = await fetchNvidiaIntegrateModelsCatalog();
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      if (!catalog) {
         try {
           catalog = await fetchNvidiaFeaturedModelsCatalog();
-        } catch (featuredErr) {
-          fallbackError = featuredErr;
+        } catch (err) {
+          lastErr = err;
         }
+      }
 
-        if (!catalog && keyValue) {
+      if (!catalog && keyValue) {
+        try {
           const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${keyValue}`
             }
           });
-          if (!res.ok) {
-            const errorText = await res.text().catch(() => '');
-            throw new Error(`NVIDIA Build catalog failed (${buildErr.message}); fallback /v1/models replied with HTTP ${res.status}${errorText ? `: ${errorText.substring(0, 200)}` : ''}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.data) && data.data.length > 0) {
+              const seen = new Set();
+              catalog = {
+                models: data.data
+                  .map((m) => {
+                    const modelId = typeof m.id === 'string' ? m.id.trim() : '';
+                    if (!modelId || seen.has(modelId)) return null;
+                    seen.add(modelId);
+                    return {
+                      id: modelId,
+                      name: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : modelId.split('/').pop(),
+                      created: Number.isFinite(Number(m.created)) ? Number(m.created) : 0
+                    };
+                  })
+                  .filter(Boolean),
+                expectedCount: data.data.length,
+                source: 'https://integrate.api.nvidia.com/v1/models'
+              };
+            }
           }
-          const data = await res.json();
-          if (!data || !Array.isArray(data.data)) {
-            throw new Error(`NVIDIA Build catalog failed (${buildErr.message}); fallback /v1/models returned invalid data.`);
-          }
-          const seen = new Set();
-          catalog = {
-            models: data.data
-              .map((m) => {
-                const modelId = typeof m.id === 'string' ? m.id.trim() : '';
-                if (!modelId || seen.has(modelId)) return null;
-                seen.add(modelId);
-                return {
-                  id: modelId,
-                  name: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : modelId.split('/').pop(),
-                  created: Number.isFinite(Number(m.created)) ? Number(m.created) : 0
-                };
-              })
-              .filter(Boolean),
-            expectedCount: null,
-            source: 'https://integrate.api.nvidia.com/v1/models'
-          };
+        } catch (err) {
+          lastErr = err;
         }
-
-        if (!catalog) throw fallbackError;
       }
 
       if (!catalog || !Array.isArray(catalog.models) || catalog.models.length === 0) {
-        return { success: false, error: 'Invalid data format from NVIDIA Build catalog' };
+        return { success: false, error: lastErr ? lastErr.message : 'Invalid data format from NVIDIA models catalog' };
       }
 
       const parsedCount = catalog.models.length;

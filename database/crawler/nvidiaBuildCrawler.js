@@ -34,6 +34,11 @@ function extractExpectedFreeEndpointCount(html) {
   return null;
 }
 
+function isWafChallenge(html) {
+  if (!html || typeof html !== 'string') return false;
+  return html.includes('AwsWafIntegration') || html.includes('challenge-container') || html.includes('awsWafCookieDomainList') || html.includes('awswaf.com');
+}
+
 function normalizeBuildModelId(provider, slug) {
   const cleanedProvider = decodeURIComponent(String(provider || '').trim()).replace(/^\/+|\/+$/g, '');
   const cleanedSlug = decodeURIComponent(String(slug || '').trim()).replace(/^\/+|\/+$/g, '');
@@ -41,7 +46,7 @@ function normalizeBuildModelId(provider, slug) {
 
   const blockedFirstSegments = new Set([
     'api', '_next', 'assets', 'docs', 'explore', 'models', 'skills', 'blueprints',
-    'terms', 'privacy', 'contact', 'login', 'search', 'favicon.ico'
+    'terms', 'privacy', 'contact', 'login', 'search', 'favicon.ico', 'akam', 'challenge', 'waf'
   ]);
   if (blockedFirstSegments.has(cleanedProvider.toLowerCase())) return null;
   if (cleanedSlug.includes('.') && !cleanedSlug.includes('-')) return null;
@@ -50,6 +55,7 @@ function normalizeBuildModelId(provider, slug) {
 }
 
 function extractBuildFreeEndpointModelsFromHtml(html) {
+  if (isWafChallenge(html)) return [];
   const normalizedHtml = decodeHtmlEntities(html);
   const models = new Map();
 
@@ -66,7 +72,6 @@ function extractBuildFreeEndpointModelsFromHtml(html) {
     }
   };
 
-  // 1. 從模型卡片連結擷取完整路徑，例如 /minimaxai/minimax-m3
   const hrefRegex = /href\s*=\s*["'](?:https:\/\/build\.nvidia\.com)?\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)(?:[?#][^"']*)?["']/g;
   let hrefMatch;
   while ((hrefMatch = hrefRegex.exec(normalizedHtml)) !== null) {
@@ -74,14 +79,12 @@ function extractBuildFreeEndpointModelsFromHtml(html) {
     addModel(modelId);
   }
 
-  // 2. 從 Next/JSON 片段或範例程式碼擷取 model 欄位
   const jsonModelRegex = /["']model["']\s*:\s*["']([a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)["']/g;
   let jsonMatch;
   while ((jsonMatch = jsonModelRegex.exec(normalizedHtml)) !== null) {
     addModel(jsonMatch[1]);
   }
 
-  // 3. 從一般文字中的 build.nvidia.com/provider/model URL 擷取
   const absoluteUrlRegex = /https:\/\/build\.nvidia\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)/g;
   let absoluteMatch;
   while ((absoluteMatch = absoluteUrlRegex.exec(normalizedHtml)) !== null) {
@@ -90,6 +93,100 @@ function extractBuildFreeEndpointModelsFromHtml(html) {
   }
 
   return Array.from(models.values());
+}
+
+async function fetchNvidiaBuildFreeEndpointCatalogWithElectron() {
+  let electron;
+  try {
+    electron = require('electron');
+  } catch (e) {
+    return null;
+  }
+  const { BrowserWindow, app } = electron;
+  if (!BrowserWindow || (app && typeof app.isReady === 'function' && !app.isReady())) {
+    return null;
+  }
+
+  let win;
+  try {
+    win = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        offscreen: true
+      }
+    });
+  } catch (e) {
+    return null;
+  }
+
+  const collected = new Map();
+  let expectedCount = null;
+  const MAX_PAGES = 10;
+
+  try {
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const targetUrl = `https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&page=${page}`;
+      await win.loadURL(targetUrl);
+      await new Promise(resolve => setTimeout(resolve, 3500));
+
+      const pageTitle = await win.webContents.executeJavaScript('document.title').catch(() => '');
+      if (!pageTitle.includes('NVIDIA') && !pageTitle.includes('Models')) {
+        break;
+      }
+
+      const pageText = await win.webContents.executeJavaScript('document.body.innerText').catch(() => '');
+      const filtersMatch = pageText.match(/Filters\s*\(?\s*1\s*\)?\s*(\d+)\s*models/i) || pageText.match(/Free\s+Endpoint\s+(\d+)/i) || pageText.match(/(\d+)\s+models/i);
+      if (filtersMatch && !expectedCount) {
+        expectedCount = Number(filtersMatch[1]);
+      }
+
+      const modelIds = await win.webContents.executeJavaScript(`
+        Array.from(document.querySelectorAll('a[href]'))
+          .map(a => a.getAttribute('href'))
+          .filter(h => h && h.includes('/'))
+          .map(h => h.replace(/^https?:\\/\\/build\\.nvidia\\.com\\//, '').replace(/^\\//, '').split('?')[0].split('#')[0])
+          .filter(path => {
+            const parts = path.split('/');
+            if (parts.length !== 2) return false;
+            const blocked = ['models', 'explore', '_next', 'api', 'assets', 'docs', 'skills', 'blueprints', 'terms', 'privacy', 'contact', 'login', 'search', 'akam', 'challenge', 'waf'];
+            return !blocked.includes(parts[0].toLowerCase());
+          })
+      `).catch(() => []);
+
+      const newCountBefore = collected.size;
+      modelIds.forEach(id => {
+        if (!collected.has(id)) {
+          collected.set(id, {
+            id,
+            name: id.split('/').pop(),
+            created: 0
+          });
+        }
+      });
+
+      if (collected.size === newCountBefore && page > 1) {
+        break;
+      }
+
+      if (expectedCount && collected.size >= expectedCount) {
+        break;
+      }
+    }
+  } catch (e) {
+    console.error('Electron build crawler error:', e.message);
+  } finally {
+    try {
+      if (win && !win.isDestroyed()) win.destroy();
+    } catch (_) {}
+  }
+
+  if (collected.size === 0) return null;
+
+  return {
+    models: Array.from(collected.values()).sort((a, b) => a.id.localeCompare(b.id)),
+    expectedCount,
+    source: NVIDIA_BUILD_FREE_ENDPOINT_URL
+  };
 }
 
 function buildNvidiaCatalogCandidateUrls(pageNumber) {
@@ -121,6 +218,13 @@ function buildNvidiaCatalogCandidateUrls(pageNumber) {
 }
 
 async function fetchNvidiaBuildFreeEndpointCatalog() {
+  try {
+    const electronCatalog = await fetchNvidiaBuildFreeEndpointCatalogWithElectron();
+    if (electronCatalog && Array.isArray(electronCatalog.models) && electronCatalog.models.length > 0) {
+      return electronCatalog;
+    }
+  } catch (_) {}
+
   const collected = new Map();
   const visitedSignatures = new Set();
   let expectedCount = null;
@@ -175,7 +279,7 @@ async function fetchNvidiaBuildFreeEndpointCatalog() {
     if (!bestCandidate || bestCandidate.parsedModels.length === 0) {
       consecutiveFailures += 1;
       if (page === 1 && consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        throw lastError || new Error('Unable to parse NVIDIA Build Free Endpoint catalog after multiple attempts.');
+        throw lastError || new Error('Unable to parse NVIDIA Build Free Endpoint catalog (WAF blocked or changed layout).');
       }
       if (page === 1) {
         continue;
