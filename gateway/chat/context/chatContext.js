@@ -55,7 +55,8 @@ function createChatContext({ req, res, originalBody, activeConfig }) {
     addLog,
     res,
     req,
-    originalBody
+    originalBody,
+    sanitizedBody: null
   };
 }
 

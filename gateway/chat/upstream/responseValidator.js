@@ -253,6 +253,9 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
  * @returns 與原始 validateSuccessfulResponse 相同的結果物件結構
  */
 async function validateSuccessfulResponse({ context, model, selectedKey, result, roundNumber }) {
+  if (result.passthrough) {
+    return passthroughStreamResponse({ context, model, selectedKey, result });
+  }
   const isStream = !!context.originalBody.stream;
   if (isStream) {
     return validateStreamResponse({ context, model, selectedKey, result });
@@ -340,6 +343,7 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
 
     return {
       success: true,
+      passthrough: true,
       response: result.response,
       streamContent: '',
       rawChunks: rawLines,

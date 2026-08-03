@@ -75,6 +75,7 @@ router.post('/v1/chat/completions', async (req, res) => {
   }
 
   const sanitizedBody = sanitizeChatCompletionBody(originalBody);
+  context.sanitizedBody = sanitizedBody;
 
   try {
     await dispatchRequest({ context, configuredModels, sanitizedBody });

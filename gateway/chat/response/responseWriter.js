@@ -178,7 +178,8 @@ async function sendValidatedResponse({ context, result, currentModel }) {
       responseContent = result.jsonData?.choices?.[0]?.message?.content || '';
     }
 
-    tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, originalBody.messages, responseContent);
+    const bodyToRecord = context.sanitizedBody || originalBody;
+    tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, bodyToRecord.messages, responseContent);
     eventManager.broadcast('token-usage', { action: 'add', modelId, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });
     addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
   } catch (tokenErr) {
@@ -225,7 +226,8 @@ async function sendPassthroughResponse({ context, result, currentModel }) {
 
   try {
     const usage = result.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-    tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, originalBody.messages, '');
+    const bodyToRecord = context.sanitizedBody || originalBody;
+    tokenUsage.addRecord(requestId, modelId, usage.prompt_tokens, usage.completion_tokens, bodyToRecord.messages, '');
     eventManager.broadcast('token-usage', { action: 'add', modelId, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });
     addLog('success', `請求 #${requestId}：已成功使用模型「${modelId}」（順位 ${currentModel.priority}）以即時透傳完成回傳，HTTP 回應已送達客戶端（${durationMs} ms）。[Tokens: P:${usage.prompt_tokens} + C:${usage.completion_tokens} = T:${usage.prompt_tokens + usage.completion_tokens}]`);
   } catch (tokenErr) {

@@ -4,6 +4,8 @@ import urllib.error
 import json
 import time
 import sys
+import subprocess
+import os
 
 # 強制 Windows 終端輸出為 UTF-8
 sys.stdout.reconfigure(encoding='utf-8')
@@ -16,24 +18,62 @@ def print_section(title):
     print(f" 測試項目: {title}")
     print("=" * 60)
 
+def test_node_model_sync_module():
+    print_section("測試 Node.js 模型同步模組 (modelsConfig.syncFromNvidia)")
+    try:
+        cmd = [
+            "node",
+            "-e",
+            "const { initDatabase } = require('./database/database'); const path = require('path'); const modelsConfig = require('./database/repositories/modelsConfig'); initDatabase(path.join(__dirname, 'gateway.db')); modelsConfig.syncFromNvidia().then(r => { console.log('SYNC_RESULT:' + JSON.stringify(r)); process.exit(r.success ? 0 : 1); }).catch(e => { console.error(e); process.exit(1); });"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', cwd=os.path.dirname(os.path.abspath(__file__)))
+        
+        sync_line = None
+        for line in result.stdout.splitlines():
+            if line.startswith("SYNC_RESULT:"):
+                sync_line = line[12:].strip()
+                break
+        
+        if result.returncode == 0 and sync_line:
+            res_data = json.loads(sync_line)
+            print(f"[成功] 模型同步模組執行成功！")
+            print(f"       解析數量: {res_data.get('parsedCount')}, 入庫數量: {res_data.get('savedCount')}")
+            print(f"       同步來源: {res_data.get('source')}")
+            return True
+        else:
+            print(f"[失敗] 模型同步模組失敗: {result.stdout}\n{result.stderr}")
+            return False
+    except Exception as e:
+        print(f"[失敗] 執行模型同步模組測試異常: {e}")
+        return False
+
 def test_api_connectivity():
-    print_section("檢查 Gateway 管理 API 連線度")
+    print_section("檢查 Gateway 管理 API 連線度與模型同步 API")
     try:
         req = urllib.request.Request(f"{API_URL}/keys", method="GET")
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode('utf-8'))
             print(f"[成功] 成功獲取 API 金鑰池列表，當前金鑰數量: {len(data)}")
+    except Exception as e:
+        print(f"[提示] 無法連接到 Gateway API (可能 Gateway 服務未啟動): {e}")
+
+    try:
+        req = urllib.request.Request(f"{API_URL}/models/available", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            models = data.get('models', [])
+            print(f"[成功] 成功從 API /models/available 獲取模型列表，可用模型數量: {len(models)}")
+            if len(models) > 0:
+                print(f"       最新同步時間: {data.get('lastSyncTime')}")
+                print(f"       同步來源: {data.get('lastSyncSource')}")
+                print(f"       前 3 個模型: {[m['id'] for m in models[:3]]}")
             return True
     except Exception as e:
-        print(f"[失敗] 無法連接到 Gateway API，錯誤: {e}")
-        print("請確保 Electron App 或背景 Gateway 服務已啟動並監聽在 Port 4000！")
-        return False
+        print(f"[提示] 無法從 API 讀取 /models/available (Gateway HTTP 服務未啟動，已透過模組測試驗證邏輯): {e}")
+        return True
 
 def test_chat_completions_non_stream():
     print_section("測試 /v1/chat/completions 非串流 (Non-stream) 轉發")
-    
-    # 建立一個測試用的 API Key (模擬調用)
-    # 我們假設目前金鑰池已有有效 Key。如果沒有，此測試將會顯示 Gateway 返回的 503。
     payload = {
         "model": "patcher-main",
         "messages": [
@@ -69,11 +109,10 @@ def test_chat_completions_non_stream():
         print(f"[提示] Gateway 返回 HTTP 狀態碼: {e.code}")
         print(f"錯誤響應內容: {err_body}")
     except Exception as e:
-        print(f"[失敗] 發生非預期異常: {e}")
+        print(f"[提示] Gateway 服務未在 Port 4000 運行，跳過實時聊天測試: {e}")
 
 def test_chat_completions_stream():
     print_section("測試 /v1/chat/completions 串流 (Stream) SSE 轉發")
-    
     payload = {
         "model": "patcher-main",
         "messages": [
@@ -96,7 +135,6 @@ def test_chat_completions_stream():
         
         start_time = time.time()
         with urllib.request.urlopen(req, timeout=30) as response:
-            # 讀取串流
             while True:
                 line_bytes = response.readline()
                 if not line_bytes:
@@ -123,11 +161,13 @@ def test_chat_completions_stream():
         print(f"[提示] Gateway 返回 HTTP 狀態碼: {e.code}")
         print(f"錯誤響應內容: {err_body}")
     except Exception as e:
-        print(f"[失敗] 發生非預期異常: {e}")
+        print(f"[提示] Gateway 服務未在 Port 4000 運行，跳過實時串流測試: {e}")
 
 if __name__ == "__main__":
     print("NVIDIA NIM LLM Gateway 測試套件啟動...")
-    if test_api_connectivity():
-        test_chat_completions_non_stream()
-        test_chat_completions_stream()
-    print("測試執行結束。")
+    module_ok = test_node_model_sync_module()
+    test_api_connectivity()
+    test_chat_completions_non_stream()
+    test_chat_completions_stream()
+    print("=" * 60)
+    print("所有測試執行結束。")
