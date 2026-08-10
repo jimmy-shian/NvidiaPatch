@@ -38,7 +38,7 @@ function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
   });
 }
 
-function consumeSseLine(rawLine, sseLines, fullContentRef) {
+function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef) {
   const cleanLine = String(rawLine || '').endsWith('\r')
     ? String(rawLine || '').slice(0, -1)
     : String(rawLine || '');
@@ -61,6 +61,12 @@ function consumeSseLine(rawLine, sseLines, fullContentRef) {
       || chunk?.choices?.[0]?.content;
     if (typeof fakeCandidate === 'string' && isFakeStreamContent(fakeCandidate)) {
       return chunk?.usage || null;
+    }
+
+    // 記錄 finish_reason（如 "length" 表示輸出被截斷），供後續判斷是否需重試。
+    const finishReason = chunk?.choices?.[0]?.finish_reason;
+    if (finishReason && finishReasonRef && !finishReasonRef.value) {
+      finishReasonRef.value = finishReason;
     }
 
     // 支援多種可能欄位
@@ -95,6 +101,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
   let streamBuffer = '';
   const sseLines = [];
   const fullContentRef = { value: '' };
+  const finishReasonRef = { value: null };
   let streamUsage = null;
 
   try {
@@ -110,12 +117,21 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       streamBuffer = lines.pop() || '';
 
       for (const line of lines) {
-        const usage = consumeSseLine(line, sseLines, fullContentRef);
+        const usage = consumeSseLine(line, sseLines, fullContentRef, finishReasonRef);
         if (usage) streamUsage = usage;
       }
     }
 
     const fullContent = fullContentRef.value;
+
+    // 若 NVIDIA 回傳 finish_reason = "length"，表示輸出因 max_tokens 被截斷，
+    // 視為模型層級失敗，立即切換下一個模型（或重試），避免把不完整內容當成功回傳。
+    if (finishReasonRef.value === 'length') {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
+    }
 
     if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
       if (!streamUsage) {
@@ -193,6 +209,14 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
 
   try {
     const json = await result.response.json();
+    const finishReason = json?.choices?.[0]?.finish_reason;
+    if (finishReason === 'length') {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，切換下一個模型重試。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
+    }
+
     const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
 
     if (!activeConfig.ENABLE_CONTENT_VALIDATION) {

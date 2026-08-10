@@ -16,7 +16,8 @@
  */
 
 const FAKE_CHAR = '\uE000';
-const FAKE_INTERVAL_MS = 10000;
+// 縮短心跳間隔至 5 秒，避免部分前端（如 Kilo）的 timeout 小於 10 秒時被強制中斷。
+const FAKE_INTERVAL_MS = 5000;
 
 function createFakeStreamController({ res, originalBody, requestId, isClientGone }) {
   let charIndex = 0;

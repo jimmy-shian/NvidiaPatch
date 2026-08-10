@@ -43,6 +43,27 @@ function isDegradedError(errText) {
 }
 
 /**
+ * 判斷是否為 NVIDIA 端伺服器錯誤（即使以 HTTP 400 回傳）。
+ * 這類錯誤通常是暫時性的，應視為模型層級失敗（可切換模型/重試），
+ * 而非不可重試的 fatal。
+ */
+function isServerError(errText) {
+  const lower = String(errText || '').toLowerCase();
+  return lower.includes('internal server error')
+    || lower.includes('server error')
+    || lower.includes('internal error')
+    || lower.includes('bad gateway')
+    || lower.includes('service unavailable')
+    || lower.includes('temporarily unavailable')
+    || lower.includes('upstream')
+    || lower.includes('backend')
+    || lower.includes('gateway timeout')
+    || lower.includes('504')
+    || lower.includes('502')
+    || lower.includes('503');
+}
+
+/**
  * 對指定模型+金鑰發送一次請求。
  *
  * @param {object} args
@@ -175,15 +196,23 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
         stats.recordRequest(false);
         return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
       }
-      addLog('error', `請求 #${requestId}：NVIDIA 回傳不可重試的 HTTP ${response.status}，停止本次調度。錯誤：${errText.substring(0, 200)}`);
+      if (isServerError(errText)) {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（NVIDIA 端伺服器錯誤），判定為模型層級失敗，發起切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+        apiKeys.recordFailure(key.id, `ModelServerError HTTP 400: ${errText.substring(0, 80)}`);
+        stats.recordRequest(false);
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
+      }
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（${errText.substring(0, 160)}），判定為模型層級失敗，發起切換下一個模型重試。`);
+      apiKeys.recordFailure(key.id, `HTTP 400: ${errText.substring(0, 80)}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'fatal', fatal: true, statusCode: response.status, errorText: errText, response };
+      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
     }
 
     const errText = await readTextSafely(response);
-    addLog('error', `請求 #${requestId}：NVIDIA 回傳不可重試的 HTTP ${response.status}，停止本次調度。錯誤：${errText.substring(0, 200)}`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP ${response.status}（${errText.substring(0, 160)}），發起切換下一個模型重試。`);
+    apiKeys.recordFailure(key.id, `HTTP ${response.status}: ${errText.substring(0, 80)}`);
     stats.recordRequest(false);
-    return { success: false, retryScope: 'fatal', fatal: true, statusCode: response.status, errorText: errText, response };
+    return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText };
 
   } catch (err) {
     clearTimeout(timeoutId);
@@ -212,5 +241,6 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
 module.exports = {
   sendSingleRequest,
   isContextLimitError,
-  isDegradedError
+  isDegradedError,
+  isServerError
 };

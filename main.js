@@ -43,9 +43,18 @@ function loadPortFromDb() {
   return currentPort;
 }
 
-// 追蹤所有連入的 socket 連線，以便重啟時強制關閉
+// 追蹤所有連入的 socket 連線，並停用 Node.js 預設 5 分鐘 HTTP requestTimeout 限制
+function configureServerTimeouts(srv) {
+  if (!srv) return;
+  srv.requestTimeout = 0;
+  srv.headersTimeout = 0;
+  srv.keepAliveTimeout = 0;
+  srv.timeout = 0;
+}
+
 function trackConnections(srv) {
   if (!srv) return;
+  configureServerTimeouts(srv);
   srv.on('connection', (socket) => {
     activeConnections.add(socket);
     socket.once('close', () => {

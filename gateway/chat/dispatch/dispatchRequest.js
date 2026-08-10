@@ -162,6 +162,12 @@ function handleRoundFailure({ context, result, currentModel, round }) {
     }
     addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪僅發生 Key 層級錯誤。`);
     if (round < context.MAX_ROUNDS_PER_MODEL) return { continueRound: true };
+
+    // 已達 MAX_ROUNDS_PER_MODEL 上限仍無法成功，標記模型冷卻並切換下一個模型，
+    // 避免 fall through 到 return {} 造成「無任何動作」的隱性失敗。
+    markModelFailureCooldown(modelId, result.errorText || `已達最大重試輪數 ${context.MAX_ROUNDS_PER_MODEL} 仍失敗`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」已達最大重試輪數 ${context.MAX_ROUNDS_PER_MODEL} 仍無法完成，標記冷卻並切換下一個模型。`);
+    return { abortModel: true };
   }
 
   return {};

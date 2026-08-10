@@ -25,6 +25,9 @@ const { handleTestChat } = require('../chat/testChat');
 const router = express.Router();
 
 router.post('/v1/chat/completions', async (req, res) => {
+  if (req.socket) req.socket.setTimeout(0);
+  if (res.setTimeout) res.setTimeout(0);
+
   const originalBody = req.body;
   const activeConfig = settings.get();
   const { MAX_ROUNDS_PER_MODEL, MAX_EMPTY_RESPONSE_RETRIES } = resolveRetryLimits(activeConfig);
