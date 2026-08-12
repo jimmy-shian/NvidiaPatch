@@ -20,6 +20,20 @@ const { addLog } = require('../../logs/logger');
 const { smartValidate, formatValidationIssue } = require('../../engine/contentValidator');
 const { isFakeStreamContent } = require('../utils/fakeStreamFilter');
 
+function isUpstreamErrorContent(content) {
+  if (!content || typeof content !== 'string') return false;
+  const trimmed = content.trim().toLowerCase();
+  if (trimmed.length > 500) return false;
+  return trimmed === 'internal server error'
+    || trimmed === '"internal server error"'
+    || trimmed === 'bad gateway'
+    || trimmed === 'service unavailable'
+    || trimmed === 'gateway timeout'
+    || /^\{?\s*"error"\s*:\s*"internal server error"/.test(trimmed)
+    || /^\{?\s*"error"\s*:\s*\{\s*"message"\s*:\s*"internal server error"/.test(trimmed)
+    || /^\s*5\d{2}\s+(internal server error|bad gateway|service unavailable|gateway timeout)\s*$/i.test(trimmed);
+}
+
 function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -154,6 +168,13 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
     }
 
+    if (isUpstreamErrorContent(fullContent)) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流回傳 HTTP 200 但內容為上游錯誤訊息（${fullContent.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${fullContent.substring(0, 80)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${fullContent.substring(0, 120)}` };
+    }
+
     const validation = smartValidate(fullContent, { maxLength: 10000 });
     if (!validation.valid) {
       const validationIssue = formatValidationIssue(validation);
@@ -239,6 +260,13 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
       stats.recordRequest(false);
       return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+    }
+
+    if (isUpstreamErrorContent(contentToCheck)) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${contentToCheck.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${contentToCheck.substring(0, 80)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${contentToCheck.substring(0, 120)}` };
     }
 
     const validation = smartValidate(contentToCheck, { maxLength: 10000 });
@@ -406,5 +434,6 @@ module.exports = {
   validateSuccessfulResponse,
   passthroughStreamResponse,
   readStreamChunkWithTimeout,
-  consumeSseLine
+  consumeSseLine,
+  isUpstreamErrorContent
 };
