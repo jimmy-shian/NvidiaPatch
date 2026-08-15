@@ -17,22 +17,8 @@
 
 const { apiKeys, stats } = require('../../../database');
 const { addLog } = require('../../logs/logger');
-const { smartValidate, formatValidationIssue } = require('../../engine/contentValidator');
+const { smartValidate, formatValidationIssue, isUpstreamErrorContent } = require('../../engine/contentValidator');
 const { isFakeStreamContent } = require('../utils/fakeStreamFilter');
-
-function isUpstreamErrorContent(content) {
-  if (!content || typeof content !== 'string') return false;
-  const trimmed = content.trim().toLowerCase();
-  if (trimmed.length > 500) return false;
-  return trimmed === 'internal server error'
-    || trimmed === '"internal server error"'
-    || trimmed === 'bad gateway'
-    || trimmed === 'service unavailable'
-    || trimmed === 'gateway timeout'
-    || /^\{?\s*"error"\s*:\s*"internal server error"/.test(trimmed)
-    || /^\{?\s*"error"\s*:\s*\{\s*"message"\s*:\s*"internal server error"/.test(trimmed)
-    || /^\s*5\d{2}\s+(internal server error|bad gateway|service unavailable|gateway timeout)\s*$/i.test(trimmed);
-}
 
 function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
@@ -147,6 +133,22 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
     }
 
+    // 1. 檢查空內容
+    if (fullContent === null || fullContent === undefined || fullContent === '') {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+    }
+
+    // 2. 檢查 HTTP 200 假成功（內容為伺服器錯誤）
+    if (isUpstreamErrorContent(fullContent)) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流回傳 HTTP 200 但內容為上游錯誤訊息（${fullContent.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${fullContent.substring(0, 80)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${fullContent.substring(0, 120)}` };
+    }
+
     if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
       if (!streamUsage) {
         const promptText = JSON.stringify(originalBody.messages || '');
@@ -159,20 +161,6 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
         };
       }
       return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
-    }
-
-    if (fullContent === null || fullContent === undefined || fullContent === '') {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
-    }
-
-    if (isUpstreamErrorContent(fullContent)) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流回傳 HTTP 200 但內容為上游錯誤訊息（${fullContent.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${fullContent.substring(0, 80)}`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${fullContent.substring(0, 120)}` };
     }
 
     const validation = smartValidate(fullContent, { maxLength: 10000 });
@@ -240,6 +228,23 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
 
     const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
 
+    // 1. 檢查上游 JSON 或內容是否為伺服器錯誤結構
+    if (isUpstreamErrorContent(json) || isUpstreamErrorContent(contentToCheck)) {
+      const errDetail = typeof json === 'object' && json.message ? json.message : (contentToCheck || '上游伺服器內部錯誤');
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${String(errDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${String(errDetail).substring(0, 80)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${String(errDetail).substring(0, 120)}` };
+    }
+
+    // 2. 檢查空內容
+    if (contentToCheck === '' && !json?.choices?.[0]?.message?.function_call && !json?.choices?.[0]?.message?.tool_calls) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+    }
+
     if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
       let usage = json?.usage;
       if (!usage) {
@@ -253,20 +258,6 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
         };
       }
       return { success: true, response: result.response, jsonData: json, usage };
-    }
-
-    if (contentToCheck === '') {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
-    }
-
-    if (isUpstreamErrorContent(contentToCheck)) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${contentToCheck.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${contentToCheck.substring(0, 80)}`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${contentToCheck.substring(0, 120)}` };
     }
 
     const validation = smartValidate(contentToCheck, { maxLength: 10000 });
@@ -339,6 +330,8 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
   let contentLength = 0;
   let lastChunkBytes = null;
   let rawLines = [];
+  let hasUpstreamError = false;
+  let upstreamErrorDetail = '';
 
   try {
     while (true) {
@@ -374,11 +367,28 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
             || chunk?.choices?.[0]?.text
             || chunk?.choices?.[0]?.content
             || '';
-          if (typeof c === 'string') contentLength += c.length;
+          if (typeof c === 'string') {
+            contentLength += c.length;
+            if (contentLength <= 500 && isUpstreamErrorContent(c)) {
+              hasUpstreamError = true;
+              upstreamErrorDetail = c;
+            }
+          }
+          if (chunk?.error || (chunk?.message && isUpstreamErrorContent(chunk.message))) {
+            hasUpstreamError = true;
+            upstreamErrorDetail = chunk.error?.message || chunk.message;
+          }
         } catch (e) {
           // 解析失敗不影響透傳
         }
       }
+    }
+
+    if (hasUpstreamError) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」透傳串流中檢測到上游錯誤訊息（${String(upstreamErrorDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in passthrough stream: ${String(upstreamErrorDetail).substring(0, 80)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
     }
 
     let usage = upstreamUsage;
