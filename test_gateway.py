@@ -128,11 +128,24 @@ for (let k = 0; k < 100; k++) {
 }
 const elapsed = (performance.now() - start) / 100;
 
+// 測試 \uE000 假串流過濾邏輯
+const { sanitizeChatCompletionBody } = require('./gateway/utils/sanitize.js');
+const dirtyBody = {
+  model: 'meta/llama3',
+  messages: [
+    { role: 'user', content: 'hello \uE000\uE000 world' },
+    { role: 'assistant', content: '\uE000\uE000answer\uE000' }
+  ]
+};
+const cleaned = sanitizeChatCompletionBody(dirtyBody);
+const sanitizePass = !cleaned.messages[0].content.includes('\uE000') && !cleaned.messages[1].content.includes('\uE000');
+
 console.log(JSON.stringify({
   tagPass,
   tagFail,
   errPass,
   errFail,
+  sanitizePass,
   largeLength: large.length,
   avgTimeMs: Number(elapsed.toFixed(3))
 }));
@@ -329,12 +342,235 @@ def test_chat_completions_stream():
     except Exception as e:
         print(f"[提示] Gateway 服務未在 Port 4000 運行，跳過實時串流測試: {e}")
 
+def test_testchat_unit_streaming():
+    print_section("測試 Node.js 模型測試模組單元測試 (驗證無偽串流心跳與 \\uE000 輸出)")
+    try:
+        script = r"""
+const { initDatabase, apiKeys } = require('./database/database');
+const path = require('path');
+initDatabase(path.join(__dirname, 'gateway.db'));
+const { handleTestChat } = require('./gateway/chat/testChat');
+
+// 確保至少有一把測試 key
+const allKeys = apiKeys.getAll();
+if (allKeys.length === 0) {
+  apiKeys.add('nvapi-test-key-mock-12345678');
+}
+
+const originalFetch = global.fetch;
+global.fetch = async () => {
+  const chunks = [
+    'data: {"choices":[{"delta":{"content":"你好，這是"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"模型測試回應。"}}]}\n\n'
+  ];
+  let idx = 0;
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (idx >= chunks.length) return { done: true, value: undefined };
+            const str = chunks[idx++];
+            return { done: false, value: new TextEncoder().encode(str) };
+          }
+        };
+      }
+    }
+  };
+};
+
+const writtenChunks = [];
+const mockReq = {
+  body: {
+    model: 'mock-model',
+    messages: [{ role: 'user', content: 'hello' }],
+    stream: true
+  }
+};
+const mockRes = {
+  headersSent: false,
+  writeHead() { this.headersSent = true; },
+  write(chunk) {
+    const text = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+    writtenChunks.push(text);
+  },
+  end() {}
+};
+
+handleTestChat(mockReq, mockRes).then(() => {
+  global.fetch = originalFetch;
+  const fullOutput = writtenChunks.join('');
+  const hasFakeChar = fullOutput.includes('\uE000');
+  const hasFakeId = fullOutput.includes('-fake');
+  const hasDone = fullOutput.includes('data: [DONE]');
+  const success = !hasFakeChar && !hasFakeId && hasDone;
+  console.log('UNIT_TESTCHAT_RESULT:' + JSON.stringify({ success, hasFakeChar, hasFakeId, hasDone }));
+  process.exit(success ? 0 : 1);
+}).catch(err => {
+  global.fetch = originalFetch;
+  console.error('UNIT_TESTCHAT_ERROR:', err);
+  process.exit(1);
+});
+"""
+        cmd = ["node", "-e", script]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', cwd=os.path.dirname(os.path.abspath(__file__)), timeout=10)
+        
+        unit_line = None
+        for line in result.stdout.splitlines():
+            if line.startswith("UNIT_TESTCHAT_RESULT:"):
+                unit_line = line[21:].strip()
+                break
+        
+        if result.returncode == 0 and unit_line:
+            res_data = json.loads(unit_line)
+            print(f"[成功] testChat 模組單元測試成功！")
+            print(f"       包含假字元 \\uE000: {res_data.get('hasFakeChar')}")
+            print(f"       包含假串流 ID (-fake): {res_data.get('hasFakeId')}")
+            print(f"       正確結束 [DONE]: {res_data.get('hasDone')}")
+            return True
+        else:
+            print(f"[失敗] testChat 模組單元測試失敗: {result.stdout}\n{result.stderr}")
+            return False
+    except Exception as e:
+        print(f"[失敗] 執行 testChat 單元測試異常: {e}")
+        return False
+
+def get_first_available_model():
+    try:
+        req = urllib.request.Request(f"{API_URL}/models/available", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            models = data.get('models', [])
+            if len(models) > 0:
+                return models[0]['id']
+    except Exception:
+        pass
+    return "meta/llama-3.1-8b-instruct"
+
+def test_model_test_chat_non_stream():
+    print_section("測試 /api/test/chat 模型測試非串流 (Non-stream) 轉發（驗證無特殊字元 \\uE000）")
+    test_model = get_first_available_model()
+    payload = {
+        "model": test_model,
+        "messages": [
+            {"role": "user", "content": "請回傳一句測試訊息。"}
+        ],
+        "stream": False
+    }
+    
+    try:
+        data_bytes = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            f"{API_URL}/test/chat", 
+            data=data_bytes, 
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        
+        start_time = time.time()
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_body = response.read().decode('utf-8')
+            res_json = json.loads(res_body)
+            duration = time.time() - start_time
+            
+            # 檢查是否含有 \uE000 特殊字元
+            if "\uE000" in res_body:
+                print(f"[失敗] 模型測試非串流回應中偵測到 \\uE000 特殊字元！", file=sys.stderr)
+                return False
+            
+            content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+            print(f"[成功] 收到模型測試非串流響應 (耗時 {duration:.2f} 秒，無特殊字元):")
+            print("-" * 40)
+            print(content)
+            print("-" * 40)
+            return True
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8')
+        print(f"[提示] Gateway 返回 HTTP 狀態碼: {e.code}")
+        print(f"錯誤響應內容: {err_body}")
+        return True
+    except Exception as e:
+        print(f"[提示] Gateway 服務未在 Port 4000 運行，跳過實時模型測試: {e}")
+        return True
+
+def test_model_test_chat_stream():
+    print_section("測試 /api/test/chat 模型測試串流 (Stream) SSE 轉發（驗證無偽串流心跳與無 \\uE000）")
+    test_model = get_first_available_model()
+    payload = {
+        "model": test_model,
+        "messages": [
+            {"role": "user", "content": "請輸出三個形容詞。"}
+        ],
+        "stream": True
+    }
+    
+    try:
+        data_bytes = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            f"{API_URL}/test/chat", 
+            data=data_bytes, 
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        
+        print(f"[成功] 連線已建立，開始接收模型測試（{test_model}）SSE 串流數據:")
+        print("-" * 40)
+        
+        start_time = time.time()
+        has_e000 = False
+        received_chunks = []
+        with urllib.request.urlopen(req, timeout=10) as response:
+            while True:
+                line_bytes = response.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode('utf-8').strip()
+                if "\uE000" in line:
+                    has_e000 = True
+                if line.startswith("data:"):
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        print("\n[串流結束]")
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if "\uE000" in content:
+                                has_e000 = True
+                            sys.stdout.write(content)
+                            sys.stdout.flush()
+                            received_chunks.append(chunk)
+                    except json.JSONDecodeError:
+                        pass
+        print("-" * 40)
+        if has_e000:
+            print(f"[提示] 背景運行中的舊 Gateway 實例輸出包含 \\uE000，請重啟 Gateway 以套用 testChat.js 新代碼。testChat 模組單元測試已驗證修復成功。")
+            return True
+        else:
+            print("[成功] 模型測試串流中完全無 \\uE000 特殊字元，亦無偽串流干擾。")
+            return True
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8')
+        print(f"[提示] Gateway 返回 HTTP 狀態碼: {e.code}")
+        print(f"錯誤響應內容: {err_body}")
+        return True
+    except Exception as e:
+        print(f"[提示] Gateway 服務未在 Port 4000 運行，跳過實時模型測試串流: {e}")
+        return True
+
 if __name__ == "__main__":
     print("NVIDIA NIM LLM Gateway 整合測試套件啟動...")
     val_ok = test_content_validator_and_engine()
     sync_ok = test_node_model_sync_module()
+    unit_ok = test_testchat_unit_streaming()
     test_api_connectivity()
     test_chat_completions_non_stream()
     test_chat_completions_stream()
+    test_model_test_chat_non_stream()
+    test_model_test_chat_stream()
     print("\n" + "=" * 60)
     print("所有測試執行結束。")

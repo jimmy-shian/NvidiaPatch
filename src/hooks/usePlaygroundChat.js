@@ -84,21 +84,31 @@ export default function usePlaygroundChat(gatewayUrl, adminToken) {
                 if (chunk.choices && chunk.choices[0].delta) {
                   const delta = chunk.choices[0].delta;
                   if (delta.reasoning_content) {
-                    setChatHistory(prev => {
-                      const updated = [...prev];
-                      const lastMsg = updated[updated.length - 1];
-                      if (lastMsg && lastMsg.role === 'assistant') {
-                        lastMsg.thinkingContent += delta.reasoning_content;
-                      }
-                      return updated;
-                    });
+                    const cleanReasoning = typeof delta.reasoning_content === 'string'
+                      ? delta.reasoning_content.replace(/\uE000+/g, '')
+                      : delta.reasoning_content;
+                    if (cleanReasoning) {
+                      setChatHistory(prev => {
+                        const updated = [...prev];
+                        const lastMsg = updated[updated.length - 1];
+                        if (lastMsg && lastMsg.role === 'assistant') {
+                          lastMsg.thinkingContent += cleanReasoning;
+                        }
+                        return updated;
+                      });
+                    }
                   }
                   if (delta.content) {
-                    setChatHistory(prev => {
-                      const updated = [...prev];
-                      updated[updated.length - 1].content += delta.content;
-                      return updated;
-                    });
+                    const cleanContent = typeof delta.content === 'string'
+                      ? delta.content.replace(/\uE000+/g, '')
+                      : delta.content;
+                    if (cleanContent) {
+                      setChatHistory(prev => {
+                        const updated = [...prev];
+                        updated[updated.length - 1].content += cleanContent;
+                        return updated;
+                      });
+                    }
                   }
                 }
               } catch (err) {

@@ -128,18 +128,30 @@ async function handleTestChat(req, res) {
             }
           }
 
-          function readTestChunk() {
-            return new Promise((resolve, reject) => {
-              let heartbeatTimer = null;
-              let settled = false;
-
-              const cleanup = () => {
-                if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-              };
-
-              // 在等待上游 chunk 期間推送假串流心跳，避免前端（如 Kilo）因長時間無資料而強制中斷。
-              const sendHeartbeat = () => {
-                if (settled || res.writableEnded || res.destroyed) { cleanup(); return; }
+          async function readTestStream() {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                if (!noValidation) {
+                  if (!fullContent || !fullContent.trim()) {
+                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
+                    if (!res.headersSent) {
+                      throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+                    }
+                    writeStreamError('模型回傳空內容');
+                    return;
+                  }
+                  const validation = smartValidate(fullContent, { maxLength: 10000 });
+                  if (!validation.valid) {
+                    const issue = formatValidationIssue(validation);
+                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${issue}。`);
+                    if (!res.headersSent) {
+                      throw new ContentValidationError(fullContent);
+                    }
+                    writeStreamError('內容校驗失敗', issue);
+                    return;
+                  }
+                }
                 if (!res.headersSent) {
                   res.writeHead(200, {
                     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -148,128 +160,75 @@ async function handleTestChat(req, res) {
                     'X-Accel-Buffering': 'no'
                   });
                 }
-                try {
-                  res.write(`data: ${JSON.stringify({
-                    id: `chatcmpl-test-${Date.now()}-fake`,
-                    object: 'chat.completion.chunk',
-                    created: Math.floor(Date.now() / 1000),
-                    model,
-                    choices: [{ index: 0, delta: { content: '\uE000' }, finish_reason: null }]
-                  })}\n\n`);
-                } catch (e) {
-                  cleanup();
-                }
-              };
-
-              heartbeatTimer = setInterval(sendHeartbeat, 5000);
-              sendHeartbeat();
-
-              reader.read().then(({ done, value }) => {
-                cleanup();
-                if (settled) return;
-                settled = true;
-
-                if (done) {
-                  if (!noValidation) {
-                    if (!fullContent || !fullContent.trim()) {
-                      addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
-                      if (!res.headersSent) {
-                        throw new ContentValidationError('模型回傳空內容 (Empty Content)');
-                      }
-                      writeStreamError('模型回傳空內容');
-                      resolve();
-                      return;
-                    }
-                    const validation = smartValidate(fullContent, { maxLength: 10000 });
-                    if (!validation.valid) {
-                      const issue = formatValidationIssue(validation);
-                      addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${issue}。`);
-                      if (!res.headersSent) {
-                        throw new ContentValidationError(fullContent);
-                      }
-                      writeStreamError('內容校驗失敗', issue);
-                      resolve();
-                      return;
-                    }
-                  }
-                  res.write('data: [DONE]\n\n');
-                  res.end();
-                  resolve();
-                  return;
-                }
-
-                if (!res.headersSent) {
-                  res.writeHead(200, {
-                    'Content-Type': 'text/event-stream; charset=utf-8',
-                    'Cache-Control': 'no-cache, no-transform',
-                    'Connection': 'keep-alive',
-                    'X-Accel-Buffering': 'no'
-                  });
-                }
-
-                if (noValidation) {
-                  res.write(value);
-                  resolve(readTestChunk());
-                  return;
-                }
-
-                const text = new TextDecoder().decode(value, { stream: true });
-                const lines = text.split('\n');
-                for (const line of lines) {
-                  const trimmed = line.trim();
-                  if (trimmed.startsWith('data:') && !trimmed.includes('[DONE]')) {
-                    try {
-                      const dataStr = trimmed.slice(5).trim();
-                      const parsed = JSON.parse(dataStr);
-                      if (parsed.choices && parsed.choices[0]) {
-                        const delta = parsed.choices[0].delta;
-                        const msg = parsed.choices[0].message;
-                        const txt = parsed.choices[0].text;
-                        const content = parsed.choices[0].content;
-                        const add = (s) => { if (typeof s === 'string') fullContent += s; };
-                        add(delta && delta.content);
-                        add(delta && delta.reasoning_content);
-                        add(msg && msg.content);
-                        add(msg && msg.reasoning_content);
-                        add(txt);
-                        add(content);
-                      }
-                    } catch (e) {
-                      // ignore
-                    }
-                  }
-                }
-                res.write(value);
-                resolve(readTestChunk());
-              }).catch((err) => {
-                cleanup();
-                if (settled) return;
-                settled = true;
-                reject(err);
-              });
-            });
-          }
-
-        try {
-          await readTestChunk();
-        } catch (err) {
-          if (err.name === 'ContentValidationError') {
-            addLog('error', `[模型測試] 內容在送到前端前校驗失敗，改用下一把 Key 重新生成。`);
-            return attemptTestChat(keyIndex + 1);
-          }
-          addLog('error', `[模型測試] 串流讀取錯誤：${err.message}`);
-          if (!res.headersSent) {
-            return res.status(502).json({
-              error: {
-                message: `串流讀取錯誤：${err.message}`,
-                type: 'api_error',
-                code: 'stream_error'
+                res.write('data: [DONE]\n\n');
+                res.end();
+                return;
               }
-            });
+
+              if (!res.headersSent) {
+                res.writeHead(200, {
+                  'Content-Type': 'text/event-stream; charset=utf-8',
+                  'Cache-Control': 'no-cache, no-transform',
+                  'Connection': 'keep-alive',
+                  'X-Accel-Buffering': 'no'
+                });
+              }
+
+              if (noValidation) {
+                res.write(value);
+                continue;
+              }
+
+              const text = new TextDecoder().decode(value, { stream: true });
+              const lines = text.split('\n');
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data:') && !trimmed.includes('[DONE]')) {
+                  try {
+                    const dataStr = trimmed.slice(5).trim();
+                    const parsed = JSON.parse(dataStr);
+                    if (parsed.choices && parsed.choices[0]) {
+                      const delta = parsed.choices[0].delta;
+                      const msg = parsed.choices[0].message;
+                      const txt = parsed.choices[0].text;
+                      const content = parsed.choices[0].content;
+                      const add = (s) => { if (typeof s === 'string') fullContent += s; };
+                      add(delta && delta.content);
+                      add(delta && delta.reasoning_content);
+                      add(msg && msg.content);
+                      add(msg && msg.reasoning_content);
+                      add(txt);
+                      add(content);
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                }
+              }
+              res.write(value);
+            }
           }
-          try { res.end(); } catch (e) { /* ignore */ }
-        }
-       } else {
+
+          try {
+            await readTestStream();
+          } catch (err) {
+            if (err.name === 'ContentValidationError') {
+              addLog('error', `[模型測試] 內容在送到前端前校驗失敗，改用下一把 Key 重新生成。`);
+              return attemptTestChat(keyIndex + 1);
+            }
+            addLog('error', `[模型測試] 串流讀取錯誤：${err.message}`);
+            if (!res.headersSent) {
+              return res.status(502).json({
+                error: {
+                  message: `串流讀取錯誤：${err.message}`,
+                  type: 'api_error',
+                  code: 'stream_error'
+                }
+              });
+            }
+            try { res.end(); } catch (e) { /* ignore */ }
+          }
+        } else {
          const json = await response.json();
          // 非串流：清理假串流字元後再校驗與回傳。
          const stripFake = (c) => {
