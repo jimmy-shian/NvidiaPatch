@@ -1,6 +1,6 @@
 {
   "name": "nvidia-gateway-app",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Unified NVIDIA NIM LLM Gateway with GUI & Tray support",
   "main": "main.js",
   "scripts": {
