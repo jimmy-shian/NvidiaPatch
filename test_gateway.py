@@ -562,9 +562,39 @@ def test_model_test_chat_stream():
         print(f"[提示] Gateway 服務未在 Port 4000 運行，跳過實時模型測試串流: {e}")
         return True
 
+def test_vitest_test_suites():
+    print_section("執行 Vitest & Supertest 單元與整合測試套件 (Logger, GatewayError, Services, SSE Pool, Routes, Upstream)")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        res = subprocess.run(
+            ["npx", "vitest", "run"],
+            cwd=script_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            shell=True,
+            timeout=30
+        )
+        if res.returncode == 0:
+            print("[成功] Vitest & Supertest 測試套件全數通過！")
+            for line in res.stdout.splitlines():
+                if "Tests" in line or "Test Files" in line or "Duration" in line or "✓" in line:
+                    print("       " + line.strip())
+            return True
+        else:
+            print(f"[失敗] Vitest 測試失敗 (Exit Code {res.returncode}):")
+            print(res.stdout)
+            if res.stderr:
+                print(res.stderr, file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"[失敗] 執行 Vitest 異常: {e}", file=sys.stderr)
+        return False
+
 if __name__ == "__main__":
     print("NVIDIA NIM LLM Gateway 整合測試套件啟動...")
     val_ok = test_content_validator_and_engine()
+    vitest_ok = test_vitest_test_suites()
     sync_ok = test_node_model_sync_module()
     unit_ok = test_testchat_unit_streaming()
     test_api_connectivity()

@@ -11,16 +11,17 @@ const modelService = require('../services/ModelService');
 const rulesService = require('../services/RulesService');
 const settingsService = require('../services/SettingsService');
 const healthService = require('../services/HealthService');
+const packageInfo = require('../../package.json');
 
 const router = express.Router();
 
 // 0. 基礎狀態檢查與歡迎頁面 (防止連線測試出現 Cannot GET /v1 錯誤)
 router.get('/', (req, res) => {
-  res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: "1.7.3" });
+  res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: packageInfo.version });
 });
 
 router.get('/v1', (req, res) => {
-  res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: "1.7.3" });
+  res.json({ status: "running", service: "NVIDIA NIM LLM Gateway", version: packageInfo.version });
 });
 
 // 管理端點登入：驗證前端傳來的 token 是否匹配

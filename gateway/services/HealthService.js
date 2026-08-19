@@ -2,6 +2,7 @@ const { getDb } = require('../../database/connection');
 const { apiKeys, modelsConfig, settings } = require('../../database');
 const { getTaiwanISOString } = require('../../utils/date');
 const eventManager = require('../sse/eventManager');
+const packageInfo = require('../../package.json');
 
 class HealthService {
   constructor() {
@@ -117,7 +118,7 @@ class HealthService {
     return {
       status: overallStatus,
       timestamp: getTaiwanISOString(),
-      version: '1.7.3',
+      version: packageInfo.version,
       keys: { total: allKeys.length, active: activeKeys.length },
       models: { active: activeModels.length },
       dependencies: {

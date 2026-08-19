@@ -1,11 +1,13 @@
 {
   "name": "nvidia-gateway-app",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "description": "Unified NVIDIA NIM LLM Gateway with GUI & Tray support",
   "main": "main.js",
   "scripts": {
     "dev": "node start-dev.js",
     "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
@@ -28,7 +30,9 @@
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^35.0.0",
     "electron-builder": "^24.13.3",
-    "vite": "^6.0.0"
+    "supertest": "^7.2.2",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.11"
   },
   "build": {
     "appId": "com.nvidia.gateway.app",
