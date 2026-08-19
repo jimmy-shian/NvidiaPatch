@@ -91,11 +91,26 @@ export default function Sidebar({
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
               <div style={{
                 width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                backgroundColor: gatewayHealth?.status === 'running' ? 'var(--status-active)' : (gatewayHealth === null ? 'var(--status-inactive)' : 'var(--status-cooldown)'),
-                boxShadow: gatewayHealth?.status === 'running' ? '0 0 6px var(--status-active-glow-start)' : 'none'
+                backgroundColor: (gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy') 
+                  ? 'var(--status-active)' 
+                  : (gatewayHealth === null ? 'var(--status-inactive)' : 'var(--status-cooldown)'),
+                boxShadow: (gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy') 
+                  ? '0 0 6px var(--status-active-glow-start)' 
+                  : 'none'
               }} />
-              <span style={{ fontSize: '12px', color: gatewayHealth?.status === 'running' ? 'var(--status-active)' : (gatewayHealth === null ? 'var(--status-inactive)' : 'var(--status-cooldown)'), fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {gatewayHealth?.status === 'running' ? t('dashboard.gatewayRunning') : (gatewayHealth === null ? t('dashboard.gatewayOffline') : t('dashboard.gatewayError'))}
+              <span style={{ 
+                fontSize: '12px', 
+                color: (gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy') 
+                  ? 'var(--status-active)' 
+                  : (gatewayHealth === null ? 'var(--status-inactive)' : 'var(--status-cooldown)'), 
+                fontWeight: '600', 
+                whiteSpace: 'nowrap', 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis' 
+              }}>
+                {(gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy' || gatewayHealth?.status === 'degraded') 
+                  ? t('dashboard.gatewayRunning') 
+                  : (gatewayHealth === null ? t('dashboard.gatewayOffline') : t('dashboard.gatewayError'))}
               </span>
             </div>
             <button
@@ -109,10 +124,10 @@ export default function Sidebar({
               <span>{isRestartingGateway ? t('dashboard.restarting') : t('dashboard.restart')}</span>
             </button>
           </div>
-          {gatewayHealth?.status === 'running' && (
+          {(gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy' || gatewayHealth?.status === 'degraded') && (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>{t('dashboard.uptime', { minutes: Math.round(gatewayHealth.uptime / 60) })}</span>
-              <span>{t('dashboard.keysStatus', { active: gatewayHealth.keys?.active, total: gatewayHealth.keys?.total })}</span>
+              <span>{t('dashboard.uptime', { minutes: Math.round((gatewayHealth.uptime ?? gatewayHealth.metrics?.uptime ?? 0) / 60) })}</span>
+              <span>{t('dashboard.keysStatus', { active: gatewayHealth.keys?.active ?? stats?.activeKeysCount ?? 0, total: gatewayHealth.keys?.total ?? stats?.keysCount ?? 0 })}</span>
             </div>
           )}
         </div>
