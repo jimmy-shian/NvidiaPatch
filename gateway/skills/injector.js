@@ -20,11 +20,11 @@
  */
 
 const iHaveAdhdZhTw = require('./i-have-adhd-zh-tw');
-const fanOutSubtasks = require('./fan-out-subtasks');
+const engineeringDiscipline = require('./engineering-discipline');
 
 const DEFAULT_SKILLS = [
   iHaveAdhdZhTw,
-  fanOutSubtasks
+  engineeringDiscipline
 ];
 
 const SYSTEM_ROLE = 'system';
