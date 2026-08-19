@@ -117,6 +117,7 @@ class HealthService {
 
     return {
       status: overallStatus,
+      uptime: metrics.uptime,
       timestamp: getTaiwanISOString(),
       version: packageInfo.version,
       keys: { total: allKeys.length, active: activeKeys.length },

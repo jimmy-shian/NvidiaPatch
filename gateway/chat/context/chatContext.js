@@ -20,7 +20,11 @@ const { getNextRequestSequence } = require('../../cooldown/modelCooldown');
 
 function createChatContext({ req, res, originalBody, activeConfig }) {
   const sequenceNum = getNextRequestSequence();
-  const requestId = req?.id || String(sequenceNum);
+  const requestId = String(sequenceNum);
+  if (req) {
+    req.id = requestId;
+    req.requestId = requestId;
+  }
   const requestStartedAt = Date.now();
   const stream = !!originalBody.stream;
 
