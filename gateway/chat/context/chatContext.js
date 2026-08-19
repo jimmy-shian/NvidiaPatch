@@ -6,10 +6,10 @@
  * 避免依賴外層閉包或全域變數。
  *
  * 包含：
- *  - requestId：全域遞增的請求序號
+ *  - requestId：全域請求序號或追蹤 ID
  *  - stream：是否為串流模式
  *  - isClientGone()：客戶端連線是否已中斷
- *  - addLog(...)：日誌快捷
+ *  - addLog(...)：日誌快捷（自動附加 requestId）
  *  - activeConfig：本次請求鎖定的設定快照
  *  - requestStartedAt：起始時間
  *  - fakeStreamController：假串流控制器（由 response/fakeStream 提供）
@@ -19,40 +19,46 @@ const { addLog } = require('../../logs/logger');
 const { getNextRequestSequence } = require('../../cooldown/modelCooldown');
 
 function createChatContext({ req, res, originalBody, activeConfig }) {
-  const requestId = getNextRequestSequence();
+  const sequenceNum = getNextRequestSequence();
+  const requestId = req?.id || String(sequenceNum);
   const requestStartedAt = Date.now();
   const stream = !!originalBody.stream;
 
   let clientDisconnected = false;
   let responseFinished = false;
 
+  const contextAddLog = (type, message) => {
+    addLog(type, message, { requestId });
+  };
+
   res.once('finish', () => {
     responseFinished = true;
     if (res.statusCode >= 400) {
-      addLog('error', `請求 #${requestId}：HTTP 回應完成但狀態碼為 ${res.statusCode}。`);
+      contextAddLog('error', `請求 #${requestId}：HTTP 回應完成但狀態碼為 ${res.statusCode}。`);
     }
   });
 
   res.once('close', () => {
     if (!responseFinished && !res.writableEnded) {
       clientDisconnected = true;
-      addLog('warning', `請求 #${requestId}：客戶端在 Gateway 回傳完成前中斷連線，停止後續模型調度。`);
+      contextAddLog('warning', `請求 #${requestId}：客戶端在 Gateway 回傳完成前中斷連線，停止後續模型調度。`);
     }
   });
 
   function isClientGone() {
-    return clientDisconnected || req.aborted || res.destroyed || res.writableEnded;
+    return clientDisconnected || req?.aborted || res?.destroyed || res?.writableEnded;
   }
 
   return {
     requestId,
+    sequenceNum,
     stream,
     requestStartedAt,
     activeConfig,
     isClientGone,
     responseFinished: () => responseFinished,
     fakeStreamController: null,
-    addLog,
+    addLog: contextAddLog,
     res,
     req,
     originalBody,

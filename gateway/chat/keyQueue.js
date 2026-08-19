@@ -24,7 +24,9 @@ function ensureKeyQueue() {
  */
 function reserveSlot(keyId, activeConfig) {
   const queue = ensureKeyQueue();
-  const concurrencyDelayMs = Number((activeConfig && activeConfig.KEY_CONCURRENCY_DELAY_MS) || 5000);
+  const concurrencyDelayMs = Number.isFinite(Number(activeConfig?.KEY_CONCURRENCY_DELAY_MS)) 
+    ? Number(activeConfig.KEY_CONCURRENCY_DELAY_MS) 
+    : 5000;
   const maxAllowedWaitMs = Math.max(Number((activeConfig && activeConfig.REQUEST_TIMEOUT_MS) || 60000), 60000);
 
   const now = Date.now();

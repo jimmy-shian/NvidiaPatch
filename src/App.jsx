@@ -1,9 +1,17 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import useGatewayApi from './hooks/useGatewayApi';
 import useRealtimeEvents from './hooks/useRealtimeEvents';
 import useNotifications from './hooks/useNotifications';
 import usePlaygroundChat from './hooks/usePlaygroundChat';
+
+import useKeysState from './hooks/useKeysState';
+import useModelsState from './hooks/useModelsState';
+import useRulesState from './hooks/useRulesState';
+import useSettingsState from './hooks/useSettingsState';
+import useLogsState from './hooks/useLogsState';
+import useStatsState from './hooks/useStatsState';
+
 import ConfirmationModal from './components/shared/ConfirmationModal';
 import RulesPanel from './components/Rules/RulesPanel';
 import Sidebar from './components/shared/Sidebar';
@@ -32,89 +40,18 @@ export default function App() {
   const GATEWAY_URL = getGatewayUrl();
 
   const [adminToken] = useState('bypass');
-
   const api = useGatewayApi(GATEWAY_URL, adminToken);
 
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [dashboardSubTab, setDashboardSubTab] = useState('overview');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'theme-dark');
-  const [settingsData, setSettingsData] = useState({
-    ROUND_DELAY_MS: 15000,
-    REQUEST_TIMEOUT_MS: 120000,
-    STREAM_READ_TIMEOUT_MS: 120000
-  });
-  const [tokenUsageData, setTokenUsageData] = useState({ stats: [], logs: [] });
-
-  const [keys, setKeys] = useState([]);
-  const [newKey, setNewKey] = useState('');
-  const [models, setModels] = useState([]);
-  const [activeModelGroup, setActiveModelGroup] = useState(1);
-  const [modelGroups, setModelGroups] = useState([]);
-  const [availableModels, setAvailableModels] = useState([]);
-  const [rules, setRules] = useState([]);
-  const [newRuleTitle, setNewRuleTitle] = useState('');
-  const [newRuleContent, setNewRuleContent] = useState('');
-  const [stats, setStats] = useState({
-    hourly: [],
-    keysCount: 0,
-    activeKeysCount: 0,
-    modelsCount: 0
-  });
-  const [logs, setLogs] = useState([]);
-  const sseLogsBufferRef = useRef([]);
-  const sseLogsTimeoutRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      if (sseLogsTimeoutRef.current) clearTimeout(sseLogsTimeoutRef.current);
-    };
-  }, []);
-
-  const [isSyncingModels, setIsSyncingModels] = useState(false);
-  const [isTestingKeys, setIsTestingKeys] = useState(false);
-  const [keyTestNotice, setKeyTestNotice] = useState(null);
-  const keyTestNoticeTimerRef = useRef(null);
+  const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [copiedId, setCopiedId] = useState(null);
   const [apiError, setApiError] = useState('');
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [tempSettings, setTempSettings] = useState(null);
-
-  const [lastSyncTime, setLastSyncTime] = useState(null);
-  const [lastSyncSource, setLastSyncSource] = useState(null);
-  const [expectedModelCount, setExpectedModelCount] = useState(null);
-  const [lastParsedModelCount, setLastParsedModelCount] = useState(null);
-  const [lastSavedModelCount, setLastSavedModelCount] = useState(null);
-  const [syncNotice, setSyncNotice] = useState(null);
-  const syncNoticeTimerRef = useRef(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('ALL');
-
-  const {
-    selectedTestModel,
-    setSelectedTestModel,
-    chatHistory,
-    setChatHistory,
-    chatInput,
-    setChatInput,
-    isChatting,
-    selectedSkillIds,
-    setSelectedSkillIds,
-    handleSendTestMessage
-  } = usePlaygroundChat(GATEWAY_URL, adminToken);
-
-  const [dashboardSubTab, setDashboardSubTab] = useState('overview');
-  const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
-  const [hoveredHourlyIndex, setHoveredHourlyIndex] = useState(null);
-
-  const [expandedTokenLogId, setExpandedTokenLogId] = useState(null);
-  const [expandedTokenLogTabs, setExpandedTokenLogTabs] = useState({});
-
   const [gatewayHealth, setGatewayHealth] = useState(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   const [restartNotice, setRestartNotice] = useState(null);
   const restartNoticeTimerRef = useRef(null);
-  const fetchDataPromiseRef = useRef(null);
-  const lastFetchStartedAtRef = useRef(0);
-  const FETCH_DATA_DEDUPE_MS = 1500;
 
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
@@ -147,20 +84,22 @@ export default function App() {
     });
   }, []);
 
-  const { notifyAllKeysDown } = useNotifications();
+  const {
+    selectedTestModel,
+    setSelectedTestModel,
+    chatHistory,
+    setChatHistory,
+    chatInput,
+    setChatInput,
+    isChatting,
+    selectedSkillIds,
+    setSelectedSkillIds,
+    handleSendTestMessage
+  } = usePlaygroundChat(GATEWAY_URL, adminToken);
 
-  useEffect(() => {
-    document.documentElement.className = theme;
-    localStorage.setItem('theme', theme);
-  }, [theme]);
-
-  useEffect(() => {
-    return () => {
-      if (syncNoticeTimerRef.current) clearTimeout(syncNoticeTimerRef.current);
-      if (keyTestNoticeTimerRef.current) clearTimeout(keyTestNoticeTimerRef.current);
-      if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
-    };
-  }, []);
+  const fetchDataPromiseRef = useRef(null);
+  const lastFetchStartedAtRef = useRef(0);
+  const FETCH_DATA_DEDUPE_MS = 1500;
 
   const fetchData = useCallback(async (options = {}) => {
     if (fetchDataPromiseRef.current) {
@@ -176,15 +115,26 @@ export default function App() {
     const runFetch = async () => {
       try {
         const promises = [
-          api.fetchKeys().then(data => setKeys(data)).catch(err => console.error('keys:', err)),
-          api.fetchModels().then(data => setModels(data)).catch(err => console.error('models:', err)),
-          api.fetchModelGroups().then(data => { setActiveModelGroup(data.activeGroup || 1); setModelGroups(data.groups || []); }).catch(err => console.error('modelGroups:', err)),
-          api.fetchAvailableModels().then(data => { setAvailableModels(data.models || []); setLastSyncTime(data.lastSyncTime || null); setLastSyncSource(data.lastSyncSource || null); setExpectedModelCount(data.expectedCount || null); setLastParsedModelCount(data.parsedCount ?? null); setLastSavedModelCount(data.savedCount ?? null); if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id); }).catch(err => console.error('availModels:', err)),
-          api.fetchRules().then(data => setRules(data)).catch(err => console.error('rules:', err)),
-          api.fetchSettings().then(data => setSettingsData(data)).catch(err => console.error('settings:', err)),
-          api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
-          api.fetchLogs().then(data => setLogs(data)).catch(err => console.error('logs:', err)),
-          api.fetchStats().then(data => setStats(data)).catch(err => console.error('stats:', err)),
+          api.fetchKeys().then(data => keysState.setKeys(data || [])).catch(err => console.error('keys:', err)),
+          api.fetchModels().then(data => modelsState.setModels(data || [])).catch(err => console.error('models:', err)),
+          api.fetchModelGroups().then(data => {
+            modelsState.setActiveModelGroup(data.activeGroup || 1);
+            modelsState.setModelGroups(data.groups || []);
+          }).catch(err => console.error('modelGroups:', err)),
+          api.fetchAvailableModels().then(data => {
+            modelsState.setAvailableModels(data.models || []);
+            modelsState.setLastSyncTime(data.lastSyncTime || null);
+            modelsState.setLastSyncSource(data.lastSyncSource || null);
+            modelsState.setExpectedModelCount(data.expectedCount || null);
+            modelsState.setLastParsedModelCount(data.parsedCount ?? null);
+            modelsState.setLastSavedModelCount(data.savedCount ?? null);
+            if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id);
+          }).catch(err => console.error('availModels:', err)),
+          api.fetchRules().then(data => rulesState.setRules(data || [])).catch(err => console.error('rules:', err)),
+          api.fetchSettings().then(data => settingsState.setSettingsData(data)).catch(err => console.error('settings:', err)),
+          api.fetchTokenUsage().then(data => statsState.setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
+          api.fetchLogs().then(data => logsState.setLogs(data || [])).catch(err => console.error('logs:', err)),
+          api.fetchStats().then(data => statsState.setStats(data)).catch(err => console.error('stats:', err)),
         ];
         await Promise.all(promises);
         setApiError('');
@@ -199,6 +149,27 @@ export default function App() {
     return fetchDataPromiseRef.current;
   }, [api, setSelectedTestModel]);
 
+  // Dedicated modular state hooks
+  const keysState = useKeysState(api, fetchData, showConfirm);
+  const modelsState = useModelsState(api, fetchData, setSelectedTestModel);
+  const rulesState = useRulesState(api, fetchData);
+  const settingsState = useSettingsState(api);
+  const logsState = useLogsState(api);
+  const statsState = useStatsState(api, showConfirm);
+
+  const { notifyAllKeysDown } = useNotifications();
+
+  useEffect(() => {
+    document.documentElement.className = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    return () => {
+      if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     if (adminToken) {
       fetchData();
@@ -207,9 +178,9 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'keys') {
-      api.fetchKeys().then(data => setKeys(data)).catch(() => {});
+      keysState.loadKeys();
     }
-  }, [activeTab, api]);
+  }, [activeTab, keysState.loadKeys]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -217,24 +188,6 @@ export default function App() {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
-
-  const handleSyncModelsSilently = useCallback(async () => {
-    setIsSyncingModels(true);
-    try {
-      const data = await api.syncModels();
-      if (data) fetchData();
-    } catch (err) {
-      console.error('Background model sync error:', err);
-    } finally {
-      setIsSyncingModels(false);
-    }
-  }, [api, fetchData]);
-
-  useEffect(() => {
-    if (activeTab === 'models' && availableModels.length === 0 && !isSyncingModels) {
-      handleSyncModelsSilently();
-    }
-  }, [activeTab, availableModels.length, isSyncingModels, handleSyncModelsSilently]);
 
   const checkGatewayHealth = useCallback(async () => {
     try {
@@ -257,31 +210,19 @@ export default function App() {
   }, [checkGatewayHealth, fetchData]);
 
   useEffect(() => {
-    if (keys.length > 0 && keys.every(k => k.status === 'inactive' || k.status === 'cooldown')) {
+    if (keysState.keys.length > 0 && keysState.keys.every(k => k.status === 'inactive' || k.status === 'cooldown')) {
       notifyAllKeysDown();
     }
-  }, [keys, notifyAllKeysDown]);
+  }, [keysState.keys, notifyAllKeysDown]);
 
   const sseConnected = useRealtimeEvents(GATEWAY_URL, adminToken, {
-    onLogs: (data) => {
-      sseLogsBufferRef.current.push(data);
-      if (!sseLogsTimeoutRef.current) {
-        sseLogsTimeoutRef.current = setTimeout(() => {
-          setLogs(prev => {
-            const updated = [...prev, ...sseLogsBufferRef.current];
-            sseLogsBufferRef.current = [];
-            return updated.length > 100 ? updated.slice(-100) : updated;
-          });
-          sseLogsTimeoutRef.current = null;
-        }, 150);
-      }
-    },
-    onStats: (data) => { setStats(data); },
+    onLogs: (data) => { logsState.handleSseLog(data); },
+    onStats: (data) => { statsState.setStats(data); },
     onKeys: (data) => { if (data.action !== 'test') fetchData(); },
     onModels: () => { fetchData(); },
     onRules: () => { fetchData(); },
-    onSettings: (data) => { setSettingsData(data); },
-    onTokenUsage: () => { api.fetchTokenUsage().then(data => setTokenUsageData(data)).catch(() => {}); },
+    onSettings: (data) => { settingsState.setSettingsData(data); },
+    onTokenUsage: () => { statsState.loadTokenUsage(); },
     onHealth: (data) => { setGatewayHealth(data); },
     onReconnect: () => { fetchData(); }
   });
@@ -302,264 +243,6 @@ export default function App() {
       setGatewayHealth(null);
     }
   }, [sseConnected]);
-
-  const showSyncNotice = (type, message) => {
-    if (syncNoticeTimerRef.current) clearTimeout(syncNoticeTimerRef.current);
-    setSyncNotice({ type, message, createdAt: Date.now() });
-    syncNoticeTimerRef.current = setTimeout(() => {
-      setSyncNotice(null);
-      syncNoticeTimerRef.current = null;
-    }, type === 'error' ? 10000 : 7000);
-  };
-
-  const showKeyTestNotice = (type, message) => {
-    if (keyTestNoticeTimerRef.current) clearTimeout(keyTestNoticeTimerRef.current);
-    setKeyTestNotice({ type, message, createdAt: Date.now() });
-    keyTestNoticeTimerRef.current = setTimeout(() => {
-      setKeyTestNotice(null);
-      keyTestNoticeTimerRef.current = null;
-    }, type === 'error' ? 10000 : 7000);
-  };
-
-  const formatModelSyncSummary = ({ parsedCount, savedCount, expectedCount }) => {
-    const parts = [];
-    if (Number.isFinite(Number(parsedCount))) parts.push(`${t('models.parsed')}: ${Number(parsedCount)}`);
-    if (Number.isFinite(Number(savedCount))) parts.push(`${t('models.saved')}: ${Number(savedCount)}`);
-    if (Number.isFinite(Number(expectedCount))) parts.push(`${t('models.expected')}: ${Number(expectedCount)}`);
-    return parts.join(' | ') || t('models.syncComplete');
-  };
-
-  const handleAddKey = async (e) => {
-    e.preventDefault();
-    if (!newKey.trim()) return;
-    try {
-      await api.addKey(newKey.trim());
-      setNewKey('');
-      fetchData();
-    } catch (err) {
-      alert(t('keys.addFailed', { error: err.message }));
-    }
-  };
-
-  const handleDeleteKey = async (id) => {
-    const ok = await showConfirm({
-      title: t('common.confirm'),
-      message: t('keys.deleteConfirm'),
-      type: 'danger'
-    });
-    if (!ok) return;
-    try {
-      await api.deleteKey(id);
-      fetchData();
-    } catch (err) {
-      alert('Delete key error');
-    }
-  };
-
-  const handleTestKeys = async () => {
-    setIsTestingKeys(true);
-    showKeyTestNotice('info', t('keys.testing'));
-    try {
-      const results = await api.testKeys();
-      const failures = results.filter(r => !r.success);
-      const successCount = results.length - failures.length;
-      if (failures.length > 0) {
-        showKeyTestNotice(
-          'error',
-          `${successCount}/${results.length} OK, ${failures.length} failed.`
-        );
-      } else {
-        showKeyTestNotice('success', `${results.length}/${results.length} keys healthy.`);
-      }
-      fetchData();
-    } catch (err) {
-      showKeyTestNotice('error', `Test error: ${err.message}`);
-    } finally {
-      setIsTestingKeys(false);
-    }
-  };
-
-  const handleSyncModels = async () => {
-    setIsSyncingModels(true);
-    showSyncNotice('info', t('models.syncing'));
-    try {
-      const data = await api.syncModels();
-      setLastParsedModelCount(data.parsedCount ?? null);
-      setLastSavedModelCount(data.savedCount ?? data.count ?? null);
-      setExpectedModelCount(data.expectedCount || null);
-      setLastSyncSource(data.source || null);
-      showSyncNotice('success', `Sync OK: ${formatModelSyncSummary({
-        parsedCount: data.parsedCount,
-        savedCount: data.savedCount ?? data.count,
-        expectedCount: data.expectedCount,
-        source: data.source
-      })}`);
-      fetchData();
-    } catch (err) {
-      showSyncNotice('error', `Sync failed: ${err.message}`);
-    } finally {
-      setIsSyncingModels(false);
-    }
-  };
-
-  const saveModelPriorities = async (modelIds, groupId = activeModelGroup) => {
-    try {
-      await api.saveModelPriorities(modelIds, groupId);
-      fetchData();
-    } catch (err) {
-      console.error('Save model priorities failed:', err);
-      throw err;
-    }
-  };
-
-  const buildModelsFromOrder = useCallback((modelIds) => {
-    return modelIds.map((modelId, index) => {
-      const existing = models.find(m => m.model_id === modelId);
-      return {
-        ...(existing || {}),
-        id: existing?.id || modelId,
-        model_id: modelId,
-        priority: index + 1
-      };
-    });
-  }, [models]);
-
-  const playgroundModels = useMemo(() => {
-    const order = models.map(m => m.model_id);
-    return [...availableModels].sort((a, b) => {
-      const aIdx = order.indexOf(a.id);
-      const bIdx = order.indexOf(b.id);
-      if (aIdx === -1 && bIdx === -1) return 0;
-      if (aIdx === -1) return 1;
-      if (bIdx === -1) return -1;
-      return aIdx - bIdx;
-    });
-  }, [availableModels, models]);
-
-  const handleSwitchModelGroup = async (groupId) => {
-    if (groupId === activeModelGroup) return;
-    setActiveModelGroup(groupId);
-    try {
-      await api.setActiveModelGroup(groupId);
-      const [modelsData, groupsData] = await Promise.all([
-        api.fetchModels().catch(err => { console.error('fetchModels err:', err); return null; }),
-        api.fetchModelGroups().catch(err => { console.error('fetchModelGroups err:', err); return null; })
-      ]);
-      if (modelsData) setModels(modelsData);
-      if (groupsData) setModelGroups(groupsData.groups || []);
-    } catch (err) {
-      alert(`Switch group failed: ${err.message}`);
-      fetchData();
-    }
-  };
-
-  const handleMovePriority = async (index, direction) => {
-    const newModels = [...models];
-    if (direction === 'up' && index > 0) {
-      const temp = newModels[index];
-      newModels[index] = newModels[index - 1];
-      newModels[index - 1] = temp;
-    } else if (direction === 'down' && index < newModels.length - 1) {
-      const temp = newModels[index];
-      newModels[index] = newModels[index + 1];
-      newModels[index + 1] = temp;
-    }
-    const order = newModels.map(m => m.model_id);
-    setModels(buildModelsFromOrder(order));
-    try {
-      await saveModelPriorities(order);
-    } catch (err) {
-      fetchData();
-    }
-  };
-
-  const handleRemoveModelFromPriority = async (modelId) => {
-    const order = models.map(m => m.model_id).filter(id => id !== modelId);
-    setModels(buildModelsFromOrder(order));
-    try {
-      await saveModelPriorities(order);
-    } catch (err) {
-      fetchData();
-    }
-  };
-
-  const handleAddModelToPriority = async (modelId) => {
-    if (models.some(m => m.model_id === modelId)) return;
-    const order = [...models.map(m => m.model_id), modelId];
-    setModels(buildModelsFromOrder(order));
-    try {
-      await saveModelPriorities(order);
-    } catch (err) {
-      fetchData();
-    }
-  };
-
-  const handleAddRule = async (e) => {
-    e.preventDefault();
-    if (!newRuleTitle.trim() || !newRuleContent.trim()) return;
-    try {
-      await api.addRule(newRuleTitle.trim(), newRuleContent.trim());
-      setNewRuleTitle('');
-      setNewRuleContent('');
-      fetchData({ force: true });
-      if (window.electronAPI?.notifyRulesUpdated) {
-        window.electronAPI.notifyRulesUpdated();
-      }
-    } catch (err) {
-      alert('Add rule error');
-    }
-  };
-
-  const handleDeleteRule = async (id) => {
-    try {
-      await api.deleteRule(id);
-      setRules(prev => prev.filter(rule => rule.id !== id));
-      fetchData({ force: true });
-      if (window.electronAPI?.notifyRulesUpdated) {
-        window.electronAPI.notifyRulesUpdated();
-      }
-    } catch (err) {
-      alert('Delete rule error');
-    }
-  };
-
-  const handleUpdateRule = async (id, title, content) => {
-    try {
-      await api.updateRule(id, title, content);
-      setRules(prev => prev.map(rule => rule.id === id ? { ...rule, title, content } : rule));
-      fetchData({ force: true });
-      if (window.electronAPI?.notifyRulesUpdated) {
-        window.electronAPI.notifyRulesUpdated();
-      }
-    } catch (err) {
-      alert('Update rule error');
-    }
-  };
-
-  const saveSettings = async (updated) => {
-    try {
-      const data = await api.saveSettings(updated);
-      setSettingsData(data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const clearTokenUsage = async () => {
-    const ok = await showConfirm({
-      title: t('common.confirm'),
-      message: t('common.confirm'),
-      type: 'danger'
-    });
-    if (!ok) return;
-    try {
-      await api.clearTokenUsage();
-      const data = await api.fetchTokenUsage();
-      setTokenUsageData(data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   const showRestartNotice = useCallback((type, message) => {
     if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
@@ -593,8 +276,8 @@ export default function App() {
       while (attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 150));
         const health = await checkGatewayHealth();
-        if (health && health.status === 'running') {
-          showRestartNotice('success', `Gateway restarted! Uptime: ${Math.round(health.uptime)}s`);
+        if (health && (health.status === 'running' || health.status === 'healthy' || health.status === 'degraded')) {
+          showRestartNotice('success', `Gateway restarted!`);
           fetchData();
           break;
         }
@@ -634,34 +317,22 @@ export default function App() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const calculateSuccessRate = () => {
-    if (stats.hourly.length === 0) return '100%';
-    const totalRequests = stats.hourly.reduce((acc, curr) => acc + curr.request_count, 0);
-    const totalSuccess = stats.hourly.reduce((acc, curr) => acc + curr.success_count, 0);
-    if (totalRequests === 0) return '100%';
-    return `${Math.round((totalSuccess / totalRequests) * 100)}%`;
-  };
-
-  const getTotalRequests = () => {
-    return stats.hourly.reduce((acc, curr) => acc + curr.request_count, 0);
-  };
-
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        stats={stats}
-        rulesCount={rules.length}
+        stats={statsState.stats}
+        rulesCount={rulesState.rules.length}
         gatewayHealth={gatewayHealth}
         isRestartingGateway={isRestartingGateway}
         handleRestartGateway={handleRestartGateway}
         restartNotice={restartNotice}
         theme={theme}
         setTheme={setTheme}
-        settingsData={settingsData}
-        setTempSettings={setTempSettings}
-        setIsSettingsModalOpen={setIsSettingsModalOpen}
+        settingsData={settingsState.settingsData}
+        setTempSettings={settingsState.setTempSettings}
+        setIsSettingsModalOpen={settingsState.setIsSettingsModalOpen}
         handleRestartApp={handleRestartApp}
         apiError={apiError}
       />
@@ -705,22 +376,22 @@ export default function App() {
 
             {dashboardSubTab === 'overview' && (
               <OverviewPanel
-                stats={stats}
-                models={models}
-                activeModelGroup={activeModelGroup}
+                stats={statsState.stats}
+                models={modelsState.models}
+                activeModelGroup={modelsState.activeModelGroup}
                 copiedId={copiedId}
                 copyToClipboard={copyToClipboard}
-                getTotalRequests={getTotalRequests}
-                calculateSuccessRate={calculateSuccessRate}
+                getTotalRequests={statsState.getTotalRequests}
+                calculateSuccessRate={statsState.calculateSuccessRate}
                 getGatewayUrl={getGatewayUrl}
-                hoveredHourlyIndex={hoveredHourlyIndex}
-                setHoveredHourlyIndex={setHoveredHourlyIndex}
+                hoveredHourlyIndex={statsState.hoveredHourlyIndex}
+                setHoveredHourlyIndex={statsState.setHoveredHourlyIndex}
               />
             )}
 
             {dashboardSubTab === 'logs' && (
               <LogsPanel
-                logs={logs}
+                logs={logsState.logs}
                 fetchData={fetchData}
                 theme={theme}
               />
@@ -728,15 +399,15 @@ export default function App() {
 
             {dashboardSubTab === 'tokens' && (
               <TokensPanel
-                tokenUsageData={tokenUsageData}
+                tokenUsageData={statsState.tokenUsageData}
                 api={api}
-                setTokenUsageData={setTokenUsageData}
-                clearTokenUsage={clearTokenUsage}
-                availableModels={availableModels}
-                expandedTokenLogId={expandedTokenLogId}
-                setExpandedTokenLogId={setExpandedTokenLogId}
-                expandedTokenLogTabs={expandedTokenLogTabs}
-                setExpandedTokenLogTabs={setExpandedTokenLogTabs}
+                setTokenUsageData={statsState.setTokenUsageData}
+                clearTokenUsage={statsState.clearTokenUsage}
+                availableModels={modelsState.availableModels}
+                expandedTokenLogId={statsState.expandedTokenLogId}
+                setExpandedTokenLogId={statsState.setExpandedTokenLogId}
+                expandedTokenLogTabs={statsState.expandedTokenLogTabs}
+                setExpandedTokenLogTabs={statsState.setExpandedTokenLogTabs}
               />
             )}
           </div>
@@ -744,49 +415,49 @@ export default function App() {
 
         {activeTab === 'keys' && (
           <KeysPanel
-            keys={keys}
-            newKey={newKey}
-            setNewKey={setNewKey}
-            keyTestNotice={keyTestNotice}
-            isTestingKeys={isTestingKeys}
+            keys={keysState.keys}
+            newKey={keysState.newKey}
+            setNewKey={keysState.setNewKey}
+            keyTestNotice={keysState.keyTestNotice}
+            isTestingKeys={keysState.isTestingKeys}
             currentTimeMs={currentTimeMs}
-            handleTestKeys={handleTestKeys}
-            handleAddKey={handleAddKey}
-            handleDeleteKey={handleDeleteKey}
+            handleTestKeys={keysState.handleTestKeys}
+            handleAddKey={keysState.handleAddKey}
+            handleDeleteKey={keysState.handleDeleteKey}
           />
         )}
 
         {activeTab === 'models' && (
           <ModelsPanel
-            models={models}
-            setModels={setModels}
-            modelGroups={modelGroups}
-            activeModelGroup={activeModelGroup}
-            availableModels={availableModels}
-            lastSyncTime={lastSyncTime}
-            lastSyncSource={lastSyncSource}
-            expectedModelCount={expectedModelCount}
-            lastParsedModelCount={lastParsedModelCount}
-            lastSavedModelCount={lastSavedModelCount}
-            isSyncingModels={isSyncingModels}
-            syncNotice={syncNotice}
-            searchTerm={searchTerm}
-            setSearchTerm={setSearchTerm}
-            selectedCategory={selectedCategory}
-            setSelectedCategory={setSelectedCategory}
-            handleSyncModels={handleSyncModels}
-            handleSwitchModelGroup={handleSwitchModelGroup}
-            handleMovePriority={handleMovePriority}
-            handleRemoveModelFromPriority={handleRemoveModelFromPriority}
-            handleAddModelToPriority={handleAddModelToPriority}
-            saveModelPriorities={saveModelPriorities}
-            buildModelsFromOrder={buildModelsFromOrder}
+            models={modelsState.models}
+            setModels={modelsState.setModels}
+            modelGroups={modelsState.modelGroups}
+            activeModelGroup={modelsState.activeModelGroup}
+            availableModels={modelsState.availableModels}
+            lastSyncTime={modelsState.lastSyncTime}
+            lastSyncSource={modelsState.lastSyncSource}
+            expectedModelCount={modelsState.expectedModelCount}
+            lastParsedModelCount={modelsState.lastParsedModelCount}
+            lastSavedModelCount={modelsState.lastSavedModelCount}
+            isSyncingModels={modelsState.isSyncingModels}
+            syncNotice={modelsState.syncNotice}
+            searchTerm={modelsState.searchTerm}
+            setSearchTerm={modelsState.setSearchTerm}
+            selectedCategory={modelsState.selectedCategory}
+            setSelectedCategory={modelsState.setSelectedCategory}
+            handleSyncModels={modelsState.handleSyncModels}
+            handleSwitchModelGroup={modelsState.handleSwitchModelGroup}
+            handleMovePriority={modelsState.handleMovePriority}
+            handleRemoveModelFromPriority={modelsState.handleRemoveModelFromPriority}
+            handleAddModelToPriority={modelsState.handleAddModelToPriority}
+            saveModelPriorities={modelsState.saveModelPriorities}
+            buildModelsFromOrder={modelsState.buildModelsFromOrder}
           />
         )}
 
         {activeTab === 'playground' && (
           <PlaygroundPanel
-            availableModels={playgroundModels}
+            availableModels={modelsState.playgroundModels}
             selectedTestModel={selectedTestModel}
             setSelectedTestModel={setSelectedTestModel}
             chatHistory={chatHistory}
@@ -802,14 +473,14 @@ export default function App() {
 
         {activeTab === 'rules' && (
           <RulesPanel
-            rules={rules}
-            newRuleTitle={newRuleTitle}
-            setNewRuleTitle={setNewRuleTitle}
-            newRuleContent={newRuleContent}
-            setNewRuleContent={setNewRuleContent}
-            onAddRule={handleAddRule}
-            onDeleteRule={handleDeleteRule}
-            onUpdateRule={handleUpdateRule}
+            rules={rulesState.rules}
+            newRuleTitle={rulesState.newRuleTitle}
+            setNewRuleTitle={rulesState.setNewRuleTitle}
+            newRuleContent={rulesState.newRuleContent}
+            setNewRuleContent={rulesState.setNewRuleContent}
+            onAddRule={rulesState.handleAddRule}
+            onDeleteRule={rulesState.handleDeleteRule}
+            onUpdateRule={rulesState.handleUpdateRule}
             onCopy={copyToClipboard}
             copiedId={copiedId}
           />
@@ -817,12 +488,12 @@ export default function App() {
       </div>
 
       <SettingsModal
-        isOpen={isSettingsModalOpen}
-        tempSettings={tempSettings}
-        setTempSettings={setTempSettings}
-        settingsData={settingsData}
-        setIsSettingsModalOpen={setIsSettingsModalOpen}
-        saveSettings={saveSettings}
+        isOpen={settingsState.isSettingsModalOpen}
+        tempSettings={settingsState.tempSettings}
+        setTempSettings={settingsState.setTempSettings}
+        settingsData={settingsState.settingsData}
+        setIsSettingsModalOpen={settingsState.setIsSettingsModalOpen}
+        saveSettings={settingsState.saveSettings}
       />
 
       <ConfirmationModal

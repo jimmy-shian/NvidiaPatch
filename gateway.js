@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const requestIdMiddleware = require('./gateway/middleware/requestId');
+const errorHandler = require('./gateway/middleware/errorHandler');
 
 try {
   process.stdout.setDefaultEncoding('utf8');
@@ -12,6 +14,7 @@ function createGatewayApp() {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '1gb' }));
+  app.use(requestIdMiddleware);
 
   // Routers
   const adminRouter = require('./gateway/routes/adminRoutes');
@@ -19,6 +22,9 @@ function createGatewayApp() {
 
   app.use(adminRouter);
   app.use(chatRouter);
+
+  // Global Error Handler
+  app.use(errorHandler);
 
   return app;
 }
