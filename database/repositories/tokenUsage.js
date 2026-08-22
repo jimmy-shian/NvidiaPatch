@@ -1,63 +1,98 @@
-const { getDb } = require('../connection');
 const { getTaiwanISOString } = require('../../utils/date');
 
-const tokenUsage = {
-  addRecord(requestId, modelId, promptTokens, completionTokens, requestBody, responseContent) {
-    const db = getDb();
-    const timestamp = getTaiwanISOString();
-    const total = (promptTokens || 0) + (completionTokens || 0);
-    const bodyStr = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody || {});
-    const respStr = responseContent || '';
-    db.prepare(`
-      INSERT INTO token_usage (request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body, response_content)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(requestId || null, timestamp, modelId, promptTokens || 0, completionTokens || 0, total, bodyStr, respStr);
+// Process-level in-memory Ring Buffer for volatile token usage history
+const MAX_TOKEN_RECORDS = 50;
 
-    try {
-      db.exec(`
-        UPDATE token_usage 
-        SET request_body = '', response_content = '' 
-        WHERE id NOT IN (
-          SELECT id FROM token_usage 
-          ORDER BY id DESC 
-          LIMIT 50
-        )
-      `);
-    } catch (err) {
-      console.error('Failed to prune old token_usage prompt contents:', err);
+// Ring buffer of recent token usage logs (most recent at index 0)
+const tokenRecords = [];
+let nextRecordId = 1;
+
+// Map: model_id -> { model_id, total_prompt_tokens, total_completion_tokens, total_total_tokens, request_count }
+const modelStatsMap = new Map();
+
+const tokenUsage = {
+  /**
+   * 新增 Token 用量紀錄 — 100% 純記憶體 Ring Buffer，0 次磁碟寫入與修剪
+   */
+  addRecord(requestId, modelId, promptTokens, completionTokens, requestBody, responseContent) {
+    const timestamp = getTaiwanISOString();
+    const pTokens = Number(promptTokens) || 0;
+    const cTokens = Number(completionTokens) || 0;
+    const total = pTokens + cTokens;
+    const bodyStr = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody || {});
+    const respStr = typeof responseContent === 'string' ? responseContent : String(responseContent || '');
+    const id = nextRecordId++;
+
+    const newRecord = {
+      id,
+      request_id: requestId || null,
+      timestamp,
+      model_id: modelId,
+      prompt_tokens: pTokens,
+      completion_tokens: cTokens,
+      total_tokens: total,
+      request_body: bodyStr,
+      response_content: respStr
+    };
+
+    // 存入 Ring Buffer (最新在最前)
+    tokenRecords.unshift(newRecord);
+    if (tokenRecords.length > MAX_TOKEN_RECORDS) {
+      tokenRecords.length = MAX_TOKEN_RECORDS;
     }
+
+    // 同步 O(1) 累加各模型統計
+    let stat = modelStatsMap.get(modelId);
+    if (!stat) {
+      stat = {
+        model_id: modelId,
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        total_total_tokens: 0,
+        request_count: 0
+      };
+      modelStatsMap.set(modelId, stat);
+    }
+    stat.total_prompt_tokens += pTokens;
+    stat.total_completion_tokens += cTokens;
+    stat.total_total_tokens += total;
+    stat.request_count += 1;
   },
+
+  /**
+   * 取得各模型的 Token 用量統計（以 total_tokens 降序排列）
+   */
   getStats() {
-    return getDb().prepare(`
-      SELECT 
-        model_id,
-        SUM(prompt_tokens) as total_prompt_tokens,
-        SUM(completion_tokens) as total_completion_tokens,
-        SUM(total_tokens) as total_total_tokens,
-        COUNT(id) as request_count
-      FROM token_usage
-      GROUP BY model_id
-      ORDER BY total_total_tokens DESC
-    `).all();
+    const list = Array.from(modelStatsMap.values()).map(s => ({ ...s }));
+    list.sort((a, b) => (b.total_total_tokens || 0) - (a.total_total_tokens || 0));
+    return list;
   },
+
+  /**
+   * 取得最近的 Token 用量紀錄
+   */
   getLogs(limit = 100) {
-    return getDb().prepare(`
-      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body, response_content
-      FROM token_usage
-      ORDER BY id DESC
-      LIMIT ?
-    `).all(limit);
+    const targetLimit = Number(limit) || 100;
+    return tokenRecords.slice(0, targetLimit).map(r => ({ ...r }));
   },
+
+  /**
+   * 依 ID 取得單筆 Token 用量詳細內容
+   */
   getDetail(id) {
-    return getDb().prepare(`
-      SELECT id, request_id, timestamp, model_id, prompt_tokens, completion_tokens, total_tokens, request_body, response_content
-      FROM token_usage
-      WHERE id = ?
-    `).get(id);
+    const targetId = Number(id);
+    const item = tokenRecords.find(r => r.id === targetId);
+    return item ? { ...item } : null;
   },
+
+  /**
+   * 清空記憶體中所有 Token 紀錄與模型計數
+   */
   clear() {
-    getDb().exec("DELETE FROM token_usage");
+    tokenRecords.length = 0;
+    modelStatsMap.clear();
   }
 };
 
 module.exports = tokenUsage;
+

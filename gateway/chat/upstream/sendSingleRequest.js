@@ -23,8 +23,6 @@ const { addLog } = require('../../logs/logger');
 const { reserveSlot, waitForSlot } = require('../keyQueue');
 const { readTextSafely } = require('../utils/readTextSafely');
 
-const NVIDIA_BASE_URL = process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
-
 function isContextLimitError(errText) {
   const lower = String(errText || '').toLowerCase();
   return lower.includes('context length')
@@ -125,8 +123,10 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
   };
   res.once('close', abortOnClientDisconnect);
 
+  const targetBaseUrl = activeConfig?.NVIDIA_API_URL || process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+
   try {
-    const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${targetBaseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

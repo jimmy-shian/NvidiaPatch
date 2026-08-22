@@ -2,10 +2,18 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const { setDb, getDb } = require('./connection');
 
+// Repositories & In-Memory Stores
+const apiKeys = require('./repositories/apiKeys');
+const modelsConfig = require('./repositories/modelsConfig');
+const rules = require('./repositories/rules');
+const stats = require('./repositories/stats');
+const settings = require('./repositories/settings');
+const tokenUsage = require('./repositories/tokenUsage');
+
 function initDatabase(dbPath) {
   try {
-    const db = getDb();
-    if (db) return db;
+    const existing = getDb();
+    if (existing) return existing;
   } catch (_) {}
   
   const resolvedPath = dbPath || path.join(__dirname, '..', 'gateway.db');
@@ -14,9 +22,32 @@ function initDatabase(dbPath) {
   const db = new DatabaseSync(resolvedPath);
   setDb(db);
   
-  // Run schema migrations
+  // 1. 配置 SQLite 效能與硬體保護 PRAGMA
+  try {
+    db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA busy_timeout = 5000;
+      PRAGMA temp_store = MEMORY;
+      PRAGMA cache_size = -16384;
+    `);
+  } catch (pragmaErr) {
+    console.error('Failed to set SQLite PRAGMAs:', pragmaErr.message);
+  }
+
+  // 2. 執行 Schema 遷移
   const { runMigrations } = require('./schema/schemaManager');
   runMigrations(db);
+
+  // 3. 啟動時一次性預載持久配置至記憶體快取（RAM Cache）
+  settings.refreshCache();
+  apiKeys.refreshCache();
+  modelsConfig.refreshCache();
+  rules.refreshCache();
+
+  // 4. 重設暫態 Runtime 狀態（重啟清空）
+  stats.reset();
+  tokenUsage.clear();
   
   return db;
 }
@@ -35,14 +66,6 @@ function closeDatabase() {
   } catch (_) {}
 }
 
-// Repositories
-const apiKeys = require('./repositories/apiKeys');
-const modelsConfig = require('./repositories/modelsConfig');
-const rules = require('./repositories/rules');
-const stats = require('./repositories/stats');
-const settings = require('./repositories/settings');
-const tokenUsage = require('./repositories/tokenUsage');
-
 module.exports = {
   initDatabase,
   closeDatabase,
@@ -54,3 +77,4 @@ module.exports = {
   settings,
   tokenUsage
 };
+

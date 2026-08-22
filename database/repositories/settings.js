@@ -1,90 +1,122 @@
 const { getDb } = require('../connection');
 
+let cachedSettings = null;
+
+function parseMetadataRows(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    map.set(r.key, r.value);
+  }
+
+  return {
+    ROUND_DELAY_MS: Number(map.get('ROUND_DELAY_MS') || 15000),
+    REQUEST_TIMEOUT_MS: Number(map.get('REQUEST_TIMEOUT_MS') || 120000),
+    STREAM_READ_TIMEOUT_MS: Number(map.get('STREAM_READ_TIMEOUT_MS') || 120000),
+    NVIDIA_API_URL: map.get('NVIDIA_API_URL') || 'https://integrate.api.nvidia.com/v1',
+    PORT: Number(map.get('PORT') || 4000),
+    MAX_ROUNDS_PER_MODEL: Number(map.get('MAX_ROUNDS_PER_MODEL') || 2),
+    MAX_EMPTY_RESPONSE_RETRIES: Number(map.get('MAX_EMPTY_RESPONSE_RETRIES') || 3),
+    TEST_TIMEOUT_MS: Number(map.get('TEST_TIMEOUT_MS') || 60000),
+    MODEL_FAILURE_COOLDOWN_MS: Number(map.get('MODEL_FAILURE_COOLDOWN_MS') || 60000),
+    KEY_CONCURRENCY_DELAY_MS: Number(map.get('KEY_CONCURRENCY_DELAY_MS') || 5000),
+    ENABLE_CONTENT_VALIDATION: map.get('ENABLE_CONTENT_VALIDATION') !== 'false',
+    PRICE_PER_MILLION_PROMPT_TOKENS: Number(map.get('PRICE_PER_MILLION_PROMPT_TOKENS') || 0.30),
+    PRICE_PER_MILLION_COMPLETION_TOKENS: Number(map.get('PRICE_PER_MILLION_COMPLETION_TOKENS') || 0.60),
+    REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(map.get('REF_PRICE_PER_MILLION_PROMPT_TOKENS') || 5.00),
+    REF_PRICE_PER_MILLION_COMPLETION_TOKENS: Number(map.get('REF_PRICE_PER_MILLION_COMPLETION_TOKENS') || 15.00),
+    CURRENCY_SYMBOL: map.get('CURRENCY_SYMBOL') || 'USD'
+  };
+}
+
+function refreshCache() {
+  try {
+    const db = getDb();
+    if (!db) return;
+    const rows = db.prepare("SELECT key, value FROM metadata").all();
+    cachedSettings = parseMetadataRows(rows);
+  } catch (_) {
+    // fallback if db not ready
+  }
+}
+
 const settings = {
+  /**
+   * 刷新記憶體快取
+   */
+  refreshCache,
+
+  /**
+   * 取得系統設定 — 100% 記憶體快取讀取，0 次 SQL 查詢
+   */
   get() {
-    const db = getDb();
-    const roundDelay = db.prepare("SELECT value FROM metadata WHERE key = 'ROUND_DELAY_MS'").get();
-    const reqTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'REQUEST_TIMEOUT_MS'").get();
-    const streamTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'STREAM_READ_TIMEOUT_MS'").get();
-    const nvidiaUrl = db.prepare("SELECT value FROM metadata WHERE key = 'NVIDIA_API_URL'").get();
-    const port = db.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
-    const maxRounds = db.prepare("SELECT value FROM metadata WHERE key = 'MAX_ROUNDS_PER_MODEL'").get();
-    const maxEmptyRetries = db.prepare("SELECT value FROM metadata WHERE key = 'MAX_EMPTY_RESPONSE_RETRIES'").get();
-    const testTimeout = db.prepare("SELECT value FROM metadata WHERE key = 'TEST_TIMEOUT_MS'").get();
-    const modelFailureCooldown = db.prepare("SELECT value FROM metadata WHERE key = 'MODEL_FAILURE_COOLDOWN_MS'").get();
-    const keyConcurrencyDelay = db.prepare("SELECT value FROM metadata WHERE key = 'KEY_CONCURRENCY_DELAY_MS'").get();
-    const enableContentValidation = db.prepare("SELECT value FROM metadata WHERE key = 'ENABLE_CONTENT_VALIDATION'").get();
-    return {
-      ROUND_DELAY_MS: Number(roundDelay?.value || 15000),
-      REQUEST_TIMEOUT_MS: Number(reqTimeout?.value || 120000),
-      STREAM_READ_TIMEOUT_MS: Number(streamTimeout?.value || 120000),
-      NVIDIA_API_URL: nvidiaUrl?.value || 'https://integrate.api.nvidia.com/v1',
-      PORT: Number(port?.value || 4000),
-      MAX_ROUNDS_PER_MODEL: Number(maxRounds?.value || 2),
-      MAX_EMPTY_RESPONSE_RETRIES: Number(maxEmptyRetries?.value || 3),
-      TEST_TIMEOUT_MS: Number(testTimeout?.value || 60000),
-      MODEL_FAILURE_COOLDOWN_MS: Number(modelFailureCooldown?.value || 60000),
-      KEY_CONCURRENCY_DELAY_MS: Number(keyConcurrencyDelay?.value || 5000),
-      ENABLE_CONTENT_VALIDATION: enableContentValidation?.value !== 'false',
-      PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 0.30),
-      PRICE_PER_MILLION_COMPLETION_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'PRICE_PER_MILLION_COMPLETION_TOKENS'").get()?.value || 0.60),
-      REF_PRICE_PER_MILLION_PROMPT_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'REF_PRICE_PER_MILLION_PROMPT_TOKENS'").get()?.value || 5.00),
-      REF_PRICE_PER_MILLION_COMPLETION_TOKENS: Number(db.prepare("SELECT value FROM metadata WHERE key = 'REF_PRICE_PER_MILLION_COMPLETION_TOKENS'").get()?.value || 15.00),
-      CURRENCY_SYMBOL: db.prepare("SELECT value FROM metadata WHERE key = 'CURRENCY_SYMBOL'").get()?.value || 'USD'
-    };
+    if (!cachedSettings) {
+      refreshCache();
+    }
+    return cachedSettings ? { ...cachedSettings } : parseMetadataRows([]);
   },
+
+  /**
+   * 儲存系統設定 — 僅在資料實質變更（Dirty Check）時才寫入 SQLite 並更新快取
+   */
   save(config) {
+    if (!cachedSettings) {
+      refreshCache();
+    }
+    const current = cachedSettings || parseMetadataRows([]);
     const db = getDb();
-    if (config.ROUND_DELAY_MS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('ROUND_DELAY_MS', ?)").run(String(config.ROUND_DELAY_MS));
+
+    const changedKeys = [];
+    const fields = [
+      'ROUND_DELAY_MS',
+      'REQUEST_TIMEOUT_MS',
+      'STREAM_READ_TIMEOUT_MS',
+      'NVIDIA_API_URL',
+      'PORT',
+      'MAX_ROUNDS_PER_MODEL',
+      'MAX_EMPTY_RESPONSE_RETRIES',
+      'TEST_TIMEOUT_MS',
+      'MODEL_FAILURE_COOLDOWN_MS',
+      'KEY_CONCURRENCY_DELAY_MS',
+      'ENABLE_CONTENT_VALIDATION',
+      'PRICE_PER_MILLION_PROMPT_TOKENS',
+      'PRICE_PER_MILLION_COMPLETION_TOKENS',
+      'REF_PRICE_PER_MILLION_PROMPT_TOKENS',
+      'REF_PRICE_PER_MILLION_COMPLETION_TOKENS',
+      'CURRENCY_SYMBOL'
+    ];
+
+    for (const field of fields) {
+      if (config[field] !== undefined) {
+        const newValStr = String(config[field]);
+        const curValStr = String(current[field]);
+        if (newValStr !== curValStr) {
+          changedKeys.push({ key: field, value: newValStr });
+        }
+      }
     }
-    if (config.REQUEST_TIMEOUT_MS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('REQUEST_TIMEOUT_MS', ?)").run(String(config.REQUEST_TIMEOUT_MS));
+
+    // 髒值檢查（Dirty Check）：若無任何實質變更，0 次 SQLite 寫入
+    if (changedKeys.length === 0) {
+      return this.get();
     }
-    if (config.STREAM_READ_TIMEOUT_MS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('STREAM_READ_TIMEOUT_MS', ?)").run(String(config.STREAM_READ_TIMEOUT_MS));
+
+    const stmt = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
+    try {
+      db.exec("BEGIN TRANSACTION");
+      for (const item of changedKeys) {
+        stmt.run(item.key, item.value);
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch (_) {}
+      throw err;
     }
-    if (config.NVIDIA_API_URL !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('NVIDIA_API_URL', ?)").run(String(config.NVIDIA_API_URL));
-    }
-    if (config.PORT !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PORT', ?)").run(String(config.PORT));
-    }
-    if (config.MAX_ROUNDS_PER_MODEL !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MAX_ROUNDS_PER_MODEL', ?)").run(String(config.MAX_ROUNDS_PER_MODEL));
-    }
-    if (config.MAX_EMPTY_RESPONSE_RETRIES !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MAX_EMPTY_RESPONSE_RETRIES', ?)").run(String(config.MAX_EMPTY_RESPONSE_RETRIES));
-    }
-    if (config.TEST_TIMEOUT_MS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('TEST_TIMEOUT_MS', ?)").run(String(config.TEST_TIMEOUT_MS));
-    }
-    if (config.MODEL_FAILURE_COOLDOWN_MS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('MODEL_FAILURE_COOLDOWN_MS', ?)").run(String(config.MODEL_FAILURE_COOLDOWN_MS));
-    }
-    if (config.KEY_CONCURRENCY_DELAY_MS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('KEY_CONCURRENCY_DELAY_MS', ?)").run(String(config.KEY_CONCURRENCY_DELAY_MS));
-    }
-    if (config.ENABLE_CONTENT_VALIDATION !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('ENABLE_CONTENT_VALIDATION', ?)").run(String(config.ENABLE_CONTENT_VALIDATION));
-    }
-    if (config.PRICE_PER_MILLION_PROMPT_TOKENS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_PROMPT_TOKENS', ?)").run(String(config.PRICE_PER_MILLION_PROMPT_TOKENS));
-    }
-    if (config.PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('PRICE_PER_MILLION_COMPLETION_TOKENS', ?)").run(String(config.PRICE_PER_MILLION_COMPLETION_TOKENS));
-    }
-    if (config.REF_PRICE_PER_MILLION_PROMPT_TOKENS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('REF_PRICE_PER_MILLION_PROMPT_TOKENS', ?)").run(String(config.REF_PRICE_PER_MILLION_PROMPT_TOKENS));
-    }
-    if (config.REF_PRICE_PER_MILLION_COMPLETION_TOKENS !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('REF_PRICE_PER_MILLION_COMPLETION_TOKENS', ?)").run(String(config.REF_PRICE_PER_MILLION_COMPLETION_TOKENS));
-    }
-    if (config.CURRENCY_SYMBOL !== undefined) {
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('CURRENCY_SYMBOL', ?)").run(String(config.CURRENCY_SYMBOL));
-    }
+
+    // 更新記憶體快取
+    refreshCache();
     return this.get();
   }
 };
 
 module.exports = settings;
+

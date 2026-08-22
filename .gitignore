@@ -3,6 +3,8 @@ dist/
 release/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 .env
 .DS_Store
 scratch/

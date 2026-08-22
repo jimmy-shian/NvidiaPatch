@@ -6,7 +6,7 @@ const fs = require('fs');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 
-const { initDatabase, rules } = require('./database');
+const { initDatabase, closeDatabase, rules, settings } = require('./database');
 const { createGatewayApp } = require('./gateway');
 
 let mainWindow = null;
@@ -33,15 +33,16 @@ const activeConnections = new Set();
 
 function loadPortFromDb() {
   try {
-    const row = dbInstance.prepare("SELECT value FROM metadata WHERE key = 'PORT'").get();
-    if (row && row.value) {
-      currentPort = Number(row.value) || 4000;
+    const s = settings.get();
+    if (s && s.PORT) {
+      currentPort = Number(s.PORT) || 4000;
     }
   } catch (e) {
-    console.error('Failed to read PORT from database:', e);
+    console.error('Failed to read PORT from settings cache:', e);
   }
   return currentPort;
 }
+
 
 // 追蹤所有連入的 socket 連線，並停用 Node.js 預設 5 分鐘 HTTP requestTimeout 限制
 function configureServerTimeouts(srv) {
@@ -364,4 +365,6 @@ app.on('will-quit', () => {
     server.close();
     console.log('Gateway Server shut down successfully.');
   }
+  closeDatabase();
 });
+

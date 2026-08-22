@@ -90,4 +90,13 @@ describe('Express API Routes Integration Tests', () => {
     expect(listRes.status).toBe(200);
     expect(listRes.body.some(r => r.title === 'Route Rule')).toBe(true);
   });
+
+  it('should validate body on /api/test/chat', async () => {
+    const res = await request(app)
+      .post('/api/test/chat')
+      .set('Authorization', 'Bearer bypass')
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Model and messages');
+  });
 });
