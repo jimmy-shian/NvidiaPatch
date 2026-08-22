@@ -1,6 +1,6 @@
 {
   "name": "nvidia-gateway-app",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Unified NVIDIA NIM LLM Gateway with GUI & Tray support",
   "main": "main.js",
   "scripts": {
@@ -28,8 +28,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^35.0.0",
-    "electron-builder": "^24.13.3",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
     "supertest": "^7.2.2",
     "vite": "^6.0.0",
     "vitest": "^4.1.11"
