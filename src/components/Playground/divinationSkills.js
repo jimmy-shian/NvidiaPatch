@@ -1,6 +1,7 @@
 import baziSkillRaw from './divinationSkills/baziSkill.md?raw';
 import ziweiSkillRaw from './divinationSkills/ziweiSkill.md?raw';
 import tarotSkillRaw from './divinationSkills/tarotSkill.md?raw';
+import qimenSkillRaw from './divinationSkills/qimenSkill.md?raw';
 
 export const DIVINATION_SKILLS = [
   {
@@ -26,6 +27,14 @@ export const DIVINATION_SKILLS = [
     icon: '🃏',
     shortDesc: '78 牌 · 十大子系統',
     content: tarotSkillRaw,
+  },
+  {
+    id: 'qimen',
+    label: '奇門遁甲 Grandmaster',
+    labelEn: 'Qimen Dunjia',
+    icon: '🧭',
+    shortDesc: '時家奇門 · 十大子系統',
+    content: qimenSkillRaw,
   },
 ];
 
