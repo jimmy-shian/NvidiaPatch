@@ -1,6 +1,6 @@
 {
   "appId": "com.jimmy.nvidiapatch.mobile",
-  "appName": "NvidiaPatch Mobile",
+  "appName": "NvidiaPatch Chat",
   "webDir": "dist",
   "bundledWebRuntime": false,
   "server": {

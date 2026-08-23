@@ -15,5 +15,6 @@ android/local.properties
 # Android Signing & Secrets
 *.jks
 *.keystore
+!android/app/debug.keystore
 *.p12
 keystore.properties

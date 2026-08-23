@@ -17,8 +17,26 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    buildTypes {
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword '123456'
+            keyAlias 'nvidiapatchkey'
+            keyPassword '123456'
+        }
         release {
+            storeFile file('debug.keystore')
+            storePassword '123456'
+            keyAlias 'nvidiapatchkey'
+            keyPassword '123456'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
