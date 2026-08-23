@@ -5,6 +5,7 @@ import { createProvider } from '../core/providers';
 import { ContextCompressor } from '../core/context/contextCompressor';
 import { estimateFullContextTokens } from '../core/context/tokenManager';
 import { getModelContextLimit, AUTO_COMPRESSION_THRESHOLD } from '../core/context/modelLimits';
+import { generateTitleFromPrompt, cleanFallbackTitle } from '../core/agent/titleGenerator';
 
 export function useMobileChat({
   currentProviderId,
@@ -291,29 +292,19 @@ export function useMobileChat({
         // Smart Title generation for first turn via LLM
         if (historyMessages.length === 1 && historyMessages[0].role === 'user') {
           try {
-            const titleMessages = [
-              { role: 'system', content: '你是一個對話標題生成助手。請用 4 到 8 個繁體中文字簡短概括對話主題，嚴禁標點符號、句號、引號或任何額外前綴，直接輸出標題文字。' },
-              { role: 'user', content: `使用者問題：${historyMessages[0].content}\n回答摘要：${accumulatedContent.slice(0, 120)}` }
-            ];
             const titleProvider = createProvider(currentProviderId, activeConfig);
-            const titleStream = titleProvider.chatStream({
-              model: currentModelId,
-              messages: titleMessages,
-              temperature: 0.3,
-              max_tokens: 30
+            const generatedTitle = await generateTitleFromPrompt({
+              prompt: historyMessages[0].content,
+              provider: titleProvider,
+              model: currentModelId
             });
-            let generatedTitle = '';
-            for await (const tChunk of titleStream) {
-              if (tChunk.type === 'content') generatedTitle += tChunk.delta;
-            }
-            const cleanTitle = generatedTitle.replace(/["'「」『』\n\r。.]/g, '').trim().slice(0, 16);
-            if (cleanTitle && cleanTitle.length >= 2) {
+            if (generatedTitle && generatedTitle.length >= 2) {
               await LocalDB.saveConversation({
                 id: currentConversationId,
-                title: cleanTitle,
+                title: generatedTitle,
                 updatedAt: Date.now()
               });
-              setConversations(prev => prev.map(c => c.id === currentConversationId ? { ...c, title: cleanTitle } : c));
+              setConversations(prev => prev.map(c => c.id === currentConversationId ? { ...c, title: generatedTitle } : c));
             }
           } catch (_) {}
         }
@@ -363,7 +354,7 @@ export function useMobileChat({
 
     // Temporary title placeholder until LLM generates smart title
     if (messages.length === 0) {
-      const initialTitle = textToSend.slice(0, 15);
+      const initialTitle = cleanFallbackTitle(textToSend);
       await LocalDB.saveConversation({
         id: currentConversationId,
         title: initialTitle,

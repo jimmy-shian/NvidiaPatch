@@ -1,9 +1,11 @@
 /**
  * NvidiaNimProvider - NVIDIA NIM LLM Integration
- * Features full model catalog crawling, normalization, filtering, and 3x auto-retry streaming.
+ * Features full model catalog crawling, normalization, filtering, NativeStreamBridge SSE streaming,
+ * and 3x auto-retry with exponential backoff.
  */
-import { ProviderAdapter } from './ProviderAdapter';
+import { OpenAICompatibleProvider } from './OpenAICompatibleProvider';
 import { HttpClient } from '../network/httpClient';
+import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { fetchNvidiaCatalog, sortNvidiaModels } from './nvidiaModelCatalog';
 
@@ -24,7 +26,7 @@ export const CURATED_NVIDIA_MODELS = [
   { id: 'mistralai/mistral-large-2-instruct', name: 'Mistral Large 2', vendor: 'Mistral' }
 ];
 
-export class NvidiaNimProvider extends ProviderAdapter {
+export class NvidiaNimProvider extends OpenAICompatibleProvider {
   constructor(config = {}) {
     super({
       id: 'nvidia',
@@ -75,7 +77,57 @@ export class NvidiaNimProvider extends ProviderAdapter {
     return CURATED_NVIDIA_MODELS;
   }
 
-  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 4096, signal, tools = null }) {
+  /**
+   * SSE line parser: Extracts thinking/reasoning, content, tool_calls, done and cleans \uE000
+   */
+  _parseSseLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data:')) return null;
+    const dataStr = trimmed.slice(5).trim();
+    if (dataStr === '[DONE]') {
+      return { type: 'done', delta: '' };
+    }
+
+    try {
+      const chunk = JSON.parse(dataStr);
+      const choice = chunk.choices?.[0];
+      if (!choice) return null;
+
+      const delta = choice.delta;
+      if (!delta) return null;
+
+      // 1. Thinking / Reasoning delta (filter \uE000 delimiters)
+      const reasoning = delta.reasoning_content || delta.reasoning;
+      if (reasoning) {
+        const cleanReasoning = typeof reasoning === 'string'
+          ? reasoning.replace(/\uE000+/g, '')
+          : reasoning;
+        if (cleanReasoning) {
+          return { type: 'thinking', delta: cleanReasoning };
+        }
+      }
+
+      // 2. Regular content delta
+      if (delta.content) {
+        const cleanContent = typeof delta.content === 'string'
+          ? delta.content.replace(/\uE000+/g, '')
+          : delta.content;
+        if (cleanContent) {
+          return { type: 'content', delta: cleanContent };
+        }
+      }
+
+      // 3. Tool calls delta
+      if (delta.tool_calls) {
+        return { type: 'tool_call', delta: '', data: delta.tool_calls };
+      }
+    } catch (_) {
+      // Ignore single malformed chunk
+    }
+    return null;
+  }
+
+  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 8192, signal, tools = null }) {
     if (!this.apiKey) {
       yield { type: 'error', delta: '請先在設定中填寫 NVIDIA API Key (nvapi-...)' };
       return;
@@ -92,16 +144,56 @@ export class NvidiaNimProvider extends ProviderAdapter {
       ...(tools && tools.length > 0 ? { tools, tool_choice: 'auto' } : {})
     };
 
+    const headers = {
+      'Authorization': `Bearer ${this.apiKey}`,
+      ...this.customHeaders
+    };
+
+    const url = `${this.baseUrl}/chat/completions`;
     const MAX_RETRIES = 3;
     let retryCount = 0;
 
     while (true) {
+      // 1. Android Native Streaming Path (Zero CORS restrictions, True Line-by-Line SSE)
+      if (NativeStreamClient.isAvailable()) {
+        try {
+          const nativeStream = NativeStreamClient.stream({
+            url,
+            headers,
+            body: payload,
+            signal
+          });
+
+          for await (const line of nativeStream) {
+            const parsed = this._parseSseLine(line);
+            if (parsed) {
+              yield parsed;
+              if (parsed.type === 'done') return;
+            }
+          }
+          yield { type: 'done', delta: '' };
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError' || signal?.aborted) {
+            yield { type: 'done', delta: '' };
+            return;
+          }
+          if (retryCount < MAX_RETRIES) {
+            retryCount++;
+            const backoffMs = 1000 * Math.pow(2, retryCount - 1);
+            yield { type: 'thinking', delta: `\n[網路連線異常 - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n` };
+            await new Promise(r => setTimeout(r, backoffMs));
+            continue;
+          }
+          yield { type: 'error', delta: `連線失敗: ${sanitizeLog(err.message)}` };
+          return;
+        }
+      }
+
+      // 2. Standard Web Fetch Stream Fallback (for Browser development)
       try {
-        const response = await HttpClient.streamFetch(`${this.baseUrl}/chat/completions`, {
-          headers: {
-            'Authorization': `Bearer ${this.apiKey}`,
-            ...this.customHeaders
-          },
+        const response = await HttpClient.streamFetch(url, {
+          headers,
           body: payload,
           signal
         });
@@ -134,49 +226,10 @@ export class NvidiaNimProvider extends ProviderAdapter {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data:')) continue;
-            const dataStr = trimmed.slice(5).trim();
-            if (dataStr === '[DONE]') {
-              yield { type: 'done', delta: '' };
-              return;
-            }
-
-            try {
-              const chunk = JSON.parse(dataStr);
-              const choice = chunk.choices?.[0];
-              if (!choice) continue;
-
-              const delta = choice.delta;
-              if (!delta) continue;
-
-              // 1. Thinking / Reasoning delta (filter \uE000 delimiters)
-              const reasoning = delta.reasoning_content || delta.reasoning;
-              if (reasoning) {
-                const cleanReasoning = typeof reasoning === 'string'
-                  ? reasoning.replace(/\uE000+/g, '')
-                  : reasoning;
-                if (cleanReasoning) {
-                  yield { type: 'thinking', delta: cleanReasoning };
-                }
-              }
-
-              // 2. Regular content delta
-              if (delta.content) {
-                const cleanContent = typeof delta.content === 'string'
-                  ? delta.content.replace(/\uE000+/g, '')
-                  : delta.content;
-                if (cleanContent) {
-                  yield { type: 'content', delta: cleanContent };
-                }
-              }
-
-              // 3. Tool calls delta
-              if (delta.tool_calls) {
-                yield { type: 'tool_call', delta: '', data: delta.tool_calls };
-              }
-            } catch (parseErr) {
-              // Ignore single malformed chunk
+            const parsed = this._parseSseLine(line);
+            if (parsed) {
+              yield parsed;
+              if (parsed.type === 'done') return;
             }
           }
         }
@@ -184,7 +237,7 @@ export class NvidiaNimProvider extends ProviderAdapter {
         yield { type: 'done', delta: '' };
         return;
       } catch (err) {
-        if (err.name === 'AbortError') {
+        if (err.name === 'AbortError' || signal?.aborted) {
           yield { type: 'done', delta: '' };
           return;
         }

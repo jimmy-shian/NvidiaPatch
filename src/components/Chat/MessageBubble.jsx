@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X } from 'lucide-react';
+import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2 } from 'lucide-react';
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
 
@@ -139,7 +139,19 @@ export default function MessageBubble({
             </button>
           </div>
         ) : (
-          <MarkdownRenderer content={message.content} />
+          <div className="relative leading-relaxed">
+            {message.content ? (
+              <MarkdownRenderer content={message.content} />
+            ) : isStreaming && isLast ? (
+              <div className="flex items-center gap-2 text-slate-400 py-1 text-xs">
+                <Loader2 size={13} className="animate-spin text-emerald-400" />
+                <span>正在生成回覆…</span>
+              </div>
+            ) : null}
+            {isStreaming && isLast && !isReasoningActive && message.content && (
+              <span className="inline-block w-1.5 h-4 ml-1 bg-emerald-400 animate-pulse align-middle rounded-sm" />
+            )}
+          </div>
         )}
       </div>
 
