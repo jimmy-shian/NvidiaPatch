@@ -21,13 +21,13 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* Safe Area Support for Notches & Android Navigation Bar */
+  /* Safe Area Support */
   .safe-area-top {
-    padding-top: max(16px, env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
   }
 
   .safe-area-bottom {
-    padding-bottom: max(22px, env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* Scrollbar styling */

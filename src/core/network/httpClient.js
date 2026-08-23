@@ -11,20 +11,25 @@ export const HttpClient = {
   isNative: Capacitor.isNativePlatform(),
 
   /**
-   * Send JSON request (GET / POST)
+   * Send HTTP request (GET / POST)
    */
   async request({ url, method = 'GET', headers = {}, data = null, timeout = 30000 }) {
     const isNative = Capacitor.isNativePlatform();
+    const isPostOrHasData = method.toUpperCase() === 'POST' || data !== null;
+
+    const finalHeaders = {
+      'Accept': 'application/json, text/html;q=0.9, */*;q=0.8',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      ...(isPostOrHasData ? { 'Content-Type': 'application/json' } : {}),
+      ...headers
+    };
 
     if (isNative) {
       try {
         const response = await CapacitorHttp.request({
           url,
           method,
-          headers: {
-            'Content-Type': 'application/json',
-            ...headers
-          },
+          headers: finalHeaders,
           data,
           connectTimeout: timeout,
           readTimeout: timeout
@@ -48,11 +53,8 @@ export const HttpClient = {
       try {
         const res = await fetch(url, {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-            ...headers
-          },
-          body: data ? JSON.stringify(data) : undefined,
+          headers: finalHeaders,
+          body: data ? (typeof data === 'string' ? data : JSON.stringify(data)) : undefined,
           signal: controller.signal
         });
 
