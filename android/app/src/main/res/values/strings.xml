@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NvidiaPatch Chat</string>
+    <string name="title_activity_main">NvidiaPatch Chat</string>
+    <string name="package_name">com.jimmy.nvidiapatch.mobile</string>
+    <string name="custom_url_scheme">com.jimmy.nvidiapatch.mobile</string>
+</resources>

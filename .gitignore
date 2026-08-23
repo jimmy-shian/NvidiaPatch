@@ -1,10 +1,19 @@
 node_modules/
 dist/
 release/
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
+scratch/
 .env
 .DS_Store
-scratch/
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+android/local.properties
+
+# Android Signing & Secrets
+*.jks
+*.keystore
+*.p12
+keystore.properties

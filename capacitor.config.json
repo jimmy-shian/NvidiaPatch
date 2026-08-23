@@ -1,0 +1,17 @@
+{
+  "appId": "com.jimmy.nvidiapatch.mobile",
+  "appName": "NvidiaPatch Mobile",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "Keyboard": {
+      "resize": "body"
+    }
+  }
+}
