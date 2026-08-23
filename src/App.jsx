@@ -1,510 +1,133 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
-import useGatewayApi from './hooks/useGatewayApi';
-import useRealtimeEvents from './hooks/useRealtimeEvents';
-import useNotifications from './hooks/useNotifications';
-import usePlaygroundChat from './hooks/usePlaygroundChat';
-
-import useKeysState from './hooks/useKeysState';
-import useModelsState from './hooks/useModelsState';
-import useRulesState from './hooks/useRulesState';
-import useSettingsState from './hooks/useSettingsState';
-import useLogsState from './hooks/useLogsState';
-import useStatsState from './hooks/useStatsState';
-
-import ConfirmationModal from './components/shared/ConfirmationModal';
-import RulesPanel from './components/Rules/RulesPanel';
-import Sidebar from './components/shared/Sidebar';
-import SettingsModal from './components/shared/SettingsModal';
-import OverviewPanel from './components/Dashboard/OverviewPanel';
-import LogsPanel from './components/Dashboard/LogsPanel';
-import TokensPanel from './components/Dashboard/TokensPanel';
-import KeysPanel from './components/Keys/KeysPanel';
-import ModelsPanel from './components/Models/ModelsPanel';
-import PlaygroundPanel from './components/Playground/PlaygroundPanel';
+import React, { useState, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar, Style } from '@capacitor/status-bar';
+import { useMobileSettings } from './hooks/useMobileSettings';
+import { useMobileChat } from './hooks/useMobileChat';
+import ChatView from './components/Chat/ChatView';
+import HistoryDrawer from './components/Drawer/HistoryDrawer';
+import ModelSelectorModal from './components/Chat/ModelSelectorModal';
+import SettingsModal from './components/Settings/SettingsModal';
+import { PROVIDER_TYPES } from './core/providers';
 
 export default function App() {
-  const { t } = useTranslation();
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [selectedSkillIds, setSelectedSkillIds] = useState([]);
 
-  const getGatewayUrl = () => {
-    if (window.electronAPI && window.electronAPI.getGatewayPort) {
+  const settings = useMobileSettings();
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
       try {
-        const port = window.electronAPI.getGatewayPort();
-        return `http://localhost:${port}`;
+        StatusBar.setStyle({ style: Style.Dark });
+        StatusBar.setBackgroundColor({ color: '#0b0f17' });
+        StatusBar.setOverlaysWebView({ overlay: false });
       } catch (e) {
-        console.error('Failed to get gateway port via IPC:', e);
+        console.warn('StatusBar initialization:', e);
       }
     }
-    return `http://localhost:4000`;
-  };
-  const GATEWAY_URL = getGatewayUrl();
-
-  const [adminToken] = useState('bypass');
-  const api = useGatewayApi(GATEWAY_URL, adminToken);
-
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [dashboardSubTab, setDashboardSubTab] = useState('overview');
-  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'theme-dark');
-  const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
-  const [copiedId, setCopiedId] = useState(null);
-  const [apiError, setApiError] = useState('');
-  const [gatewayHealth, setGatewayHealth] = useState(null);
-  const [isRestartingGateway, setIsRestartingGateway] = useState(false);
-  const [restartNotice, setRestartNotice] = useState(null);
-  const restartNoticeTimerRef = useRef(null);
-
-  const [confirmModal, setConfirmModal] = useState({
-    isOpen: false,
-    title: '',
-    message: '',
-    confirmText: '',
-    cancelText: '',
-    type: 'danger',
-    onConfirm: () => {}
-  });
-
-  const showConfirm = useCallback((options) => {
-    return new Promise((resolve) => {
-      setConfirmModal({
-        isOpen: true,
-        title: options.title || '',
-        message: options.message || '',
-        confirmText: options.confirmText || '',
-        cancelText: options.cancelText || '',
-        type: options.type || 'danger',
-        onConfirm: () => {
-          setConfirmModal(prev => ({ ...prev, isOpen: false }));
-          resolve(true);
-        },
-        onCancel: () => {
-          setConfirmModal(prev => ({ ...prev, isOpen: false }));
-          resolve(false);
-        }
-      });
-    });
   }, []);
 
-  const {
-    selectedTestModel,
-    setSelectedTestModel,
-    chatHistory,
-    setChatHistory,
-    chatInput,
-    setChatInput,
-    isChatting,
+  const chat = useMobileChat({
+    currentProviderId: settings.currentProviderId,
+    currentModelId: settings.currentModelId,
+    providerConfigs: settings.providerConfigs,
     selectedSkillIds,
-    setSelectedSkillIds,
-    handleSendTestMessage
-  } = usePlaygroundChat(GATEWAY_URL, adminToken);
-
-  const fetchDataPromiseRef = useRef(null);
-  const lastFetchStartedAtRef = useRef(0);
-  const FETCH_DATA_DEDUPE_MS = 1500;
-
-  const fetchData = useCallback(async (options = {}) => {
-    if (fetchDataPromiseRef.current) {
-      return fetchDataPromiseRef.current;
-    }
-
-    const now = Date.now();
-    if (!options.force && now - lastFetchStartedAtRef.current < FETCH_DATA_DEDUPE_MS) {
-      return Promise.resolve();
-    }
-    lastFetchStartedAtRef.current = now;
-
-    const runFetch = async () => {
-      try {
-        const promises = [
-          api.fetchKeys().then(data => keysState.setKeys(data || [])).catch(err => console.error('keys:', err)),
-          api.fetchModels().then(data => modelsState.setModels(data || [])).catch(err => console.error('models:', err)),
-          api.fetchModelGroups().then(data => {
-            modelsState.setActiveModelGroup(data.activeGroup || 1);
-            modelsState.setModelGroups(data.groups || []);
-          }).catch(err => console.error('modelGroups:', err)),
-          api.fetchAvailableModels().then(data => {
-            modelsState.setAvailableModels(data.models || []);
-            modelsState.setLastSyncTime(data.lastSyncTime || null);
-            modelsState.setLastSyncSource(data.lastSyncSource || null);
-            modelsState.setExpectedModelCount(data.expectedCount || null);
-            modelsState.setLastParsedModelCount(data.parsedCount ?? null);
-            modelsState.setLastSavedModelCount(data.savedCount ?? null);
-            if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id);
-          }).catch(err => console.error('availModels:', err)),
-          api.fetchRules().then(data => rulesState.setRules(data || [])).catch(err => console.error('rules:', err)),
-          api.fetchSettings().then(data => settingsState.setSettingsData(data)).catch(err => console.error('settings:', err)),
-          api.fetchTokenUsage().then(data => statsState.setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
-          api.fetchLogs().then(data => logsState.setLogs(data || [])).catch(err => console.error('logs:', err)),
-          api.fetchStats().then(data => statsState.setStats(data)).catch(err => console.error('stats:', err)),
-        ];
-        await Promise.all(promises);
-        setApiError('');
-      } catch (err) {
-        setApiError('Unable to connect to Gateway.');
-      } finally {
-        fetchDataPromiseRef.current = null;
-      }
-    };
-
-    fetchDataPromiseRef.current = runFetch();
-    return fetchDataPromiseRef.current;
-  }, [api, setSelectedTestModel]);
-
-  // Dedicated modular state hooks
-  const keysState = useKeysState(api, fetchData, showConfirm);
-  const modelsState = useModelsState(api, fetchData, setSelectedTestModel);
-  const rulesState = useRulesState(api, fetchData);
-  const settingsState = useSettingsState(api);
-  const logsState = useLogsState(api);
-  const statsState = useStatsState(api, showConfirm);
-
-  const { notifyAllKeysDown } = useNotifications();
-
-  useEffect(() => {
-    document.documentElement.className = theme;
-    localStorage.setItem('theme', theme);
-  }, [theme]);
-
-  useEffect(() => {
-    return () => {
-      if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (adminToken) {
-      fetchData();
-    }
-  }, [adminToken, fetchData]);
-
-  useEffect(() => {
-    if (activeTab === 'keys') {
-      keysState.loadKeys();
-    }
-  }, [activeTab, keysState.loadKeys]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTimeMs(Date.now());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const checkGatewayHealth = useCallback(async () => {
-    try {
-      const data = await api.checkHealth();
-      setGatewayHealth(data);
-      return data;
-    } catch (err) {
-      setGatewayHealth(null);
-      return null;
-    }
-  }, [api]);
-
-  useEffect(() => {
-    if (!window.electronAPI || !window.electronAPI.onGatewayRestarted) return;
-    const unsubscribe = window.electronAPI.onGatewayRestarted(() => {
-      checkGatewayHealth();
-      fetchData();
-    });
-    return unsubscribe;
-  }, [checkGatewayHealth, fetchData]);
-
-  useEffect(() => {
-    if (keysState.keys.length > 0 && keysState.keys.every(k => k.status === 'inactive' || k.status === 'cooldown')) {
-      notifyAllKeysDown();
-    }
-  }, [keysState.keys, notifyAllKeysDown]);
-
-  const sseConnected = useRealtimeEvents(GATEWAY_URL, adminToken, {
-    onLogs: (data) => { logsState.handleSseLog(data); },
-    onStats: (data) => { statsState.setStats(data); },
-    onKeys: (data) => { if (data.action !== 'test') fetchData(); },
-    onModels: () => { fetchData(); },
-    onRules: () => { fetchData(); },
-    onSettings: (data) => { settingsState.setSettingsData(data); },
-    onTokenUsage: () => { statsState.loadTokenUsage(); },
-    onHealth: (data) => { setGatewayHealth(data); },
-    onReconnect: () => { fetchData(); }
+    setSelectedSkillIds
   });
 
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && adminToken) {
-        fetchData();
-        checkGatewayHealth();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [adminToken, fetchData, checkGatewayHealth]);
-
-  useEffect(() => {
-    if (!sseConnected) {
-      setGatewayHealth(null);
-    }
-  }, [sseConnected]);
-
-  const showRestartNotice = useCallback((type, message) => {
-    if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
-    setRestartNotice({ type, message });
-    restartNoticeTimerRef.current = setTimeout(() => {
-      setRestartNotice(null);
-      restartNoticeTimerRef.current = null;
-    }, 10000);
-  }, []);
-
-  const handleRestartGateway = useCallback(async () => {
-    if (isRestartingGateway) return;
-    const ok = await showConfirm({
-      title: t('common.confirm'),
-      message: t('common.confirmRestartGateway'),
-      type: 'danger'
-    });
-    if (!ok) return;
-    setIsRestartingGateway(true);
-    showRestartNotice('info', t('dashboard.restarting') + '...');
-
-    try {
-      await api.resetCooldowns();
-    } catch (_) {}
-
-    if (window.electronAPI && window.electronAPI.restartGateway) {
-      window.electronAPI.restartGateway();
-      
-      let attempts = 0;
-      const maxAttempts = 30;
-      while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 150));
-        const health = await checkGatewayHealth();
-        if (health && (health.status === 'running' || health.status === 'healthy' || health.status === 'degraded')) {
-          showRestartNotice('success', `Gateway restarted!`);
-          fetchData();
-          break;
-        }
-        attempts++;
-      }
-      if (attempts >= maxAttempts) {
-        showRestartNotice('error', 'Gateway restart timed out. Please check if port is in use.');
-      }
-    } else {
-      try {
-        await api.resetCooldowns();
-        showRestartNotice('success', 'Cooldowns cleared, Gateway still running.');
-        fetchData();
-      } catch (err) {
-        showRestartNotice('error', `Restart failed: ${err.message}`);
-      }
-    }
-
-    setIsRestartingGateway(false);
-  }, [isRestartingGateway, api, checkGatewayHealth, showRestartNotice, fetchData, t, showConfirm]);
-
-  const handleRestartApp = useCallback(async () => {
-    const ok = await showConfirm({
-      title: t('common.confirm'),
-      message: t('common.confirmRestartApp'),
-      type: 'danger'
-    });
-    if (!ok) return;
-    if (window.electronAPI?.restartApp) {
-      window.electronAPI.restartApp();
-    }
-  }, [t, showConfirm]);
-
-  const copyToClipboard = (text, id) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const toggleSkill = (skillId) => {
+    setSelectedSkillIds(prev =>
+      prev.includes(skillId) ? prev.filter(id => id !== skillId) : [...prev, skillId]
+    );
   };
+
+  const currentProviderObj = PROVIDER_TYPES.find(p => p.id === settings.currentProviderId);
+  const currentProviderName = currentProviderObj ? currentProviderObj.name : 'NVIDIA NIM';
+
+  const currentConv = chat.conversations.find(c => c.id === chat.currentConversationId);
+
+  if (settings.isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen w-screen bg-[#0b0f17] text-white">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-semibold text-slate-400 font-sans tracking-wide">
+            載入中...
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        stats={statsState.stats}
-        rulesCount={rulesState.rules.length}
-        gatewayHealth={gatewayHealth}
-        isRestartingGateway={isRestartingGateway}
-        handleRestartGateway={handleRestartGateway}
-        restartNotice={restartNotice}
-        theme={theme}
-        setTheme={setTheme}
-        settingsData={settingsState.settingsData}
-        setTempSettings={settingsState.setTempSettings}
-        setIsSettingsModalOpen={settingsState.setIsSettingsModalOpen}
-        handleRestartApp={handleRestartApp}
-        apiError={apiError}
+    <div className="h-screen w-screen bg-[#0b0f17] overflow-hidden flex flex-col font-sans">
+      {/* Main Chat Interface */}
+      <ChatView
+        conversation={currentConv}
+        messages={chat.messages}
+        input={chat.input}
+        setInput={chat.setInput}
+        isStreaming={chat.isStreaming}
+        isReasoningActive={chat.isReasoningActive}
+        onSend={() => chat.sendMessage()}
+        onStop={chat.stopGeneration}
+        onRegenerate={chat.regenerate}
+        onDeleteMessage={chat.deleteMessage}
+        onEditMessage={chat.editMessage}
+        currentProviderName={currentProviderName}
+        currentModelId={settings.currentModelId}
+        onOpenModelSelector={() => setIsModelModalOpen(true)}
+        onOpenDrawer={() => setIsDrawerOpen(true)}
+        onOpenSettings={() => setIsSettingsModalOpen(true)}
+        availableSkills={settings.skills}
+        selectedSkillIds={selectedSkillIds}
+        onToggleSkill={toggleSkill}
       />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', margin: '12px 12px 12px 6px', overflow: 'hidden' }}>
-        {activeTab === 'dashboard' && (
-          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden' }}>
-            <div className="glass-panel" style={{ padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  className={`btn ${dashboardSubTab === 'overview' ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ padding: '8px 14px', fontSize: '14px' }}
-                  onClick={() => setDashboardSubTab('overview')}
-                >
-                  <span>{t('dashboard.overview')}</span>
-                </button>
-                <button
-                  className={`btn ${dashboardSubTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ padding: '8px 14px', fontSize: '14px' }}
-                  onClick={() => setDashboardSubTab('logs')}
-                >
-                  <span>{t('dashboard.logs')}</span>
-                </button>
-                <button
-                  className={`btn ${dashboardSubTab === 'tokens' ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ padding: '8px 14px', fontSize: '14px' }}
-                  onClick={() => setDashboardSubTab('tokens')}
-                >
-                  <span>{t('dashboard.tokens')}</span>
-                </button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-muted)' }}>
-                <span>{t('common.sse')}</span>
-                <div style={{
-                  width: '6px', height: '6px', borderRadius: '50%',
-                  backgroundColor: sseConnected ? 'var(--status-active)' : 'var(--status-inactive)',
-                  boxShadow: sseConnected ? '0 0 6px var(--status-active-glow-start)' : 'none'
-                }} />
-              </div>
-            </div>
+      {/* History Slide-out Drawer */}
+      <HistoryDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        conversations={chat.conversations}
+        currentConversationId={chat.currentConversationId}
+        onSelectConversation={chat.selectConversation}
+        onNewChat={chat.newChat}
+        onRenameConversation={chat.renameConversation}
+        onDeleteConversation={chat.deleteConversation}
+        onOpenSettings={() => setIsSettingsModalOpen(true)}
+      />
 
-            {dashboardSubTab === 'overview' && (
-              <OverviewPanel
-                stats={statsState.stats}
-                models={modelsState.models}
-                activeModelGroup={modelsState.activeModelGroup}
-                copiedId={copiedId}
-                copyToClipboard={copyToClipboard}
-                getTotalRequests={statsState.getTotalRequests}
-                calculateSuccessRate={statsState.calculateSuccessRate}
-                getGatewayUrl={getGatewayUrl}
-                hoveredHourlyIndex={statsState.hoveredHourlyIndex}
-                setHoveredHourlyIndex={statsState.setHoveredHourlyIndex}
-              />
-            )}
+      {/* Quick Model Selector Bottom Sheet */}
+      <ModelSelectorModal
+        isOpen={isModelModalOpen}
+        onClose={() => setIsModelModalOpen(false)}
+        currentProviderId={settings.currentProviderId}
+        currentModelId={settings.currentModelId}
+        availableModels={settings.availableModels}
+        onSelectModel={settings.selectModel}
+        onSyncModels={() => settings.syncModels(settings.currentProviderId)}
+        isSyncing={settings.isSyncing}
+      />
 
-            {dashboardSubTab === 'logs' && (
-              <LogsPanel
-                logs={logsState.logs}
-                fetchData={fetchData}
-                theme={theme}
-              />
-            )}
-
-            {dashboardSubTab === 'tokens' && (
-              <TokensPanel
-                tokenUsageData={statsState.tokenUsageData}
-                api={api}
-                setTokenUsageData={statsState.setTokenUsageData}
-                clearTokenUsage={statsState.clearTokenUsage}
-                availableModels={modelsState.availableModels}
-                expandedTokenLogId={statsState.expandedTokenLogId}
-                setExpandedTokenLogId={statsState.setExpandedTokenLogId}
-                expandedTokenLogTabs={statsState.expandedTokenLogTabs}
-                setExpandedTokenLogTabs={statsState.setExpandedTokenLogTabs}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === 'keys' && (
-          <KeysPanel
-            keys={keysState.keys}
-            newKey={keysState.newKey}
-            setNewKey={keysState.setNewKey}
-            keyTestNotice={keysState.keyTestNotice}
-            isTestingKeys={keysState.isTestingKeys}
-            currentTimeMs={currentTimeMs}
-            handleTestKeys={keysState.handleTestKeys}
-            handleAddKey={keysState.handleAddKey}
-            handleDeleteKey={keysState.handleDeleteKey}
-          />
-        )}
-
-        {activeTab === 'models' && (
-          <ModelsPanel
-            models={modelsState.models}
-            setModels={modelsState.setModels}
-            modelGroups={modelsState.modelGroups}
-            activeModelGroup={modelsState.activeModelGroup}
-            availableModels={modelsState.availableModels}
-            lastSyncTime={modelsState.lastSyncTime}
-            lastSyncSource={modelsState.lastSyncSource}
-            expectedModelCount={modelsState.expectedModelCount}
-            lastParsedModelCount={modelsState.lastParsedModelCount}
-            lastSavedModelCount={modelsState.lastSavedModelCount}
-            isSyncingModels={modelsState.isSyncingModels}
-            syncNotice={modelsState.syncNotice}
-            searchTerm={modelsState.searchTerm}
-            setSearchTerm={modelsState.setSearchTerm}
-            selectedCategory={modelsState.selectedCategory}
-            setSelectedCategory={modelsState.setSelectedCategory}
-            handleSyncModels={modelsState.handleSyncModels}
-            handleSwitchModelGroup={modelsState.handleSwitchModelGroup}
-            handleMovePriority={modelsState.handleMovePriority}
-            handleRemoveModelFromPriority={modelsState.handleRemoveModelFromPriority}
-            handleAddModelToPriority={modelsState.handleAddModelToPriority}
-            saveModelPriorities={modelsState.saveModelPriorities}
-            buildModelsFromOrder={modelsState.buildModelsFromOrder}
-          />
-        )}
-
-        {activeTab === 'playground' && (
-          <PlaygroundPanel
-            availableModels={modelsState.playgroundModels}
-            selectedTestModel={selectedTestModel}
-            setSelectedTestModel={setSelectedTestModel}
-            chatHistory={chatHistory}
-            setChatHistory={setChatHistory}
-            chatInput={chatInput}
-            setChatInput={setChatInput}
-            isChatting={isChatting}
-            selectedSkillIds={selectedSkillIds}
-            setSelectedSkillIds={setSelectedSkillIds}
-            handleSendTestMessage={handleSendTestMessage}
-          />
-        )}
-
-        {activeTab === 'rules' && (
-          <RulesPanel
-            rules={rulesState.rules}
-            newRuleTitle={rulesState.newRuleTitle}
-            setNewRuleTitle={rulesState.setNewRuleTitle}
-            newRuleContent={rulesState.newRuleContent}
-            setNewRuleContent={rulesState.setNewRuleContent}
-            onAddRule={rulesState.handleAddRule}
-            onDeleteRule={rulesState.handleDeleteRule}
-            onUpdateRule={rulesState.handleUpdateRule}
-            onCopy={copyToClipboard}
-            copiedId={copiedId}
-          />
-        )}
-      </div>
-
+      {/* Full Settings Modal */}
       <SettingsModal
-        isOpen={settingsState.isSettingsModalOpen}
-        tempSettings={settingsState.tempSettings}
-        setTempSettings={settingsState.setTempSettings}
-        settingsData={settingsState.settingsData}
-        setIsSettingsModalOpen={settingsState.setIsSettingsModalOpen}
-        saveSettings={settingsState.saveSettings}
-      />
-
-      <ConfirmationModal
-        isOpen={confirmModal.isOpen}
-        title={confirmModal.title}
-        message={confirmModal.message}
-        onConfirm={confirmModal.onConfirm}
-        onCancel={confirmModal.onCancel}
-        confirmText={confirmModal.confirmText}
-        cancelText={confirmModal.cancelText}
-        type={confirmModal.type}
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        providerConfigs={settings.providerConfigs}
+        currentProviderId={settings.currentProviderId}
+        onChangeProvider={settings.changeProvider}
+        onUpdateProviderConfig={settings.updateProviderConfig}
+        onTestConnection={settings.testConnection}
+        onSyncModels={settings.syncModels}
+        availableModels={settings.availableModels}
+        contextSettings={settings.contextSettings}
+        onUpdateContext={settings.updateContext}
+        skills={settings.skills}
+        onImportSkill={settings.importSkill}
+        onSaveSkill={settings.saveSkill}
+        onDeleteSkill={settings.deleteSkill}
       />
     </div>
   );

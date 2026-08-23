@@ -1,23 +1,27 @@
 {
-  "name": "nvidia-gateway-app",
-  "version": "1.7.6",
-  "description": "Unified NVIDIA NIM LLM Gateway with GUI & Tray support",
-  "main": "main.js",
+  "name": "nvidiapatch-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NvidiaPatch Mobile Chat - Local-first Android AI Chat & Agent",
+  "type": "module",
   "scripts": {
-    "dev": "node start-dev.js",
+    "dev": "vite",
     "build": "vite build",
+    "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "cap:sync": "npx cap sync android",
+    "cap:open": "npx cap open android"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/keyboard": "^8.0.0",
+    "@capacitor/preferences": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0",
     "i18next": "^26.3.3",
     "i18next-browser-languagedetector": "^8.2.1",
+    "idb": "^8.0.2",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -27,62 +31,11 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.0.0",
+    "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^43.4.1",
-    "electron-builder": "^26.15.3",
-    "supertest": "^7.2.2",
+    "tailwindcss": "^4.3.3",
     "vite": "^6.0.0",
     "vitest": "^4.1.11"
-  },
-  "build": {
-    "appId": "com.nvidia.gateway.app",
-    "productName": "NvidiaGateway",
-    "artifactName": "${productName}-Setup-${version}.${ext}",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "main.js",
-      "preload.js",
-      "database.js",
-      "gateway.js",
-      "database/**/*",
-      "gateway/**/*",
-      "utils/**/*",
-      "package.json",
-      "icon.png"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "NVIDIA NIM Gateway"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.developer-tools"
-    },
-    "dmg": {
-      "background": null,
-      "backgroundColor": "#0b0f17",
-      "window": {
-        "width": 540,
-        "height": 380
-      }
-    }
   }
 }

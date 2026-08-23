@@ -1,11 +1,22 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [react()],
-  base: './', // 確保打包後 Electron 可以使用相對路徑加載資源
+  plugins: [
+    react(),
+    tailwindcss()
+  ],
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  },
   server: {
-    port: 5173,
-    strictPort: true
+    port: 3000,
+    host: true,
+  },
+  test: {
+    globals: true,
+    environment: 'node',
   }
 });
