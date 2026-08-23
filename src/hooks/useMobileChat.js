@@ -248,24 +248,35 @@ export function useMobileChat({
         setIsReasoningActive(true);
         accumulatedThinking += delta;
         setMessages(prev => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last && last.role === 'assistant') {
-            last.thinkingContent = accumulatedThinking;
-          }
-          return next;
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
+          if (last.role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            {
+              ...last,
+              thinkingContent: accumulatedThinking
+            }
+          ];
         });
       },
       onContent: (delta) => {
         setIsReasoningActive(false);
         accumulatedContent += delta;
         setMessages(prev => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last && last.role === 'assistant') {
-            last.content = accumulatedContent;
-          }
-          return next;
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
+          if (last.role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            {
+              ...last,
+              content: accumulatedContent,
+              thinkingContent: accumulatedThinking
+            }
+          ];
         });
       },
       onDone: async () => {
@@ -284,11 +295,18 @@ export function useMobileChat({
               { role: 'system', content: '你是一個對話標題生成助手。請用 4 到 8 個繁體中文字簡短概括對話主題，嚴禁標點符號、句號、引號或任何額外前綴，直接輸出標題文字。' },
               { role: 'user', content: `使用者問題：${historyMessages[0].content}\n回答摘要：${accumulatedContent.slice(0, 120)}` }
             ];
-            let genTitle = '';
-            for await (const chunk of provider.chatStream({ model: currentModelId, messages: titleMessages, max_tokens: 30 })) {
-              if (chunk.type === 'content') genTitle += chunk.delta;
+            const titleProvider = createProvider(currentProviderId, activeConfig);
+            const titleStream = titleProvider.chatStream({
+              model: currentModelId,
+              messages: titleMessages,
+              temperature: 0.3,
+              max_tokens: 30
+            });
+            let generatedTitle = '';
+            for await (const tChunk of titleStream) {
+              if (tChunk.type === 'content') generatedTitle += tChunk.delta;
             }
-            const cleanTitle = genTitle.replace(/[\n\r"''「」：:。，]/g, '').trim().slice(0, 16);
+            const cleanTitle = generatedTitle.replace(/["'「」『』\n\r。.]/g, '').trim().slice(0, 16);
             if (cleanTitle && cleanTitle.length >= 2) {
               await LocalDB.saveConversation({
                 id: currentConversationId,
@@ -305,12 +323,18 @@ export function useMobileChat({
         setIsReasoningActive(false);
         const errMsg = `\n[錯誤]: ${err.message}`;
         setMessages(prev => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last && last.role === 'assistant') {
-            last.content = (last.content || '') + errMsg;
-          }
-          return next;
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
+          if (last.role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            {
+              ...last,
+              content: (last.content || '') + errMsg,
+              thinkingContent: accumulatedThinking
+            }
+          ];
         });
         await LocalDB.saveMessage({
           ...assistantMsg,

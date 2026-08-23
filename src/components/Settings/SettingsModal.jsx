@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Server, User, Sparkles, Info, ShieldCheck } from 'lucide-react';
+import { APP_VERSION } from '../../version';
 import ProviderConfigTab from './ProviderConfigTab';
 import PersonalContextTab from './PersonalContextTab';
 import SkillsManagerTab from './SkillsManagerTab';
@@ -132,7 +133,7 @@ export default function SettingsModal({
                   N
                 </div>
                 <h4 className="font-bold text-white text-base">{t('settings.about.title')}</h4>
-                <p className="text-slate-400 text-xs font-mono">{t('settings.about.version')}</p>
+                <p className="text-slate-400 text-xs font-mono">{t('settings.about.version', { version: APP_VERSION })}</p>
                 <p className="text-slate-300 text-xs leading-relaxed max-w-sm mt-1">
                   {t('settings.about.desc')}
                 </p>

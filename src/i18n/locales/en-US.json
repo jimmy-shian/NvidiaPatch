@@ -88,8 +88,8 @@
       "skillContent": "Markdown Content / System Prompt"
     },
     "about": {
-      "title": "NvidiaPatch Mobile Chat",
-      "version": "Version: v0.1.0",
+      "title": "NvidiaPatch Chat",
+      "version": "Version: v{{version}}",
       "desc": "Local-first, No-login, BYOK AI Chat & Agent mobile client.",
       "license": "License: MIT"
     }

@@ -44,10 +44,20 @@ export function useMobileSettings() {
       }
       setProviderConfigs(configs);
 
-      // 3. Populate models
-      const activeProv = createProvider(savedProvider, configs[savedProvider] || {});
-      const loadedModels = await activeProv.listModels();
-      setAvailableModels(loadedModels.length > 0 ? loadedModels : (savedProvider === 'nvidia' ? CURATED_NVIDIA_MODELS : []));
+      // 3. Populate models from cache or provider
+      const cachedModels = await LocalDB.getContextSetting(`cached_models_${savedProvider}`, null);
+      if (Array.isArray(cachedModels) && cachedModels.length > 0) {
+        setAvailableModels(cachedModels);
+      } else {
+        const activeProv = createProvider(savedProvider, configs[savedProvider] || {});
+        const loadedModels = await activeProv.listModels();
+        if (loadedModels && loadedModels.length > 0) {
+          setAvailableModels(loadedModels);
+          await LocalDB.saveContextSetting(`cached_models_${savedProvider}`, loadedModels);
+        } else {
+          setAvailableModels(savedProvider === 'nvidia' ? CURATED_NVIDIA_MODELS : []);
+        }
+      }
 
       // 4. Personal Context
       const ctx = await ContextManager.getContext();
@@ -73,11 +83,24 @@ export function useMobileSettings() {
     await LocalDB.saveContextSetting(ACTIVE_PROVIDER_KEY, providerId);
 
     const cfg = providerConfigs[providerId] || {};
+
+    // 1. Try cached models first
+    const cached = await LocalDB.getContextSetting(`cached_models_${providerId}`, null);
+    if (Array.isArray(cached) && cached.length > 0) {
+      setAvailableModels(cached);
+      const chosenModel = cfg.defaultModel || cached[0].id;
+      setCurrentModelId(chosenModel);
+      await LocalDB.saveContextSetting(ACTIVE_MODEL_KEY, chosenModel);
+      return;
+    }
+
+    // 2. Fetch fresh models
     const prov = createProvider(providerId, cfg);
     const models = await prov.listModels();
 
     if (models && models.length > 0) {
       setAvailableModels(models);
+      await LocalDB.saveContextSetting(`cached_models_${providerId}`, models);
       const chosenModel = cfg.defaultModel || models[0].id;
       setCurrentModelId(chosenModel);
       await LocalDB.saveContextSetting(ACTIVE_MODEL_KEY, chosenModel);
@@ -133,27 +156,25 @@ export function useMobileSettings() {
     return provider.testConnection();
   }, [providerConfigs]);
 
-  // Sync models from provider
-  const syncModels = useCallback(async (providerId) => {
+  // Sync models from provider (matching master branch)
+  const syncModels = useCallback(async (providerId = currentProviderId) => {
     setIsSyncing(true);
     try {
       const config = providerConfigs[providerId] || {};
-      if (!config.apiKey && providerId === 'nvidia') {
-        return { success: false, message: '請先在「設定」中填寫 NVIDIA API Key (nvapi-...)' };
-      }
       const provider = createProvider(providerId, config);
       const models = await provider.listModels();
       if (Array.isArray(models) && models.length > 0) {
         setAvailableModels(models);
+        await LocalDB.saveContextSetting(`cached_models_${providerId}`, models);
         return { success: true, count: models.length, models };
       }
-      return { success: false, message: '未能從伺服器取得模型清單，請檢查 API Key、端點或網路連線。' };
+      return { success: false, message: '未能從伺服器取得模型清單，請檢查端點或網路連線。' };
     } catch (err) {
       return { success: false, message: err.message || '同步失敗' };
     } finally {
       setIsSyncing(false);
     }
-  }, [providerConfigs]);
+  }, [currentProviderId, providerConfigs]);
 
   // Update Personal Context
   const updateContext = useCallback(async (newContext) => {

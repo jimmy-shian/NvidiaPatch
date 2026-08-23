@@ -73,7 +73,7 @@ export default function MessageBubble({
 
       {/* Bubble Container */}
       <div
-        className={`relative max-w-[92%] sm:max-w-[85%] rounded-2xl p-3.5 shadow-sm text-sm ${
+        className={`relative max-w-[92%] sm:max-w-[85%] rounded-2xl p-3.5 shadow-sm text-sm break-words overflow-hidden ${
           isUser
             ? 'bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-br-sm'
             : isFailed
@@ -119,14 +119,14 @@ export default function MessageBubble({
             </div>
           </div>
         ) : isUser ? (
-          <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+          <div className="whitespace-pre-wrap break-words break-all leading-relaxed max-w-full overflow-hidden">{message.content}</div>
         ) : isFailed ? (
-          <div className="space-y-2">
+          <div className="space-y-2 max-w-full overflow-hidden">
             <div className="flex items-center gap-1.5 text-rose-400 font-semibold text-xs">
-              <AlertTriangle size={14} />
+              <AlertTriangle size={14} className="shrink-0" />
               <span>回覆失敗</span>
             </div>
-            <div className="text-xs text-rose-300/90 whitespace-pre-wrap leading-relaxed">
+            <div className="text-xs text-rose-300/90 whitespace-pre-wrap break-words break-all leading-relaxed max-w-full overflow-hidden">
               {message.content}
             </div>
             <button

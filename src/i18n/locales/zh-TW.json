@@ -88,8 +88,8 @@
       "skillContent": "Markdown 內容 / 系統 Prompt"
     },
     "about": {
-      "title": "NvidiaPatch Mobile Chat",
-      "version": "版本: v0.1.0",
+      "title": "NvidiaPatch Chat",
+      "version": "版本: v{{version}}",
       "desc": "Local-first、免登入、BYOK 的 Android AI Chat & Agent 行動客戶端。",
       "license": "開源授權: MIT"
     }

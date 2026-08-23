@@ -1,4 +1,21 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+def packageJsonFile = file('../../package.json')
+def packageJson = new JsonSlurper().parseText(packageJsonFile.text)
+def appVersionName = packageJson.version
+
+// Generate integer versionCode automatically from SemVer (e.g., 0.1.2 -> 0*10000 + 1*100 + 2 = 102)
+def parseVersionCode(String version) {
+    def parts = version.tokenize('.')
+    def major = parts.size() > 0 ? parts[0].toInteger() : 0
+    def minor = parts.size() > 1 ? parts[1].toInteger() : 0
+    def patch = parts.size() > 2 ? parts[2].toInteger() : 0
+    return major * 10000 + minor * 100 + patch
+}
+
+def appVersionCode = parseVersionCode(appVersionName)
 
 android {
     namespace = "com.jimmy.nvidiapatch.mobile"
@@ -7,8 +24,8 @@ android {
         applicationId "com.jimmy.nvidiapatch.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "0.1.2"
+        versionCode appVersionCode
+        versionName appVersionName
         archivesBaseName = "NvidiaPatch"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

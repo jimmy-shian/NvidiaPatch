@@ -1,9 +1,10 @@
 /**
  * OpenAICompatibleProvider - Custom OpenAI Compatible API Adapter
- * (OpenAI, OpenRouter, Groq, DeepSeek, Local Ollama, LM Studio, etc.)
+ * (NVIDIA NIM, OpenAI, OpenRouter, Groq, DeepSeek, Local Ollama, LM Studio, etc.)
  */
 import { ProviderAdapter } from './ProviderAdapter';
 import { HttpClient } from '../network/httpClient';
+import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 
 export class OpenAICompatibleProvider extends ProviderAdapter {
@@ -65,7 +66,44 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
     }
   }
 
-  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 4096, signal, tools = null }) {
+  /**
+   * SSE line parser: Extracts thinking/reasoning, content, tool_calls, done
+   */
+  _parseSseLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data:')) return null;
+    const dataStr = trimmed.slice(5).trim();
+    if (dataStr === '[DONE]') {
+      return { type: 'done', delta: '' };
+    }
+
+    try {
+      const chunk = JSON.parse(dataStr);
+      const choice = chunk.choices?.[0];
+      if (!choice) return null;
+
+      const delta = choice.delta;
+      if (!delta) return null;
+
+      if (delta.reasoning_content || delta.reasoning) {
+        const r = delta.reasoning_content || delta.reasoning;
+        if (r) return { type: 'thinking', delta: r };
+      }
+
+      if (delta.content) {
+        return { type: 'content', delta: delta.content };
+      }
+
+      if (delta.tool_calls) {
+        return { type: 'tool_call', delta: '', data: delta.tool_calls };
+      }
+    } catch (_) {
+      // Ignore malformed chunk
+    }
+    return null;
+  }
+
+  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 8192, signal, tools = null }) {
     const payload = {
       model,
       messages,
@@ -75,12 +113,46 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
       ...(tools && tools.length > 0 ? { tools, tool_choice: 'auto' } : {})
     };
 
+    const headers = {
+      ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
+      ...this.customHeaders
+    };
+
+    const url = `${this.baseUrl}/chat/completions`;
+
+    // 1. Android Native Streaming Path (Zero CORS restrictions, True Line-by-Line SSE)
+    if (NativeStreamClient.isAvailable()) {
+      try {
+        const nativeStream = NativeStreamClient.stream({
+          url,
+          headers,
+          body: payload,
+          signal
+        });
+
+        for await (const line of nativeStream) {
+          const parsed = this._parseSseLine(line);
+          if (parsed) {
+            yield parsed;
+            if (parsed.type === 'done') return;
+          }
+        }
+        yield { type: 'done', delta: '' };
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError' || signal?.aborted) {
+          yield { type: 'done', delta: '' };
+          return;
+        }
+        yield { type: 'error', delta: `Connection Error: ${sanitizeLog(err.message)}` };
+        return;
+      }
+    }
+
+    // 2. Standard Web Fetch Stream Fallback (for Browser development)
     try {
-      const response = await HttpClient.streamFetch(`${this.baseUrl}/chat/completions`, {
-        headers: {
-          ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
-          ...this.customHeaders
-        },
+      const response = await HttpClient.streamFetch(url, {
+        headers,
         body: payload,
         signal
       });
@@ -104,43 +176,17 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data:')) continue;
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === '[DONE]') {
-            yield { type: 'done', delta: '' };
-            return;
-          }
-
-          try {
-            const chunk = JSON.parse(dataStr);
-            const choice = chunk.choices?.[0];
-            if (!choice) continue;
-
-            const delta = choice.delta;
-            if (!delta) continue;
-
-            if (delta.reasoning_content || delta.reasoning) {
-              const r = delta.reasoning_content || delta.reasoning;
-              if (r) yield { type: 'thinking', delta: r };
-            }
-
-            if (delta.content) {
-              yield { type: 'content', delta: delta.content };
-            }
-
-            if (delta.tool_calls) {
-              yield { type: 'tool_call', delta: '', data: delta.tool_calls };
-            }
-          } catch (parseErr) {
-            // Ignore malformed chunk
+          const parsed = this._parseSseLine(line);
+          if (parsed) {
+            yield parsed;
+            if (parsed.type === 'done') return;
           }
         }
       }
 
       yield { type: 'done', delta: '' };
     } catch (err) {
-      if (err.name === 'AbortError') {
+      if (err.name === 'AbortError' || signal?.aborted) {
         yield { type: 'done', delta: '' };
         return;
       }

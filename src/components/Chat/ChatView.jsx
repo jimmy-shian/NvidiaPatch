@@ -124,7 +124,7 @@ export default function ChatView({
       )}
 
       {/* Messages List Area */}
-      <main className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2">
+      <main className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-4 space-y-2 max-w-full">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4 py-12 text-slate-500 gap-3">
             <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-950/30">

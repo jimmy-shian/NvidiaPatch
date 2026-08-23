@@ -1,16 +1,25 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Globe, MessageSquare, Sparkles, FileText, ChevronDown } from 'lucide-react';
+import { User, Globe, MessageSquare, Sparkles, FileText, ChevronDown, ChevronUp, Check } from 'lucide-react';
 import { SUPPORTED_LANGUAGES, SUPPORTED_STYLES } from '../../core/context/contextManager';
 
 export default function PersonalContextTab({ contextSettings, onUpdateContext }) {
   const { t } = useTranslation();
+  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
+
+  const currentLangId = contextSettings.responseLanguage || 'zh-TW';
+  const selectedLangObj = SUPPORTED_LANGUAGES.find(l => l.id === currentLangId) || SUPPORTED_LANGUAGES[0];
 
   const handleChange = (field, value) => {
     onUpdateContext({
       ...contextSettings,
       [field]: value
     });
+  };
+
+  const handleLangSelect = (langId) => {
+    setIsLangDropdownOpen(false);
+    handleChange('responseLanguage', langId);
   };
 
   return (
@@ -35,22 +44,52 @@ export default function PersonalContextTab({ contextSettings, onUpdateContext })
         </div>
       </div>
 
-      {/* Response Language */}
+      {/* Response Language (100% Custom Dropdown Picker) */}
       <div className="space-y-1.5">
         <label className="block text-slate-300 font-semibold">回答語言偏好 (10 種語言 + 注音文)</label>
         <div className="relative">
-          <select
-            value={contextSettings.responseLanguage || 'zh-TW'}
-            onChange={e => handleChange('responseLanguage', e.target.value)}
-            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white appearance-none outline-none focus:border-emerald-500 text-xs pr-8"
+          <button
+            type="button"
+            onClick={() => setIsLangDropdownOpen(prev => !prev)}
+            className="w-full flex items-center justify-between bg-slate-900 border border-slate-700 hover:border-slate-600 rounded-xl px-3.5 py-2.5 text-left transition-colors focus:border-emerald-500 shadow-sm"
           >
-            {SUPPORTED_LANGUAGES.map(lang => (
-              <option key={lang.id} value={lang.id} className="bg-slate-900 text-white">
-                {lang.name} ({lang.id})
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <div className="flex items-center gap-2 min-w-0 pr-2">
+              <Globe size={14} className="text-emerald-400 shrink-0" />
+              <span className="font-semibold text-white text-xs truncate">
+                {selectedLangObj.name}
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                ({selectedLangObj.id})
+              </span>
+            </div>
+            {isLangDropdownOpen ? <ChevronUp size={14} className="text-slate-400 shrink-0" /> : <ChevronDown size={14} className="text-slate-400 shrink-0" />}
+          </button>
+
+          {isLangDropdownOpen && (
+            <div className="absolute left-0 right-0 top-full mt-1.5 bg-[#111827] border border-slate-700 rounded-xl shadow-2xl z-30 p-1.5 space-y-1 animate-fade-in max-h-60 overflow-y-auto">
+              {SUPPORTED_LANGUAGES.map(lang => {
+                const isSelected = lang.id === currentLangId;
+                return (
+                  <button
+                    key={lang.id}
+                    type="button"
+                    onClick={() => handleLangSelect(lang.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-xs transition-all ${
+                      isSelected
+                        ? 'bg-emerald-500/20 text-emerald-200 font-bold border border-emerald-500/40'
+                        : 'text-slate-200 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-white font-medium truncate">{lang.name}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">({lang.id})</span>
+                    </div>
+                    {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

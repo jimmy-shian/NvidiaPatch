@@ -83,8 +83,22 @@ export default function ProviderConfigTab({
 
   const handleSync = async () => {
     setSyncing(true);
+    setTestResult(null);
     try {
-      await onSyncModels(currentProviderId);
+      const res = await onSyncModels(currentProviderId);
+      if (res && res.success) {
+        setTestResult({
+          success: true,
+          message: `同步成功！已獲取 ${res.count || availableModels.length} 個可用模型`
+        });
+      } else if (res && !res.success) {
+        setTestResult({
+          success: false,
+          message: res.message || '未能同步模型清單'
+        });
+      }
+    } catch (err) {
+      setTestResult({ success: false, message: err.message || '連線錯誤' });
     } finally {
       setSyncing(false);
     }

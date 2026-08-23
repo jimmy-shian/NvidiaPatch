@@ -1,13 +1,14 @@
 /**
  * NVIDIA NIM Model Catalog & Crawler
  * Implements the exact parsing, filtering, normalization, deduplication, and sorting pipeline
- * as the original Desktop Web Panel.
+ * matching master branch (build.nvidia.com preview crawler, integrate models API, and NGC featured fallback).
  */
 import { HttpClient } from '../network/httpClient';
 import { sanitizeLog } from '../security/secureStorage';
 
 export const NVIDIA_BUILD_FREE_ENDPOINT_URL = 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&pageSize=100';
 export const NVIDIA_INTEGRATE_MODELS_URL = 'https://integrate.api.nvidia.com/v1/models';
+export const NVIDIA_FEATURED_MODELS_URL = 'https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json';
 
 const BLOCKED_FIRST_SEGMENTS = new Set([
   'api', '_next', 'assets', 'docs', 'explore', 'models', 'skills', 'blueprints',
@@ -123,31 +124,41 @@ export function sortNvidiaModels(models = []) {
 }
 
 /**
- * Multi-stage catalog fetcher:
- * 1. build.nvidia.com Free Endpoint HTML Catalog (matches exactly 58 preview models)
- * 2. integrate.api.nvidia.com/v1/models (with/without API Key fallback)
+ * Multi-stage catalog fetcher matching master branch logic:
+ * 1. build.nvidia.com Candidate URLs (Preview models catalog)
+ * 2. integrate.api.nvidia.com/v1/models (Full NVIDIA NIM models list)
+ * 3. assets.ngc.nvidia.com/products/api-catalog/featured-models.json (NGC Featured models fallback)
  */
 export async function fetchNvidiaCatalog(apiKey = '') {
   let rawModels = [];
 
-  // Stage 1: build.nvidia.com Free Endpoint Catalog
-  try {
-    const res = await HttpClient.request({
-      url: NVIDIA_BUILD_FREE_ENDPOINT_URL,
-      method: 'GET',
-      timeout: 12000
-    });
-    if (res.ok && typeof res.data === 'string') {
-      const parsed = extractBuildFreeEndpointModelsFromHtml(res.data);
-      if (parsed.length > 0) {
-        rawModels = parsed;
+  // Stage 1: build.nvidia.com candidate URLs
+  const candidateUrls = [
+    'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&pageSize=100',
+    'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&itemsPerPage=100',
+    'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview'
+  ];
+
+  for (const url of candidateUrls) {
+    try {
+      const res = await HttpClient.request({
+        url,
+        method: 'GET',
+        timeout: 8000
+      });
+      if (res.ok && typeof res.data === 'string') {
+        const parsed = extractBuildFreeEndpointModelsFromHtml(res.data);
+        if (parsed.length > 0) {
+          rawModels = parsed;
+          break;
+        }
       }
+    } catch (err) {
+      console.warn(`[fetchNvidiaCatalog Stage 1 error for ${url}]:`, sanitizeLog(err.message));
     }
-  } catch (err) {
-    console.warn('[fetchNvidiaCatalog Stage 1 HTML error]:', sanitizeLog(err.message));
   }
 
-  // Stage 2: API fallback if Stage 1 is empty or blocked
+  // Stage 2: integrate.api.nvidia.com/v1/models (Works with OR without API key)
   if (rawModels.length === 0) {
     try {
       const headers = apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {};
@@ -157,8 +168,8 @@ export async function fetchNvidiaCatalog(apiKey = '') {
         headers,
         timeout: 12000
       });
-      if (res.ok && Array.isArray(res.data?.data)) {
-        const blockedKeywords = ['embed', 'rerank', 'whisper', 'tts', 'stt', 'clip', 'vision-guard', 'riva', 'shield'];
+      if (res.ok && Array.isArray(res.data?.data) && res.data.data.length > 0) {
+        const blockedKeywords = ['embed', 'rerank', 'whisper', 'tts', 'stt', 'clip', 'vision-guard', 'riva', 'shield', 'safety-guard'];
         const seen = new Set();
         const apiModels = [];
 
@@ -181,10 +192,48 @@ export async function fetchNvidiaCatalog(apiKey = '') {
             created: item.created || 0
           });
         }
-        rawModels = apiModels;
+        if (apiModels.length > 0) {
+          rawModels = apiModels;
+        }
       }
     } catch (err) {
       console.warn('[fetchNvidiaCatalog Stage 2 API error]:', sanitizeLog(err.message));
+    }
+  }
+
+  // Stage 3: NGC featured models fallback
+  if (rawModels.length === 0) {
+    try {
+      const res = await HttpClient.request({
+        url: NVIDIA_FEATURED_MODELS_URL,
+        method: 'GET',
+        timeout: 10000
+      });
+      if (res.ok && res.data) {
+        const data = res.data;
+        const entries = Array.isArray(data)
+          ? data
+          : (Array.isArray(data['featured-models']) ? data['featured-models'] : (Array.isArray(data.data) ? data.data : []));
+
+        const seen = new Set();
+        const featuredModels = [];
+        for (const entry of entries) {
+          const modelId = entry.model || entry.id || entry.name;
+          if (!modelId || typeof modelId !== 'string' || seen.has(modelId)) continue;
+          seen.add(modelId);
+          featuredModels.push({
+            id: modelId,
+            name: entry['model-name'] || entry.name || modelId.split('/').pop(),
+            vendor: 'NVIDIA',
+            created: 0
+          });
+        }
+        if (featuredModels.length > 0) {
+          rawModels = featuredModels;
+        }
+      }
+    } catch (err) {
+      console.warn('[fetchNvidiaCatalog Stage 3 Featured error]:', sanitizeLog(err.message));
     }
   }
 

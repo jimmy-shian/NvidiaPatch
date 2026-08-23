@@ -91,6 +91,7 @@ export const HttpClient = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'text/event-stream, application/json, */*',
         ...headers
       },
       body: typeof body === 'string' ? body : JSON.stringify(body),
