@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, CheckCircle2, XCircle, RefreshCw, Server, Key, Cpu, ShieldCheck, ChevronDown } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle2, XCircle, RefreshCw, Server, Key, Cpu, ShieldCheck, ChevronDown, AlertCircle } from 'lucide-react';
 import { PROVIDER_TYPES } from '../../core/providers';
 
 export default function ProviderConfigTab({
@@ -10,14 +10,16 @@ export default function ProviderConfigTab({
   onUpdateProviderConfig,
   onTestConnection,
   onSyncModels,
-  availableModels = []
+  availableModels = [],
+  isLoadingModels = false,
+  modelsError = null
 }) {
   const { t } = useTranslation();
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [isCustomModel, setIsCustomModel] = useState(false);
+  const [modelMode, setModelMode] = useState('select'); // 'select' | 'custom'
 
   const activeConfig = providerConfigs[currentProviderId] || {
     id: currentProviderId,
@@ -126,20 +128,37 @@ export default function ProviderConfigTab({
         </div>
       </div>
 
-      {/* Default Model Select Dropdown */}
-      <div className="space-y-1.5">
+      {/* Default Model Selection Mode (簡化為：選單 / 自訂) */}
+      <div className="space-y-2 pt-1">
         <div className="flex items-center justify-between">
-          <label className="block text-slate-300 font-semibold">預設模型 (Default Model)</label>
-          <button
-            type="button"
-            onClick={() => setIsCustomModel(prev => !prev)}
-            className="text-[11px] text-emerald-400 hover:underline"
-          >
-            {isCustomModel ? '改為選單選擇' : '自定義模型名稱'}
-          </button>
+          <label className="block text-slate-300 font-semibold">預設模型</label>
+          <div className="flex items-center gap-3 text-xs bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
+            <label className="flex items-center gap-1 cursor-pointer text-slate-300">
+              <input
+                type="radio"
+                name="modelMode"
+                value="select"
+                checked={modelMode === 'select'}
+                onChange={() => setModelMode('select')}
+                className="accent-emerald-500"
+              />
+              <span>選單</span>
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer text-slate-300">
+              <input
+                type="radio"
+                name="modelMode"
+                value="custom"
+                checked={modelMode === 'custom'}
+                onChange={() => setModelMode('custom')}
+                className="accent-emerald-500"
+              />
+              <span>自訂</span>
+            </label>
+          </div>
         </div>
 
-        {isCustomModel ? (
+        {modelMode === 'custom' ? (
           <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 focus-within:border-emerald-500">
             <Cpu size={14} className="text-slate-500 shrink-0" />
             <input
@@ -152,24 +171,37 @@ export default function ProviderConfigTab({
           </div>
         ) : (
           <div className="relative">
-            <select
-              value={activeConfig.defaultModel || (availableModels[0]?.id || '')}
-              onChange={e => handleFieldChange('defaultModel', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white appearance-none outline-none focus:border-emerald-500 text-xs pr-8 font-mono"
-            >
-              {availableModels.length === 0 ? (
-                <option value={activeConfig.defaultModel || ''}>
-                  {activeConfig.defaultModel || '請先點擊下方「同步模型列表」'}
-                </option>
-              ) : (
-                availableModels.map(m => (
-                  <option key={m.id} value={m.id} className="bg-slate-900 text-white">
-                    {m.name || m.id} ({m.id})
-                  </option>
-                ))
-              )}
-            </select>
-            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            {isLoadingModels ? (
+              <div className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-slate-400 text-xs flex items-center gap-2">
+                <RefreshCw size={12} className="animate-spin text-emerald-400" />
+                <span>載入中…</span>
+              </div>
+            ) : modelsError ? (
+              <div className="w-full bg-rose-950/40 border border-rose-800 rounded-xl px-3 py-2 text-xs text-rose-300 flex items-center justify-between">
+                <span>模型資料載入失敗</span>
+                <button type="button" onClick={handleSync} className="text-emerald-400 underline text-[11px]">重試</button>
+              </div>
+            ) : availableModels.length === 0 ? (
+              <div className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-400 flex items-center justify-between">
+                <span>沒有可用模型</span>
+                <button type="button" onClick={handleSync} className="text-emerald-400 underline text-[11px]">同步模型</button>
+              </div>
+            ) : (
+              <>
+                <select
+                  value={activeConfig.defaultModel || (availableModels[0]?.id || '')}
+                  onChange={e => handleFieldChange('defaultModel', e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white appearance-none outline-none focus:border-emerald-500 text-xs pr-8 font-mono"
+                >
+                  {availableModels.map(m => (
+                    <option key={m.id} value={m.id} className="bg-slate-900 text-white">
+                      {m.name || m.id} ({m.id})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </>
+            )}
           </div>
         )}
       </div>

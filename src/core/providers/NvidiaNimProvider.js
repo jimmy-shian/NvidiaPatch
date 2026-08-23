@@ -5,6 +5,7 @@
 import { ProviderAdapter } from './ProviderAdapter';
 import { HttpClient } from '../network/httpClient';
 import { sanitizeLog } from '../security/secureStorage';
+import { fetchNvidiaCatalog, sortNvidiaModels } from './nvidiaModelCatalog';
 
 export const DEFAULT_NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_NVIDIA_MODEL = 'nvidia/llama-3.1-nemotron-120b-instruct';
@@ -63,94 +64,15 @@ export class NvidiaNimProvider extends ProviderAdapter {
    * 網頁資料取得 → 解析 → 過濾 → 正規化 → 顯示可用模型 (比照桌面應用程式邏輯)
    */
   async listModels() {
-    let rawList = [];
-
-    // 1. API 取得或免金鑰公開端點
     try {
-      const headers = this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {};
-      const res = await HttpClient.request({
-        url: `${this.baseUrl}/models`,
-        method: 'GET',
-        headers,
-        timeout: 12000
-      });
-
-      if (res.ok && Array.isArray(res.data?.data)) {
-        rawList = res.data.data;
+      const catalog = await fetchNvidiaCatalog(this.apiKey);
+      if (catalog && catalog.length > 0) {
+        return catalog;
       }
-    } catch (apiErr) {
-      console.warn('[NvidiaNimProvider API fetch models failed, trying fallback]:', sanitizeLog(apiErr.message));
+    } catch (err) {
+      console.warn('[NvidiaNimProvider listModels failed, using curated fallback]:', sanitizeLog(err.message));
     }
-
-    // 2. 解析、過濾與正規化 (排除 non-LLM / embedding / 非對話端點)
-    const blockedKeywords = ['embed', 'rerank', 'whisper', 'tts', 'stt', 'clip', 'vision-guard', 'riva', 'shield'];
-    const seenIds = new Set();
-    const parsedModels = [];
-
-    for (const item of rawList) {
-      const modelId = typeof item.id === 'string' ? item.id.trim() : '';
-      if (!modelId || seenIds.has(modelId)) continue;
-
-      const lower = modelId.toLowerCase();
-      // 過濾非對話模型
-      if (blockedKeywords.some(b => lower.includes(b))) continue;
-
-      seenIds.add(modelId);
-
-      const parts = modelId.split('/');
-      const vendor = parts.length > 1 ? parts[0] : 'NVIDIA';
-      const rawName = parts.length > 1 ? parts.slice(1).join('/') : modelId;
-      const formattedName = rawName
-        .split('-')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-
-      parsedModels.push({
-        id: modelId,
-        name: formattedName,
-        vendor: vendor.toUpperCase(),
-        created: item.created || 0
-      });
-    }
-
-    // 3. 確保精選 120B / DeepSeek-R1 / Llama 等重要模型始終存在並置頂
-    for (const curated of CURATED_NVIDIA_MODELS) {
-      if (!seenIds.has(curated.id)) {
-        seenIds.add(curated.id);
-        parsedModels.push(curated);
-      }
-    }
-
-    // 4. 智慧排序（優先展示旗艦模型）
-    const priorityKeywords = [
-      'nemotron-120b',
-      'nemotron-70b',
-      'nemotron-4-340b',
-      'deepseek-r1',
-      'deepseek-v3',
-      'llama-3.3-70b',
-      'llama-3.1-405b',
-      'llama-3.1-70b',
-      'llama-3.1-8b',
-      'qwen2.5-72b',
-      'mistral-large'
-    ];
-
-    parsedModels.sort((a, b) => {
-      const aLower = a.id.toLowerCase();
-      const bLower = b.id.toLowerCase();
-
-      const aPriority = priorityKeywords.findIndex(k => aLower.includes(k));
-      const bPriority = priorityKeywords.findIndex(k => bLower.includes(k));
-
-      if (aPriority !== -1 && bPriority !== -1) return aPriority - bPriority;
-      if (aPriority !== -1) return -1;
-      if (bPriority !== -1) return 1;
-
-      return a.id.localeCompare(b.id);
-    });
-
-    return parsedModels.length > 0 ? parsedModels : CURATED_NVIDIA_MODELS;
+    return CURATED_NVIDIA_MODELS;
   }
 
   async *chatStream({ model, messages, temperature = 0.7, max_tokens = 4096, signal, tools = null }) {
@@ -229,10 +151,11 @@ export class NvidiaNimProvider extends ProviderAdapter {
               if (!delta) continue;
 
               // 1. Thinking / Reasoning delta (filter \uE000 delimiters)
-              if (delta.reasoning_content) {
-                const cleanReasoning = typeof delta.reasoning_content === 'string'
-                  ? delta.reasoning_content.replace(/\uE000+/g, '')
-                  : delta.reasoning_content;
+              const reasoning = delta.reasoning_content || delta.reasoning;
+              if (reasoning) {
+                const cleanReasoning = typeof reasoning === 'string'
+                  ? reasoning.replace(/\uE000+/g, '')
+                  : reasoning;
                 if (cleanReasoning) {
                   yield { type: 'thinking', delta: cleanReasoning };
                 }

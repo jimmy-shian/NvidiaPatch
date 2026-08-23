@@ -1,14 +1,18 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { LocalDB } from '../core/storage/localDatabase';
 import { AgentCore } from '../core/agent/agentCore';
 import { createProvider } from '../core/providers';
+import { ContextCompressor } from '../core/context/contextCompressor';
+import { estimateFullContextTokens } from '../core/context/tokenManager';
+import { getModelContextLimit, AUTO_COMPRESSION_THRESHOLD } from '../core/context/modelLimits';
 
 export function useMobileChat({
   currentProviderId,
   currentModelId,
   providerConfigs,
   selectedSkillIds,
-  setSelectedSkillIds
+  setSelectedSkillIds,
+  contextSettings
 }) {
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
@@ -16,6 +20,8 @@ export function useMobileChat({
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isReasoningActive, setIsReasoningActive] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressionToast, setCompressionToast] = useState(null);
 
   const agentCoreRef = useRef(null);
 
@@ -41,7 +47,7 @@ export function useMobileChat({
     loadConversations();
   }, []);
 
-  // Load messages when current conversation changes
+  // Load messages and skill settings when current conversation changes
   useEffect(() => {
     if (!currentConversationId) return;
     async function loadMessages() {
@@ -55,6 +61,28 @@ export function useMobileChat({
     }
     loadMessages();
   }, [currentConversationId]);
+
+  // Calculate live Context Token usage & Model limit
+  const contextStats = useMemo(() => {
+    const maxTokens = getModelContextLimit(currentModelId);
+    const estimate = estimateFullContextTokens({
+      systemPrompt: 'NvidiaPatch Chat Base System Prompt + Personal Context + Skills',
+      messages,
+      currentInput: input
+    });
+
+    const usedTokens = estimate.totalTokens;
+    const isNearLimit = usedTokens >= AUTO_COMPRESSION_THRESHOLD - 500;
+    const isOverThreshold = usedTokens >= AUTO_COMPRESSION_THRESHOLD;
+
+    return {
+      usedTokens,
+      maxTokens,
+      isNearLimit,
+      isOverThreshold,
+      autoThreshold: AUTO_COMPRESSION_THRESHOLD
+    };
+  }, [currentModelId, messages, input]);
 
   // Create new conversation
   const newChat = useCallback(async () => {
@@ -108,9 +136,84 @@ export function useMobileChat({
     });
   }, [currentConversationId, newChat]);
 
+  // Manual Context Compression action
+  const compressContext = useCallback(async () => {
+    if (messages.length < 3 || isCompressing || isStreaming) return;
+    setIsCompressing(true);
+
+    const activeConfig = providerConfigs[currentProviderId] || {};
+    const provider = createProvider(currentProviderId, activeConfig);
+
+    const tokensBefore = contextStats.usedTokens;
+
+    try {
+      const result = await ContextCompressor.compressIfNeeded({
+        conversationId: currentConversationId,
+        messages,
+        provider,
+        model: currentModelId,
+        force: true
+      });
+
+      if (result.compressed) {
+        // Re-estimate after compression
+        const afterEstimate = estimateFullContextTokens({
+          systemPrompt: 'System',
+          summary: result.summary?.summary || '',
+          messages: messages.slice(-result.recentCount),
+          currentInput: input
+        });
+        const tokensAfter = afterEstimate.totalTokens;
+        setCompressionToast(`上下文已壓縮 (${tokensBefore.toLocaleString()} → ${tokensAfter.toLocaleString()} tokens)`);
+        setTimeout(() => setCompressionToast(null), 4000);
+      } else {
+        setCompressionToast('目前歷史訊息量適中，無需重複壓縮');
+        setTimeout(() => setCompressionToast(null), 3000);
+      }
+    } catch (err) {
+      console.error('[Manual compression error]:', err);
+      setCompressionToast('壓縮暫時無法完成，保留原有完整歷史');
+      setTimeout(() => setCompressionToast(null), 3000);
+    } finally {
+      setIsCompressing(false);
+    }
+  }, [messages, isCompressing, isStreaming, providerConfigs, currentProviderId, currentConversationId, currentModelId, contextStats.usedTokens, input]);
+
   // Shared execution engine for streaming chat response
   const executeChatStream = useCallback(async (historyMessages) => {
     if (!currentModelId || historyMessages.length === 0) return;
+
+    const activeConfig = providerConfigs[currentProviderId] || {};
+    const provider = createProvider(currentProviderId, activeConfig);
+
+    // 1. Check Automatic Context Compression (> 6000 tokens)
+    const currentTokens = estimateFullContextTokens({
+      systemPrompt: 'System',
+      messages: historyMessages
+    }).totalTokens;
+
+    if (currentTokens >= AUTO_COMPRESSION_THRESHOLD && historyMessages.length >= 4) {
+      setIsCompressing(true);
+      try {
+        await ContextCompressor.compressIfNeeded({
+          conversationId: currentConversationId,
+          messages: historyMessages,
+          provider,
+          model: currentModelId,
+          force: false
+        });
+      } catch (compErr) {
+        console.warn('[Auto compression failed, proceeding with standard request]:', compErr);
+      } finally {
+        setIsCompressing(false);
+      }
+    }
+
+    // 2. Build model request messages (uses compressed summary if available, preserving recent messages)
+    const modelRequestMessages = await ContextCompressor.buildRequestContextMessages({
+      conversationId: currentConversationId,
+      messages: historyMessages
+    });
 
     const assistantMsg = {
       id: `msg_${Date.now()}_a`,
@@ -126,12 +229,10 @@ export function useMobileChat({
     setIsStreaming(true);
     setIsReasoningActive(true);
 
-    const activeConfig = providerConfigs[currentProviderId] || {};
-    const provider = createProvider(currentProviderId, activeConfig);
     const agent = new AgentCore(provider);
     agentCoreRef.current = agent;
 
-    const historyForAgent = historyMessages.map(m => ({
+    const payloadForAgent = modelRequestMessages.map(m => ({
       role: m.role,
       content: m.content
     }));
@@ -140,7 +241,7 @@ export function useMobileChat({
     let accumulatedThinking = '';
 
     await agent.runChat({
-      messages: historyForAgent,
+      messages: payloadForAgent,
       model: currentModelId,
       selectedSkillIds,
       onThinking: (delta) => {
@@ -280,7 +381,9 @@ export function useMobileChat({
   const deleteMessage = useCallback(async (msgId) => {
     await LocalDB.deleteMessage(msgId);
     setMessages(prev => prev.filter(m => m.id !== msgId));
-  }, []);
+    // Invalidate summary if deleted message was inside summarized scope
+    await ContextCompressor.invalidateSummaryIfNeeded(currentConversationId, msgId, messages);
+  }, [currentConversationId, messages]);
 
   // Edit message & Re-trigger model call if user message
   const editMessage = useCallback(async (msgId, newContent) => {
@@ -293,6 +396,9 @@ export function useMobileChat({
     await LocalDB.updateMessage(msgId, { content: newContent });
 
     if (targetMsg.role === 'user') {
+      // Invalidate existing summary if edited message was within summary
+      await ContextCompressor.invalidateSummaryIfNeeded(currentConversationId, msgId, messages);
+
       await LocalDB.deleteMessagesAfter(currentConversationId, targetMsg.createdAt);
       const newHistory = [...messages.slice(0, targetIdx), updatedMsg];
       setMessages(newHistory);
@@ -310,6 +416,10 @@ export function useMobileChat({
     setInput,
     isStreaming,
     isReasoningActive,
+    isCompressing,
+    contextStats,
+    compressionToast,
+    compressContext,
     newChat,
     selectConversation,
     renameConversation,

@@ -156,6 +156,45 @@ export default function HistoryDrawer({
                 );
               }
 
+              if (isEditing) {
+                return (
+                  <div
+                    key={conv.id}
+                    className="p-2.5 rounded-xl bg-[#111827] border border-emerald-500/60 flex flex-col gap-2 animate-fade-in shadow-md"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <input
+                      type="text"
+                      value={editTitleText}
+                      onChange={e => setEditTitleText(e.target.value)}
+                      className="w-full bg-black/70 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none focus:border-emerald-400"
+                      autoFocus
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveRename(conv.id, e);
+                        if (e.key === 'Escape') cancelRename(e);
+                      }}
+                    />
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={cancelRename}
+                        className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => saveRename(conv.id, e)}
+                        disabled={!editTitleText.trim()}
+                        className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors disabled:opacity-40"
+                      >
+                        確認
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <div
                   key={conv.id}
@@ -165,64 +204,30 @@ export default function HistoryDrawer({
                       : 'border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white'
                   }`}
                   onClick={() => {
-                    if (!isEditing) {
-                      onSelectConversation(conv.id);
-                      onClose();
-                    }
+                    onSelectConversation(conv.id);
+                    onClose();
                   }}
                 >
-                  {isEditing ? (
-                    <div className="flex items-center gap-1.5 w-full" onClick={e => e.stopPropagation()}>
-                      <input
-                        type="text"
-                        value={editTitleText}
-                        onChange={e => setEditTitleText(e.target.value)}
-                        className="flex-1 bg-black/60 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-emerald-400"
-                        autoFocus
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') saveRename(conv.id, e);
-                          if (e.key === 'Escape') cancelRename(e);
-                        }}
-                      />
-                      <button
-                        onClick={(e) => saveRename(conv.id, e)}
-                        className="p-1 text-emerald-400 hover:text-emerald-300"
-                        title="儲存"
-                      >
-                        <Check size={13} />
-                      </button>
-                      <button
-                        onClick={cancelRename}
-                        className="p-1 text-slate-400 hover:text-slate-200"
-                        title="取消"
-                      >
-                        <X size={13} />
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-2 min-w-0 flex-1 pr-1">
-                        <MessageSquare size={13} className={isSelected ? "text-emerald-400 shrink-0" : "text-slate-500 shrink-0"} />
-                        <span className="truncate">{conv.title || '新對話'}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={(e) => startRename(conv, e)}
-                          className="p-1 text-slate-500 hover:text-slate-200 opacity-60 hover:opacity-100 transition-opacity"
-                          title="重新命名"
-                        >
-                          <Edit2 size={12} />
-                        </button>
-                        <button
-                          onClick={(e) => confirmDelete(conv.id, e)}
-                          className="p-1 text-slate-500 hover:text-rose-400 opacity-60 hover:opacity-100 transition-opacity"
-                          title="刪除"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </>
-                  )}
+                  <div className="flex items-center gap-2 min-w-0 flex-1 pr-1">
+                    <MessageSquare size={13} className={isSelected ? "text-emerald-400 shrink-0" : "text-slate-500 shrink-0"} />
+                    <span className="truncate">{conv.title || '新對話'}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={(e) => startRename(conv, e)}
+                      className="p-1 text-slate-500 hover:text-slate-200 opacity-60 hover:opacity-100 transition-opacity"
+                      title="重新命名"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => confirmDelete(conv.id, e)}
+                      className="p-1 text-slate-500 hover:text-rose-400 opacity-60 hover:opacity-100 transition-opacity"
+                      title="刪除"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
               );
             })

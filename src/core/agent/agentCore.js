@@ -2,6 +2,7 @@
  * AgentCore - Mobile AI Agent Controller
  */
 import { buildCompleteMessages } from './promptBuilder';
+import { StreamReasoningParser } from './reasoningParser';
 
 export class AgentCore {
   constructor(providerAdapter) {
@@ -49,6 +50,16 @@ export class AgentCore {
 
     this.abortController = new AbortController();
 
+    // Instantiate streaming reasoning parser for handling in-band <think> and native delta.reasoning
+    const reasoningParser = new StreamReasoningParser({
+      onThinking: (delta) => {
+        onThinking?.(delta);
+      },
+      onContent: (delta) => {
+        onContent?.(delta);
+      }
+    });
+
     try {
       // Assemble full payload with system prompts, context, and skills
       const completeMessages = await buildCompleteMessages({
@@ -66,21 +77,24 @@ export class AgentCore {
 
       for await (const chunk of stream) {
         if (chunk.type === 'thinking') {
-          onThinking?.(chunk.delta);
+          reasoningParser.processChunk({ delta: { reasoning_content: chunk.delta } });
         } else if (chunk.type === 'content') {
-          onContent?.(chunk.delta);
+          reasoningParser.processChunk({ delta: { content: chunk.delta } });
         } else if (chunk.type === 'error') {
           onError?.(new Error(chunk.delta));
           return;
         } else if (chunk.type === 'done') {
+          reasoningParser.flush();
           onDone?.();
           return;
         }
       }
 
+      reasoningParser.flush();
       onDone?.();
     } catch (err) {
       if (err.name === 'AbortError') {
+        reasoningParser.flush();
         onDone?.();
       } else {
         onError?.(err);

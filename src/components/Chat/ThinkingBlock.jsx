@@ -14,24 +14,26 @@ export default function ThinkingBlock({
   const [userToggled, setUserToggled] = useState(false);
   const scrollRef = useRef(null);
 
+  const hasThinking = Boolean(thinkingContent && thinkingContent.trim().length > 0);
+  const isThinkingNow = isStreaming && isReasoningActive;
+
   useEffect(() => {
-    if (isStreaming && isReasoningActive && !userToggled) {
+    if (isThinkingNow && !userToggled) {
       setExpanded(true);
-    } else if (!isReasoningActive && !userToggled && !isStreaming) {
+    } else if (!isThinkingNow && !userToggled) {
       setExpanded(false);
     }
-  }, [isStreaming, isReasoningActive, userToggled]);
+  }, [isThinkingNow, userToggled]);
 
   // Auto scroll reasoning box to bottom as thoughts stream in
   useEffect(() => {
-    if (expanded && isReasoningActive && scrollRef.current) {
+    if (expanded && isThinkingNow && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [thinkingContent, expanded, isReasoningActive]);
+  }, [thinkingContent, expanded, isThinkingNow]);
 
-  if (!thinkingContent && !isStreaming) return null;
-
-  const isThinkingNow = isStreaming && isReasoningActive;
+  // If no thinking content exists and we're not actively reasoning, do not render thinking box
+  if (!hasThinking && !isThinkingNow) return null;
 
   return (
     <div className="my-2 rounded-2xl border border-slate-800/90 bg-slate-950/80 overflow-hidden backdrop-blur-md transition-all shadow-sm">

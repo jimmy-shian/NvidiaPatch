@@ -71,6 +71,10 @@ export default function App() {
         setInput={chat.setInput}
         isStreaming={chat.isStreaming}
         isReasoningActive={chat.isReasoningActive}
+        isCompressing={chat.isCompressing}
+        contextStats={chat.contextStats}
+        compressionToast={chat.compressionToast}
+        onCompressContext={chat.compressContext}
         onSend={() => chat.sendMessage()}
         onStop={chat.stopGeneration}
         onRegenerate={chat.regenerate}

@@ -1,18 +1,18 @@
 /**
  * Local-first IndexedDB Database
- * Handles persistent storage for Conversations, Messages, Custom Skills, Context, and Settings.
+ * Handles persistent storage for Conversations, Messages, Custom Skills, Context, Settings, and Context Summaries.
  */
 import { openDB } from 'idb';
 
 const DB_NAME = 'NvidiaPatchMobileDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented for conversation_summaries store
 
 let dbPromise = null;
 
 export function getDatabase() {
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion) {
         // Conversations store
         if (!db.objectStoreNames.contains('conversations')) {
           const convStore = db.createObjectStore('conversations', { keyPath: 'id' });
@@ -39,6 +39,11 @@ export function getDatabase() {
         // Provider configs store (metadata; sensitive keys in SecureStorage)
         if (!db.objectStoreNames.contains('provider_configs')) {
           db.createObjectStore('provider_configs', { keyPath: 'id' });
+        }
+
+        // Conversation Summaries store (Context Compression)
+        if (!db.objectStoreNames.contains('conversation_summaries')) {
+          db.createObjectStore('conversation_summaries', { keyPath: 'conversationId' });
         }
       }
     });
@@ -71,8 +76,9 @@ export const LocalDB = {
 
   async deleteConversation(id) {
     const db = await getDatabase();
-    const tx = db.transaction(['conversations', 'messages'], 'readwrite');
+    const tx = db.transaction(['conversations', 'messages', 'conversation_summaries'], 'readwrite');
     await tx.objectStore('conversations').delete(id);
+    await tx.objectStore('conversation_summaries').delete(id);
     
     // Delete all messages belonging to this conversation
     const msgIndex = tx.objectStore('messages').index('conversationId');
@@ -128,6 +134,25 @@ export const LocalDB = {
       cursor = await cursor.continue();
     }
     await tx.done;
+  },
+
+  // --- Context Summaries (Compression) ---
+  async getConversationSummary(conversationId) {
+    const db = await getDatabase();
+    return db.get('conversation_summaries', conversationId);
+  },
+
+  async saveConversationSummary(summaryObj) {
+    const db = await getDatabase();
+    await db.put('conversation_summaries', {
+      createdAt: Date.now(),
+      ...summaryObj
+    });
+  },
+
+  async deleteConversationSummary(conversationId) {
+    const db = await getDatabase();
+    await db.delete('conversation_summaries', conversationId);
   },
 
   // --- Custom Skills ---
