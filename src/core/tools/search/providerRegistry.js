@@ -5,6 +5,7 @@
 import { BingHtmlProvider } from './BingHtmlProvider';
 import { DuckDuckGoHtmlProvider } from './DuckDuckGoHtmlProvider';
 import { MojeekHtmlProvider } from './MojeekHtmlProvider';
+import { WikipediaSearchProvider } from './WikipediaSearchProvider';
 import { normalizeSearchResults } from './searchNormalizer';
 
 export class SearchProviderRegistry {
@@ -12,13 +13,15 @@ export class SearchProviderRegistry {
     this.providers = [
       new BingHtmlProvider(),
       new DuckDuckGoHtmlProvider(),
-      new MojeekHtmlProvider()
+      new MojeekHtmlProvider(),
+      new WikipediaSearchProvider()
     ];
 
     this.healthStats = {
       bing: { failures: 0, lastSuccess: null, lastFailure: null },
       duckduckgo: { failures: 0, lastSuccess: null, lastFailure: null },
-      mojeek: { failures: 0, lastSuccess: null, lastFailure: null }
+      mojeek: { failures: 0, lastSuccess: null, lastFailure: null },
+      wikipedia: { failures: 0, lastSuccess: null, lastFailure: null }
     };
   }
 

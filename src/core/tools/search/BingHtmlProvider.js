@@ -1,7 +1,7 @@
 /**
  * Bing HTML Search Provider
  * Scrapes public web SERP from Bing without requiring API keys or user servers.
- * Decodes base64 u=a1 redirect tracking URLs into genuine target URLs.
+ * Decodes base64 url-safe u=a1 redirect tracking URLs into genuine target URLs.
  */
 import { SearchProvider } from './SearchProvider';
 import { HttpClient } from '../../network/httpClient';
@@ -18,18 +18,36 @@ export class BingHtmlProvider extends SearchProvider {
   decodeBingUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') return '';
 
+    // If it is already a direct non-Bing target URL
+    if ((rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) && !rawUrl.includes('bing.com/ck/')) {
+      return rawUrl;
+    }
+
     const match = rawUrl.match(/[?&]u=a1([A-Za-z0-9_\-\+/=]+)/);
     if (match && match[1]) {
-      let b64Str = match[1];
+      let b64Str = match[1].replace(/-/g, '+').replace(/_/g, '/');
       // Pad base64 string if necessary
       b64Str += '='.repeat((4 - (b64Str.length % 4)) % 4);
       try {
         if (typeof atob === 'function') {
-          return atob(b64Str);
+          const binary = atob(b64Str);
+          const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+          const decoded = new TextDecoder('utf-8').decode(bytes);
+          if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+            return decoded;
+          }
         } else if (typeof Buffer !== 'undefined') {
-          return Buffer.from(b64Str, 'base64').toString('utf-8');
+          const decoded = Buffer.from(b64Str, 'base64').toString('utf-8');
+          if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+            return decoded;
+          }
         }
       } catch (_) {}
+    }
+
+    // Never return a Bing tracking redirect link as a valid result URL
+    if (rawUrl.includes('bing.com/ck/')) {
+      return '';
     }
 
     if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
@@ -47,18 +65,16 @@ export class BingHtmlProvider extends SearchProvider {
     const results = [];
     const seenUrls = new Set();
 
-    // Match <li class="b_algo">...</li>
-    const blockRegex = /<li\b[^>]*class=["'][^"']*b_algo[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi;
+    // Match <li class="b_algo">...</li> or <div class="b_algo">...</div>
+    const blockRegex = /<(?:li|div)\b[^>]*class=["'][^"']*b_algo[^"']*["'][^>]*>([\s\S]*?)<\/(?:li|div)>/gi;
     let blockMatch;
 
     while ((blockMatch = blockRegex.exec(html)) !== null && results.length < 10) {
       const block = blockMatch[1];
 
-      // Extract Title & Href: <h2><a href="...">Title</a></h2>
-      const titleMatch = block.match(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i);
-      if (!titleMatch) continue;
-
-      const linkMatch = titleMatch[1].match(/href=["']([^"']+)["']/i);
+      // Extract Title & Href: <h2><a href="...">Title</a></h2> or <h3><a href="...">Title</a></h3>
+      const titleMatch = block.match(/<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/i);
+      const linkMatch = (titleMatch ? titleMatch[1].match(/href=["']([^"']+)["']/i) : null) || block.match(/<a\b[^>]*href=["']([^"']+)["']/i);
       if (!linkMatch) continue;
 
       const rawHref = linkMatch[1].replace(/&amp;/g, '&');
@@ -67,10 +83,10 @@ export class BingHtmlProvider extends SearchProvider {
       if (!realUrl || seenUrls.has(realUrl)) continue;
       seenUrls.add(realUrl);
 
-      const rawTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+      const rawTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : (realUrl);
 
-      // Extract Snippet: <div class="b_caption"><p>...</p></div> or <p>...</p>
-      const snippetMatch = block.match(/<div\b[^>]*class=["'][^"']*b_caption[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) ||
+      // Extract Snippet: <div class="b_caption"><p>...</p></div> or <p>...</p> or <div class="b_snippet">
+      const snippetMatch = block.match(/<div\b[^>]*class=["'][^"']*(?:b_caption|b_snippet|b_lineclamp)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) ||
                            block.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i);
 
       const rawSnippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').trim() : '';

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BingHtmlProvider } from '../search/BingHtmlProvider';
 import { DuckDuckGoHtmlProvider } from '../search/DuckDuckGoHtmlProvider';
 import { MojeekHtmlProvider } from '../search/MojeekHtmlProvider';
+import { WikipediaSearchProvider } from '../search/WikipediaSearchProvider';
 import { normalizeSearchResults } from '../search/searchNormalizer';
 import { SearchProviderRegistry } from '../search/providerRegistry';
 import { HttpClient } from '../../network/httpClient';
@@ -66,6 +67,13 @@ describe('Search Providers & Normalizer', () => {
     expect(results[0].source).toBe('bing');
   });
 
+  it('BingHtmlProvider safely decodes base64url characters with dashes and underscores', () => {
+    const provider = new BingHtmlProvider();
+    const testUrl = 'https://www.bing.com/ck/a?!&&p=123&u=a1aHR0cHM6Ly96aC53aWtpcGVkaWEub3JnL3poLXR3LyVFNyVCRSU4RSVFNSU5QiVCRA&ntb=1';
+    const decoded = provider.decodeBingUrl(testUrl);
+    expect(decoded).toBe('https://zh.wikipedia.org/zh-tw/%E7%BE%8E%E5%9B%BD');
+  });
+
   it('DuckDuckGoHtmlProvider resolves uddg redirects and extracts search items', () => {
     const provider = new DuckDuckGoHtmlProvider();
     const results = provider.parseHtml(MOCK_DDG_HTML);
@@ -116,5 +124,28 @@ describe('Search Providers & Normalizer', () => {
     expect(results).toHaveLength(1);
     expect(results[0].source).toBe('mojeek');
     expect(results[0].url).toBe('https://deepseek.com/blog/v4-announcement');
+  });
+
+  it('WikipediaSearchProvider searches Wikipedia API and returns formatted articles', async () => {
+    const provider = new WikipediaSearchProvider();
+
+    vi.spyOn(HttpClient, 'request').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: {
+        query: {
+          search: [
+            { title: '美國總統', snippet: '<b>美國總統</b>是美利堅合眾國的國家元首...' }
+          ]
+        }
+      }
+    });
+
+    const results = await provider.search('美國總統');
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('美國總統');
+    expect(results[0].url).toContain('zh.wikipedia.org/wiki/%E7%BE%8E%E5%9C%8B%E7%B8%BD%E7%B5%B1');
+    expect(results[0].snippet).toContain('美國總統是美利堅合眾國');
+    expect(results[0].source).toBe('wikipedia');
   });
 });
