@@ -23,8 +23,11 @@ export function useMobileChat({
   const [isReasoningActive, setIsReasoningActive] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
   const [compressionToast, setCompressionToast] = useState(null);
+  const [liveStatus, setLiveStatus] = useState(null); // Ephemeral progress UI state: { phase, meta }
 
   const agentCoreRef = useRef(null);
+  const activeRunIdRef = useRef(null);
+  const finalizedRunsRef = useRef(new Set());
   const loadMessagesGenRef = useRef(0); // Anti-race condition generation counter
 
   // Load conversations on mount
@@ -130,7 +133,11 @@ export function useMobileChat({
 
   // Create new conversation
   const newChat = useCallback(async () => {
+    activeRunIdRef.current = null;
     if (isStreaming) agentCoreRef.current?.abort();
+    setIsStreaming(false);
+    setIsReasoningActive(false);
+    setLiveStatus(null);
 
     const newConv = await LocalDB.saveConversation({
       id: `conv_${Date.now()}`,
@@ -146,9 +153,13 @@ export function useMobileChat({
     setInput('');
   }, [currentProviderId, currentModelId, selectedSkillIds, isStreaming]);
 
-  // Select conversation with generation check
+  // Select conversation with generation check and stream abortion
   const selectConversation = useCallback((convId) => {
+    activeRunIdRef.current = null;
     if (isStreaming) agentCoreRef.current?.abort();
+    setIsStreaming(false);
+    setIsReasoningActive(false);
+    setLiveStatus(null);
     setCurrentConversationId(convId);
   }, [isStreaming]);
 
@@ -225,10 +236,16 @@ export function useMobileChat({
   const executeChatStream = useCallback(async (historyMessages) => {
     if (!currentModelId || historyMessages.length === 0) return;
 
+    // 1. Cancel previous stream & initialize new run
+    agentCoreRef.current?.abort();
+    const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    activeRunIdRef.current = runId;
+    const startedAt = Date.now();
+
     const activeConfig = providerConfigs[currentProviderId] || {};
     const provider = createProvider(currentProviderId, activeConfig);
 
-    // 1. Dynamic 80% Context Compression check
+    // 2. Dynamic 80% Context Compression check
     const compressionThreshold = getCompressionThreshold(currentModelId);
     const currentTokens = estimateFullContextTokens({
       systemPrompt: 'System',
@@ -252,14 +269,17 @@ export function useMobileChat({
       }
     }
 
-    // 2. Build model request messages (uses compressed summary if available)
+    // 3. Build model request messages (uses compressed summary if available)
     const modelRequestMessages = await ContextCompressor.buildRequestContextMessages({
       conversationId: currentConversationId,
       messages: historyMessages
     });
 
+    if (activeRunIdRef.current !== runId) return;
+
+    const assistantMsgId = `msg_${Date.now()}_a`;
     const assistantMsg = {
-      id: `msg_${Date.now()}_a`,
+      id: assistantMsgId,
       conversationId: currentConversationId,
       role: 'assistant',
       modelName: currentModelId.split('/').pop(),
@@ -267,13 +287,15 @@ export function useMobileChat({
       thinkingContent: '',
       tool_calls: null,
       toolExecutions: [], // Live UI state: [{ toolCallId, toolName, status, args, result }]
-      createdAt: Date.now() + 1,
+      startedAt,
+      createdAt: startedAt,
       ordinal: historyMessages.length
     };
 
     setMessages([...historyMessages, assistantMsg]);
     setIsStreaming(true);
     setIsReasoningActive(true);
+    setLiveStatus({ phase: 'thinking', meta: {} });
 
     const agent = new AgentCore(provider);
     agentCoreRef.current = agent;
@@ -291,17 +313,19 @@ export function useMobileChat({
     let latestReportedUsage = null;
 
     await agent.runChat({
+      runId,
       messages: payloadForAgent,
       model: currentModelId,
       selectedSkillIds,
       onThinking: (delta) => {
+        if (activeRunIdRef.current !== runId) return;
         setIsReasoningActive(true);
         accumulatedThinking += delta;
         setMessages(prev => {
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
           const last = prev[lastIdx];
-          if (last.role !== 'assistant') return prev;
+          if (last.id !== assistantMsgId) return prev;
           return [
             ...prev.slice(0, lastIdx),
             { ...last, thinkingContent: accumulatedThinking }
@@ -309,21 +333,28 @@ export function useMobileChat({
         });
       },
       onContent: (delta) => {
+        if (activeRunIdRef.current !== runId) return;
         setIsReasoningActive(false);
         accumulatedContent += delta;
         setMessages(prev => {
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
           const last = prev[lastIdx];
-          if (last.role !== 'assistant') return prev;
+          if (last.id !== assistantMsgId) return prev;
           return [
             ...prev.slice(0, lastIdx),
             { ...last, content: accumulatedContent, thinkingContent: accumulatedThinking }
           ];
         });
       },
+      onStatusChange: (status) => {
+        if (activeRunIdRef.current !== runId) return;
+        setLiveStatus(status);
+      },
       onToolStart: (toolCalls) => {
+        if (activeRunIdRef.current !== runId) return;
         setIsReasoningActive(false);
+        accumulatedContent = ''; // Clear draft tool JSON arguments
         liveToolExecutions = toolCalls.map(tc => ({
           toolCallId: tc.id,
           toolName: tc.function.name,
@@ -334,14 +365,15 @@ export function useMobileChat({
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
           const last = prev[lastIdx];
-          if (last.role !== 'assistant') return prev;
+          if (last.id !== assistantMsgId) return prev;
           return [
             ...prev.slice(0, lastIdx),
-            { ...last, tool_calls: toolCalls, toolExecutions: [...liveToolExecutions] }
+            { ...last, content: '', tool_calls: toolCalls, toolExecutions: [...liveToolExecutions] }
           ];
         });
       },
       onToolStatus: ({ toolCallId, toolName, status, args }) => {
+        if (activeRunIdRef.current !== runId) return;
         liveToolExecutions = liveToolExecutions.map(te =>
           te.toolCallId === toolCallId ? { ...te, status, args } : te
         );
@@ -349,7 +381,7 @@ export function useMobileChat({
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
           const last = prev[lastIdx];
-          if (last.role !== 'assistant') return prev;
+          if (last.id !== assistantMsgId) return prev;
           return [
             ...prev.slice(0, lastIdx),
             { ...last, toolExecutions: [...liveToolExecutions] }
@@ -357,6 +389,7 @@ export function useMobileChat({
         });
       },
       onToolResult: ({ toolCallId, toolName, args, result }) => {
+        if (activeRunIdRef.current !== runId) return;
         liveToolExecutions = liveToolExecutions.map(te =>
           te.toolCallId === toolCallId ? { ...te, status: 'completed', args, result } : te
         );
@@ -364,7 +397,7 @@ export function useMobileChat({
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
           const last = prev[lastIdx];
-          if (last.role !== 'assistant') return prev;
+          if (last.id !== assistantMsgId) return prev;
           return [
             ...prev.slice(0, lastIdx),
             { ...last, toolExecutions: [...liveToolExecutions] }
@@ -372,22 +405,51 @@ export function useMobileChat({
         });
       },
       onUsage: (rawUsage) => {
+        if (activeRunIdRef.current !== runId) return;
         latestReportedUsage = normalizeApiUsage(rawUsage);
       },
       onDone: async (doneData) => {
+        if (activeRunIdRef.current !== runId || finalizedRunsRef.current.has(runId)) return;
+        finalizedRunsRef.current.add(runId);
+
         setIsStreaming(false);
         setIsReasoningActive(false);
+        setLiveStatus(null);
+
+        const completedAt = Date.now();
+        const durationMs = completedAt - startedAt;
 
         const finalNormalizedUsage = doneData?.usage ? normalizeApiUsage(doneData.usage) : latestReportedUsage;
+        let finalContentToDisplay = (doneData?.content || accumulatedContent || '').trim();
+
+        // If content is merely raw JSON tool arguments, fallback to empty
+        if (
+          (finalContentToDisplay.startsWith('{') && finalContentToDisplay.endsWith('}') && finalContentToDisplay.includes('"query"')) ||
+          (finalContentToDisplay.startsWith('```json') && finalContentToDisplay.includes('"query"'))
+        ) {
+          finalContentToDisplay = '';
+        }
 
         const finalAssistantMsg = {
           ...assistantMsg,
-          content: accumulatedContent,
+          content: finalContentToDisplay,
           thinkingContent: accumulatedThinking,
           tool_calls: assistantMsg.tool_calls || null,
           toolExecutions: liveToolExecutions,
-          usage: finalNormalizedUsage
+          usage: finalNormalizedUsage,
+          startedAt,
+          completedAt,
+          durationMs
         };
+
+        setMessages(prev => {
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          return [
+            ...prev.slice(0, lastIdx),
+            finalAssistantMsg
+          ];
+        });
 
         // Transactionally save all generated tool messages and assistant responses
         const msgsToPersist = [];
@@ -401,7 +463,7 @@ export function useMobileChat({
               tool_calls: tm.tool_calls || null,
               tool_call_id: tm.tool_call_id || null,
               name: tm.name || null,
-              createdAt: Date.now() + idx,
+              createdAt: startedAt + idx,
               ordinal: historyMessages.length + idx
             });
           });
@@ -431,20 +493,30 @@ export function useMobileChat({
         }
       },
       onError: async (err) => {
+        if (activeRunIdRef.current !== runId || finalizedRunsRef.current.has(runId)) return;
+        finalizedRunsRef.current.add(runId);
+
         setIsStreaming(false);
         setIsReasoningActive(false);
+        setLiveStatus(null);
+
+        const completedAt = Date.now();
+        const durationMs = completedAt - startedAt;
         const errMsg = `\n[錯誤]: ${err.message}`;
+
         const finalAssistantMsg = {
           ...assistantMsg,
           content: (accumulatedContent || '') + errMsg,
           thinkingContent: accumulatedThinking,
-          toolExecutions: liveToolExecutions
+          toolExecutions: liveToolExecutions,
+          startedAt,
+          completedAt,
+          durationMs
         };
+
         setMessages(prev => {
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
-          const last = prev[lastIdx];
-          if (last.role !== 'assistant') return prev;
           return [
             ...prev.slice(0, lastIdx),
             finalAssistantMsg
@@ -487,16 +559,23 @@ export function useMobileChat({
 
   // Stop Generation
   const stopGeneration = useCallback(() => {
+    activeRunIdRef.current = null;
     if (agentCoreRef.current) {
       agentCoreRef.current.abort();
     }
     setIsStreaming(false);
     setIsReasoningActive(false);
+    setLiveStatus(null);
   }, []);
 
   // Regenerate / Retry response
   const regenerate = useCallback(async () => {
     if (messages.length === 0 || isStreaming) return;
+
+    activeRunIdRef.current = null;
+    if (agentCoreRef.current) {
+      agentCoreRef.current.abort();
+    }
 
     let baseHistory = [...messages];
     const lastMsg = baseHistory[baseHistory.length - 1];
@@ -548,6 +627,7 @@ export function useMobileChat({
     isStreaming,
     isReasoningActive,
     isCompressing,
+    liveStatus,
     contextStats,
     compressionToast,
     compressContext,

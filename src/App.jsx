@@ -72,6 +72,7 @@ export default function App() {
         isStreaming={chat.isStreaming}
         isReasoningActive={chat.isReasoningActive}
         isCompressing={chat.isCompressing}
+        liveStatus={chat.liveStatus}
         contextStats={chat.contextStats}
         compressionToast={chat.compressionToast}
         onCompressContext={chat.compressContext}

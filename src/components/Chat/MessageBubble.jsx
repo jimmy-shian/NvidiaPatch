@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight } from 'lucide-react';
+import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
 
@@ -9,6 +9,7 @@ export default function MessageBubble({
   isLast,
   isStreaming,
   isReasoningActive,
+  liveStatus,
   onRegenerate,
   onDelete,
   onEdit
@@ -19,12 +20,26 @@ export default function MessageBubble({
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [draftText, setDraftText] = useState(message.content || '');
   const [expandedToolResults, setExpandedToolResults] = useState({});
+  const [liveElapsedMs, setLiveElapsedMs] = useState(0);
 
   if (message.role === 'system') return null; // Never render hidden system messages
 
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
   const isFailed = !isUser && (message.content?.includes('[錯誤]') || message.content?.includes('[Error]'));
+
+  // Live timer for active streaming assistant turn
+  useEffect(() => {
+    if (!isStreaming || !isLast || isUser) return;
+    const startTime = message.startedAt || message.createdAt || Date.now();
+    setLiveElapsedMs(Date.now() - startTime);
+
+    const timer = setInterval(() => {
+      setLiveElapsedMs(Date.now() - startTime);
+    }, 100);
+
+    return () => clearInterval(timer);
+  }, [isStreaming, isLast, isUser, message.startedAt, message.createdAt]);
 
   const handleCopy = async () => {
     try {
@@ -64,6 +79,55 @@ export default function MessageBubble({
       [id]: !prev[id]
     }));
   };
+
+  // Timestamp string
+  const timestamp = message.startedAt || message.createdAt || Date.now();
+  const timeStr = new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+
+  // Duration display string
+  let durationText = null;
+  if (!isUser) {
+    if (isStreaming && isLast) {
+      const sec = Math.max(0.1, (liveElapsedMs / 1000)).toFixed(1);
+      durationText = `處理中 ${sec}s`;
+    } else if (message.durationMs !== undefined && message.durationMs !== null) {
+      durationText = `回應耗時 ${(message.durationMs / 1000).toFixed(1)}s`;
+    } else if (message.completedAt && message.startedAt) {
+      durationText = `回應耗時 ${((message.completedAt - message.startedAt) / 1000).toFixed(1)}s`;
+    }
+  }
+
+  // Map ephemeral progress status
+  const getLiveStatusText = () => {
+    if (!liveStatus) return null;
+    const { phase, meta = {} } = liveStatus;
+    switch (phase) {
+      case 'thinking':
+        return '正在思考與分析問題…';
+      case 'searching':
+        return meta.query ? `正在搜尋相關資料: "${meta.query}"…` : '正在搜尋相關資料…';
+      case 'retrying_query':
+        return meta.relaxedQuery
+          ? `第一次搜尋無直接結果，正在更換關鍵字重新檢索: "${meta.relaxedQuery}"…`
+          : '正在調整關鍵字重新搜尋…';
+      case 'reading':
+        return meta.count ? `找到 ${meta.count} 個來源網頁，正在閱讀…` : '正在檢索並閱讀來源網頁…';
+      case 'using_tool':
+        return `正在調用工具: ${meta.toolName || ''}…`;
+      case 'organizing':
+        return '已獲取相關資料，正在整理回答…';
+      case 'generating':
+        return '正在生成回覆…';
+      default:
+        return null;
+    }
+  };
+
+  const activeStatusText = isStreaming && isLast ? getLiveStatusText() : null;
 
   // Render standalone Tool Result message if in history
   if (isTool) {
@@ -115,25 +179,37 @@ export default function MessageBubble({
   }
 
   return (
-    <div className={`flex flex-col my-2.5 px-2 w-full ${isUser ? 'items-end' : 'items-start'}`}>
-      {/* Sender Header */}
-      <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-slate-400">
+    <div className={`flex flex-col my-2 px-1 sm:px-2 w-full ${isUser ? 'items-end' : 'items-start'}`}>
+      {/* Sender Header with Time & Elapsed Duration */}
+      <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-slate-400 select-none">
         {isUser ? (
           <>
+            <span className="font-mono text-slate-500 text-[10px]">{timeStr}</span>
+            <span className="text-slate-600">·</span>
             <span>您</span>
             <User size={12} className="text-slate-400" />
           </>
         ) : (
           <>
-            <Bot size={13} className="text-emerald-400" />
+            <Bot size={13} className="text-emerald-400 shrink-0" />
             <span className="text-emerald-400 font-semibold">{message.modelName || 'Assistant'}</span>
+            <span className="text-slate-600">·</span>
+            <span className="font-mono text-slate-500 text-[10px]">{timeStr}</span>
+            {durationText && (
+              <>
+                <span className="text-slate-600">·</span>
+                <span className="text-emerald-400/90 font-mono text-[10px] bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.2 rounded">
+                  {durationText}
+                </span>
+              </>
+            )}
           </>
         )}
       </div>
 
       {/* Bubble Container */}
       <div
-        className={`relative max-w-[92%] sm:max-w-[85%] rounded-2xl p-3.5 shadow-sm text-sm break-words overflow-hidden ${
+        className={`relative max-w-[94%] sm:max-w-[85%] rounded-2xl p-3 sm:p-3.5 shadow-sm text-sm break-words overflow-hidden ${
           isUser
             ? 'bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-br-sm'
             : isFailed
@@ -141,6 +217,14 @@ export default function MessageBubble({
               : 'bg-slate-900 border border-slate-800 text-slate-100 rounded-bl-sm'
         }`}
       >
+        {/* Ephemeral Progress Status Row (only during live streaming) */}
+        {!isUser && activeStatusText && (
+          <div className="flex items-center gap-2 text-xs text-emerald-300 bg-emerald-950/70 border border-emerald-800/60 rounded-xl px-2.5 py-1.5 mb-2.5 animate-fade-in shadow-inner">
+            <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
+            <span className="font-sans leading-tight truncate">{activeStatusText}</span>
+          </div>
+        )}
+
         {/* Thinking process for Assistant */}
         {!isUser && (
           <ThinkingBlock
@@ -156,26 +240,26 @@ export default function MessageBubble({
             {message.toolExecutions.map((te, idx) => {
               const isExec = te.status === 'executing' || te.status === 'calling';
               const queryStr = typeof te.args === 'object' ? te.args?.query : te.args;
-              const resultCount = te.result?.results?.length || 0;
+              const resultCount = te.result?.results?.length || (te.result?.count ?? 0);
               const isExpanded = Boolean(expandedToolResults[te.toolCallId || idx]);
 
               return (
                 <div key={te.toolCallId || idx} className="rounded-xl bg-slate-950/80 border border-slate-800 p-2 text-xs">
                   <div
                     onClick={() => te.result && toggleToolResult(te.toolCallId || idx)}
-                    className="flex items-center justify-between gap-2 cursor-pointer"
+                    className="flex items-center justify-between gap-2 cursor-pointer select-none"
                   >
-                    <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
                       {isExec ? (
                         <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
                       ) : (
                         <Search size={13} className="text-emerald-400 shrink-0" />
                       )}
-                      <span className="font-semibold text-emerald-300">
-                        {isExec ? '正在上網查詢…' : '已完成搜尋'}
+                      <span className="font-semibold text-emerald-300 whitespace-nowrap shrink-0">
+                        {isExec ? '正在搜尋…' : '已完成搜尋'}
                       </span>
                       {queryStr && (
-                        <span className="text-slate-400 font-mono truncate max-w-[140px]">
+                        <span className="text-slate-400 font-mono truncate min-w-0 flex-1">
                           "{queryStr}"
                         </span>
                       )}
@@ -189,14 +273,14 @@ export default function MessageBubble({
                     )}
                   </div>
 
-                  {isExpanded && te.result?.results && (
+                  {isExpanded && te.result?.results && te.result.results.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] animate-fade-in">
                       {te.result.results.map((r, ri) => (
                         <div key={ri} className="p-1.5 rounded bg-black/50 border border-slate-800/80">
                           <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
                             {r.title}
                           </a>
-                          <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet}</p>
+                          <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet || r.content}</p>
                         </div>
                       ))}
                     </div>
@@ -263,6 +347,10 @@ export default function MessageBubble({
               <div className="flex items-center gap-2 text-slate-400 py-1 text-xs">
                 <Loader2 size={13} className="animate-spin text-emerald-400" />
                 <span>正在生成回覆…</span>
+              </div>
+            ) : message.toolExecutions && message.toolExecutions.length > 0 ? (
+              <div className="text-xs text-slate-400 italic py-1">
+                已檢索上述資料並整合完成。
               </div>
             ) : null}
             {isStreaming && isLast && !isReasoningActive && message.content && (

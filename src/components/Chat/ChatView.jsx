@@ -13,6 +13,7 @@ export default function ChatView({
   isStreaming,
   isReasoningActive,
   isCompressing,
+  liveStatus = null,
   contextStats = { usedTokens: 0, maxTokens: 32768, threshold: 26214, isNearLimit: false },
   compressionToast,
   onCompressContext,
@@ -34,35 +35,107 @@ export default function ChatView({
   const messagesEndRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const autoFollowRef = useRef(true);
+  const touchStartYRef = useRef(null);
+  const isProgrammaticScrollRef = useRef(false);
+  const rafPendingRef = useRef(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
 
-  // Smooth scroll to bottom handler
-  const scrollToBottom = useCallback(() => {
-    autoFollowRef.current = true;
-    setIsNearBottom(true);
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
-  // Monitor user scroll position to toggle auto-follow
+  // Monitor user scroll position & update auto-follow
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const nearBottom = distanceFromBottom <= 90;
+    const nearBottom = distanceFromBottom <= 35;
     setIsNearBottom(nearBottom);
-    autoFollowRef.current = nearBottom;
+
+    if (isProgrammaticScrollRef.current) {
+      if (distanceFromBottom <= 15) {
+        isProgrammaticScrollRef.current = false;
+        autoFollowRef.current = true;
+      }
+      return;
+    }
+
+    if (nearBottom) {
+      autoFollowRef.current = true;
+    } else if (distanceFromBottom > 60) {
+      autoFollowRef.current = false;
+    }
   }, []);
 
-  // Auto follow bottom during streaming only if user is already at the bottom
-  useEffect(() => {
-    if (autoFollowRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+  // Gesture handling: Touch start
+  const handleTouchStart = useCallback((e) => {
+    if (e.touches && e.touches[0]) {
+      touchStartYRef.current = e.touches[0].clientY;
     }
-  }, [messages, isStreaming]);
+  }, []);
 
-  // Wrap send to re-enable auto follow
+  // Gesture handling: Touch move (detect upward scroll gesture)
+  const handleTouchMove = useCallback((e) => {
+    if (!e.touches || !e.touches[0] || touchStartYRef.current === null) return;
+    const currentY = e.touches[0].clientY;
+    const deltaY = currentY - touchStartYRef.current; // Positive = pulling down to view older messages
+
+    const el = scrollContainerRef.current;
+    if (el) {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (deltaY > 8 && distanceFromBottom > 40) {
+        autoFollowRef.current = false;
+        setIsNearBottom(false);
+      }
+    }
+  }, []);
+
+  // Wheel handling: Detect wheeling up
+  const handleWheel = useCallback((e) => {
+    if (e.deltaY < -2) { // Scrolling up
+      const el = scrollContainerRef.current;
+      if (el) {
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (distanceFromBottom > 40) {
+          autoFollowRef.current = false;
+          setIsNearBottom(false);
+        }
+      }
+    }
+  }, []);
+
+  // RAF-throttled auto follow bottom during streaming
+  useEffect(() => {
+    if (!autoFollowRef.current || isProgrammaticScrollRef.current) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    if (!rafPendingRef.current) {
+      rafPendingRef.current = true;
+      requestAnimationFrame(() => {
+        rafPendingRef.current = false;
+        if (autoFollowRef.current && el && !isProgrammaticScrollRef.current) {
+          el.scrollTop = el.scrollHeight - el.clientHeight;
+        }
+      });
+    }
+  }, [messages, isStreaming, liveStatus]);
+
+  // Smooth scroll to bottom handler (Floating button)
+  const scrollToBottom = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    isProgrammaticScrollRef.current = true;
+    setIsNearBottom(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+
+    setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+      autoFollowRef.current = true;
+    }, 350);
+  }, []);
+
+  // Wrap send to immediately re-enable auto follow
   const handleSendWrapped = useCallback(() => {
     autoFollowRef.current = true;
+    isProgrammaticScrollRef.current = false;
     setIsNearBottom(true);
     onSend();
   }, [onSend]);
@@ -76,8 +149,7 @@ export default function ChatView({
     maxTokens = 32768,
     threshold = 26214,
     isNearLimit = false,
-    isOverThreshold = false,
-    isAuthoritative = false
+    isOverThreshold = false
   } = contextStats;
 
   return (
@@ -163,11 +235,15 @@ export default function ChatView({
         </div>
       )}
 
-      {/* Messages List Area with Transition & Scroll Damping */}
+      {/* Messages List Area with Gesture-Aware Scroll Controller */}
       <main
         ref={scrollContainerRef}
         onScroll={handleScroll}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onWheel={handleWheel}
         className="flex-1 chat-scroll-container p-2 sm:p-4 space-y-2 max-w-full relative"
+        style={{ scrollBehavior: 'auto', overflowAnchor: 'auto' }}
       >
         <div key={conversation?.id || 'empty_conv'} className="animate-chat-switch space-y-2">
           {messages.length === 0 ? (
@@ -184,14 +260,15 @@ export default function ChatView({
             </div>
           ) : (
             messages
-              .filter(msg => msg.role !== 'system') // Never render system messages in UI
+              .filter(msg => msg.role !== 'system')
               .map((msg, idx) => (
-                <div key={msg.id || idx} className="chat-message-anchor">
+                <div key={msg.id || idx} className="chat-message-anchor" style={{ overflowAnchor: 'auto' }}>
                   <MessageBubble
                     message={msg}
                     isLast={idx === messages.length - 1}
                     isStreaming={isStreaming}
                     isReasoningActive={isReasoningActive}
+                    liveStatus={idx === messages.length - 1 ? liveStatus : null}
                     onRegenerate={onRegenerate}
                     onDelete={onDeleteMessage}
                     onEdit={onEditMessage}
@@ -199,7 +276,7 @@ export default function ChatView({
                 </div>
               ))
           )}
-          <div ref={messagesEndRef} />
+          <div ref={messagesEndRef} style={{ overflowAnchor: 'none' }} />
         </div>
       </main>
 

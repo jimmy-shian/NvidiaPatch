@@ -18,3 +18,4 @@ android/local.properties
 !android/app/debug.keystore
 *.p12
 keystore.properties
+*.apk
