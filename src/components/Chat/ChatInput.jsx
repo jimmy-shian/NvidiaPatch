@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Sparkles, ChevronDown, ChevronUp, CheckSquare, Square as SquareIcon, X } from 'lucide-react';
+import { Send, Square, Sparkles, ChevronDown, ChevronUp, X } from 'lucide-react';
 
 export const SKILL_CHINESE_NAMES = {
   bazi: '八字命理占卜',
@@ -34,6 +34,7 @@ export default function ChatInput({
 }) {
   const { t } = useTranslation();
   const textareaRef = useRef(null);
+  const skillsContainerRef = useRef(null);
   const [isSkillsMenuOpen, setIsSkillsMenuOpen] = useState(false);
 
   // Auto resize textarea
@@ -45,11 +46,34 @@ export default function ChatInput({
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, [input]);
 
-  // Mobile Keyboard Requirement: Enter is newline ONLY.
-  // Send is ONLY triggered by tapping the explicit Send button.
+  // Click outside and Esc listener to automatically close skills menu
+  useEffect(() => {
+    if (!isSkillsMenuOpen) return;
+
+    const handleDocumentClick = (e) => {
+      if (skillsContainerRef.current && !skillsContainerRef.current.contains(e.target)) {
+        setIsSkillsMenuOpen(false);
+      }
+    };
+
+    const handleKeyDownEsc = (e) => {
+      if (e.key === 'Escape') {
+        setIsSkillsMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleDocumentClick);
+    document.addEventListener('touchstart', handleDocumentClick);
+    document.addEventListener('keydown', handleKeyDownEsc);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick);
+      document.removeEventListener('touchstart', handleDocumentClick);
+      document.removeEventListener('keydown', handleKeyDownEsc);
+    };
+  }, [isSkillsMenuOpen]);
+
   const handleKeyDown = (e) => {
-    // Plain Enter creates newline as default behavior.
-    // Allow Ctrl+Enter or Cmd+Enter for quick desktop testing if desired, but NEVER plain Enter.
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       if (!isStreaming && input.trim() && !disabled) {
@@ -62,9 +86,9 @@ export default function ChatInput({
 
   return (
     <div className="w-full bg-[#0b0f17]/95 border-t border-slate-800/80 px-3 pt-2 pb-2 safe-area-bottom backdrop-blur-md relative">
-      {/* Expandable Skills Selector Menu */}
+      {/* Expandable Skills Selector Menu with Click-Outside Ref */}
       {availableSkills.length > 0 && (
-        <div className="mb-2">
+        <div ref={skillsContainerRef} className="mb-2 relative">
           {/* Toggle Button */}
           <div className="flex items-center justify-between">
             <button
@@ -96,9 +120,9 @@ export default function ChatInput({
             )}
           </div>
 
-          {/* Expanded Multiselect Dropdown / Drawer */}
+          {/* Expanded Multiselect Dropdown */}
           {isSkillsMenuOpen && (
-            <div className="mt-2 p-2.5 rounded-2xl bg-[#111827] border border-slate-800 shadow-xl max-h-[40vh] overflow-y-auto space-y-1 animate-fade-in">
+            <div className="absolute left-0 right-0 bottom-full mb-2 p-2.5 rounded-2xl bg-[#111827] border border-slate-700 shadow-2xl max-h-[45vh] overflow-y-auto space-y-1 animate-fade-in z-30">
               <div className="text-[11px] text-slate-400 px-1 pb-1 font-medium border-b border-slate-800/80 mb-1 flex items-center justify-between">
                 <span>點擊勾選或取消技能（可複選）：</span>
                 <button

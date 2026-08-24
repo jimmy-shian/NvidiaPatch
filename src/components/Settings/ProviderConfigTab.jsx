@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, CheckCircle2, XCircle, RefreshCw, Server, Key, Cpu, ShieldCheck, ChevronDown, ChevronUp, Check, AlertCircle, Search } from 'lucide-react';
 import { PROVIDER_TYPES } from '../../core/providers';
@@ -30,12 +30,44 @@ export default function ProviderConfigTab({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [modelMode, setModelMode] = useState('select'); // 'select' | 'custom'
+  const [modelMode, setModelMode] = useState('select');
   
   // Custom dropdown open states
   const [isProviderOpen, setIsProviderOpen] = useState(false);
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState('');
+
+  const providerDropdownRef = useRef(null);
+  const modelDropdownRef = useRef(null);
+
+  // Click outside and Esc listener for Provider and Model dropdowns
+  useEffect(() => {
+    const handleDocumentClick = (e) => {
+      if (providerDropdownRef.current && !providerDropdownRef.current.contains(e.target)) {
+        setIsProviderOpen(false);
+      }
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target)) {
+        setIsModelDropdownOpen(false);
+      }
+    };
+
+    const handleKeyDownEsc = (e) => {
+      if (e.key === 'Escape') {
+        setIsProviderOpen(false);
+        setIsModelDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleDocumentClick);
+    document.addEventListener('touchstart', handleDocumentClick);
+    document.addEventListener('keydown', handleKeyDownEsc);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick);
+      document.removeEventListener('touchstart', handleDocumentClick);
+      document.removeEventListener('keydown', handleKeyDownEsc);
+    };
+  }, []);
 
   const activeConfig = providerConfigs[currentProviderId] || {
     id: currentProviderId,
@@ -120,8 +152,8 @@ export default function ProviderConfigTab({
         </p>
       </div>
 
-      {/* 1. Custom Provider Dropdown (100% Reliable Custom React Menu) */}
-      <div className="space-y-1.5">
+      {/* 1. Custom Provider Dropdown with Click-Outside Ref */}
+      <div ref={providerDropdownRef} className="space-y-1.5 relative">
         <label className="block text-slate-300 font-semibold">目前 Provider</label>
         <div className="relative">
           <button
@@ -216,8 +248,8 @@ export default function ProviderConfigTab({
         </div>
       </div>
 
-      {/* 4. Default Model Selection Mode (選單 / 自訂) */}
-      <div className="space-y-2 pt-1">
+      {/* 4. Default Model Selection Mode (選單 / 自訂) with Click-Outside Ref */}
+      <div ref={modelDropdownRef} className="space-y-2 pt-1 relative">
         <div className="flex items-center justify-between">
           <label className="block text-slate-300 font-semibold">預設模型</label>
           <div className="flex items-center gap-3 text-xs bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
@@ -353,26 +385,26 @@ export default function ProviderConfigTab({
         )}
       </div>
 
-      {/* Test Connection & Sync Buttons */}
-      <div className="flex gap-2 pt-2">
+      {/* Test Connection & Sync Buttons with Responsive Layout & Text Wrap */}
+      <div className="flex items-stretch gap-2.5 pt-2">
         <button
           type="button"
           onClick={handleTest}
           disabled={testing}
-          className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700 active:scale-95"
+          className="flex-1 min-w-0 min-h-[42px] px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700 active:scale-95 text-center leading-tight"
         >
-          <RefreshCw size={13} className={testing ? "animate-spin" : ""} />
-          <span>{testing ? '測試連線中...' : '測試連線'}</span>
+          <RefreshCw size={13} className={testing ? "animate-spin shrink-0" : "shrink-0"} />
+          <span className="truncate">{testing ? '測試中…' : '測試連線'}</span>
         </button>
 
         <button
           type="button"
           onClick={handleSync}
           disabled={syncing}
-          className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-emerald-950/40 active:scale-95"
+          className="flex-1 min-w-0 min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-emerald-950/40 active:scale-95 text-center leading-tight"
         >
-          <RefreshCw size={13} className={syncing ? "animate-spin" : ""} />
-          <span>{syncing ? '同步模型中...' : '同步模型列表'}</span>
+          <RefreshCw size={13} className={syncing ? "animate-spin shrink-0" : "shrink-0"} />
+          <span className="truncate">{syncing ? '同步中…' : '同步模型列表'}</span>
         </button>
       </div>
 
