@@ -8,7 +8,6 @@
  * - Tool execution results preserve factual data/conclusions/URLs while omitting raw JSON wrappers.
  */
 import { LocalDB } from '../storage/localDatabase';
-import { getCompressionThreshold } from './modelLimits';
 import { estimateTextTokens } from './tokenManager';
 
 const SUMMARIZE_SYSTEM_PROMPT = `You are a Context Compression and Summarization Specialist.
@@ -40,15 +39,15 @@ export const ContextCompressor = {
     model,
     force = false
   }) {
-    if (!conversationId || messages.length < 3 || !provider) {
+    if (!conversationId || messages.length < 2 || !provider) {
       return { compressed: false, reason: 'insufficient_messages' };
     }
 
     // 1. Check existing summary
     const existingSummary = await LocalDB.getConversationSummary(conversationId);
 
-    // 2. Determine recent message cutoff (keep last 3-4 messages verbatim)
-    const RECENT_MESSAGES_COUNT = 3;
+    // 2. Determine recent message cutoff (keep last 2 messages verbatim, or 1 if very short)
+    const RECENT_MESSAGES_COUNT = messages.length <= 3 ? 1 : 2;
     const messagesToSummarize = messages.slice(0, -RECENT_MESSAGES_COUNT);
     const recentMessages = messages.slice(-RECENT_MESSAGES_COUNT);
 
@@ -58,7 +57,7 @@ export const ContextCompressor = {
 
     // Check if new messages need compression beyond what was previously summarized
     const lastSummarizedId = existingSummary?.summarizedUntilMessageId;
-    const unsummarizedOldMessages = lastSummarizedId
+    const unsummarizedOldMessages = (lastSummarizedId && !force)
       ? messagesToSummarize.filter(m => {
           const summarizedIdx = messagesToSummarize.findIndex(msg => msg.id === lastSummarizedId);
           const currentIdx = messagesToSummarize.findIndex(msg => msg.id === m.id);
@@ -75,7 +74,7 @@ export const ContextCompressor = {
       { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT }
     ];
 
-    if (existingSummary?.summary) {
+    if (existingSummary?.summary && !force) {
       summarizePayload.push({
         role: 'system',
         content: `【先前對話摘要 (Previous Summary)】:\n${existingSummary.summary}`

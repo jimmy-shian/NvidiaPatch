@@ -115,7 +115,12 @@ export default function MessageBubble({
           ? `第一次搜尋無直接結果，正在更換關鍵字重新檢索: "${meta.relaxedQuery}"…`
           : '正在調整關鍵字重新搜尋…';
       case 'reading':
-        return meta.count ? `找到 ${meta.count} 個來源網頁，正在閱讀…` : '正在檢索並閱讀來源網頁…';
+        if (meta.resultCount && (meta.pagesToReadCount || meta.count)) {
+          return `找到 ${meta.resultCount} 筆結果，正在閱讀其中 ${meta.pagesToReadCount || meta.count} 個來源…`;
+        }
+        return meta.pagesToReadCount || meta.count
+          ? `正在檢索並閱讀 ${meta.pagesToReadCount || meta.count} 個來源網頁…`
+          : '正在檢索並閱讀來源網頁…';
       case 'using_tool':
         return `正在調用工具: ${meta.toolName || ''}…`;
       case 'organizing':
@@ -139,7 +144,8 @@ export default function MessageBubble({
     }
 
     const queryStr = parsedContent?.query || '';
-    const resultsCount = Array.isArray(parsedContent?.results) ? parsedContent.results.length : 0;
+    const resultsList = Array.isArray(parsedContent?.results) ? parsedContent.results : [];
+    const resultsCount = parsedContent?.resultCount ?? parsedContent?.count ?? resultsList.length;
     const isExpanded = Boolean(expandedToolResults[message.id]);
 
     return (
@@ -161,16 +167,22 @@ export default function MessageBubble({
             {isExpanded ? <ChevronDown size={13} className="text-slate-500 shrink-0" /> : <ChevronRight size={13} className="text-slate-500 shrink-0" />}
           </button>
 
-          {isExpanded && parsedContent?.results && (
+          {isExpanded && (
             <div className="mt-2 pt-2 border-t border-slate-800 space-y-1.5 text-[11px] animate-fade-in">
-              {parsedContent.results.map((r, i) => (
-                <div key={i} className="p-1.5 rounded bg-black/40 border border-slate-800/80">
-                  <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
-                    {r.title}
-                  </a>
-                  <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet}</p>
+              {resultsList.length > 0 ? (
+                resultsList.map((r, i) => (
+                  <div key={i} className="p-1.5 rounded bg-black/40 border border-slate-800/80">
+                    <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
+                      {r.title}
+                    </a>
+                    <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet || r.content}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="p-2 rounded bg-black/30 text-slate-400 text-xs italic">
+                  未檢索到直接相關網頁或已由模型知識庫整合。
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
@@ -240,7 +252,15 @@ export default function MessageBubble({
             {message.toolExecutions.map((te, idx) => {
               const isExec = te.status === 'executing' || te.status === 'calling';
               const queryStr = typeof te.args === 'object' ? te.args?.query : te.args;
-              const resultCount = te.result?.results?.length || (te.result?.count ?? 0);
+
+              let parsedResult = te.result;
+              if (typeof parsedResult === 'string') {
+                try {
+                  parsedResult = JSON.parse(parsedResult);
+                } catch (_) {}
+              }
+              const resultsList = Array.isArray(parsedResult?.results) ? parsedResult.results : (Array.isArray(parsedResult) ? parsedResult : []);
+              const resultCount = parsedResult?.resultCount ?? parsedResult?.count ?? resultsList.length;
               const isExpanded = Boolean(expandedToolResults[te.toolCallId || idx]);
 
               return (
@@ -273,16 +293,22 @@ export default function MessageBubble({
                     )}
                   </div>
 
-                  {isExpanded && te.result?.results && te.result.results.length > 0 && (
+                  {isExpanded && (
                     <div className="mt-2 pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] animate-fade-in">
-                      {te.result.results.map((r, ri) => (
-                        <div key={ri} className="p-1.5 rounded bg-black/50 border border-slate-800/80">
-                          <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
-                            {r.title}
-                          </a>
-                          <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet || r.content}</p>
+                      {resultsList.length > 0 ? (
+                        resultsList.map((r, ri) => (
+                          <div key={ri} className="p-1.5 rounded bg-black/50 border border-slate-800/80">
+                            <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
+                              {r.title}
+                            </a>
+                            <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet || r.content}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-2 rounded bg-black/30 text-slate-400 text-xs italic">
+                          {parsedResult?.message || '未檢索到直接相關網頁，已由模型知識庫進行分析整合。'}
                         </div>
-                      ))}
+                      )}
                     </div>
                   )}
                 </div>

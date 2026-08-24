@@ -260,15 +260,24 @@ export default function ChatView({
             </div>
           ) : (
             messages
-              .filter(msg => msg.role !== 'system')
-              .map((msg, idx) => (
+              .filter(msg => {
+                if (msg.role === 'system') return false;
+                // Filter out raw protocol tool messages from visual timeline
+                if (msg.role === 'tool') return false;
+                // Filter out empty intermediate assistant tool-call headers
+                if (msg.role === 'assistant' && !msg.content?.trim() && !msg.thinkingContent?.trim() && (!msg.toolExecutions || msg.toolExecutions.length === 0)) {
+                  return false;
+                }
+                return true;
+              })
+              .map((msg, idx, arr) => (
                 <div key={msg.id || idx} className="chat-message-anchor" style={{ overflowAnchor: 'auto' }}>
                   <MessageBubble
                     message={msg}
-                    isLast={idx === messages.length - 1}
+                    isLast={idx === arr.length - 1}
                     isStreaming={isStreaming}
                     isReasoningActive={isReasoningActive}
-                    liveStatus={idx === messages.length - 1 ? liveStatus : null}
+                    liveStatus={idx === arr.length - 1 ? liveStatus : null}
                     onRegenerate={onRegenerate}
                     onDelete={onDeleteMessage}
                     onEdit={onEditMessage}

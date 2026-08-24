@@ -223,6 +223,31 @@ export const LocalDB = {
     await tx.done;
   },
 
+  async cleanupOrphanedToolMessages(conversationId) {
+    const db = await getDatabase();
+    if (!db) {
+      for (const [k, v] of memStores.messages.entries()) {
+        if (v.conversationId === conversationId) {
+          if (v.role === 'tool' || (v.role === 'assistant' && !v.content?.trim() && !v.thinkingContent?.trim() && (!v.toolExecutions || v.toolExecutions.length === 0))) {
+            memStores.messages.delete(k);
+          }
+        }
+      }
+      return;
+    }
+    const tx = db.transaction('messages', 'readwrite');
+    const msgIndex = tx.store.index('conversationId');
+    let cursor = await msgIndex.openCursor(IDBKeyRange.only(conversationId));
+    while (cursor) {
+      const m = cursor.value;
+      if (m.role === 'tool' || (m.role === 'assistant' && !m.content?.trim() && !m.thinkingContent?.trim() && (!m.toolExecutions || m.toolExecutions.length === 0))) {
+        await cursor.delete();
+      }
+      cursor = await cursor.continue();
+    }
+    await tx.done;
+  },
+
   // --- Context Summaries (Compression) ---
   async getConversationSummary(conversationId) {
     const db = await getDatabase();
