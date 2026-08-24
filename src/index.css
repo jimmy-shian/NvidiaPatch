@@ -30,23 +30,50 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  /* Scrollbar styling */
-  ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+  /* Chat Scroll Container with Hover/Active Expansion & Damping */
+  .chat-scroll-container {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    overflow-anchor: auto;
+    scroll-snap-type: y proximity;
+    scroll-behavior: smooth;
   }
 
-  ::-webkit-scrollbar-track {
+  .chat-scroll-container::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+    transition: width 0.2s ease;
+  }
+
+  .chat-scroll-container:hover::-webkit-scrollbar,
+  .chat-scroll-container:active::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .chat-scroll-container::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  ::-webkit-scrollbar-thumb {
-    background: #374151;
-    border-radius: 4px;
+  .chat-scroll-container::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.4);
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+    transition: background-color 0.2s ease, width 0.2s ease;
   }
 
-  ::-webkit-scrollbar-thumb:hover {
-    background: #4b5563;
+  .chat-scroll-container::-webkit-scrollbar-thumb:hover,
+  .chat-scroll-container::-webkit-scrollbar-thumb:active {
+    background: rgba(16, 185, 129, 0.75);
+    width: 10px;
+  }
+
+  .chat-message-anchor {
+    scroll-snap-align: start;
+    scroll-snap-stop: normal;
+    scroll-margin-top: 14px;
+    scroll-margin-bottom: 14px;
   }
 
   .scrollbar-none::-webkit-scrollbar {
@@ -56,10 +83,19 @@
 
 /* Animations */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes chatSwitchFade {
+  from { opacity: 0.35; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 .animate-fade-in {
   animation: fadeIn 180ms ease-out forwards;
+}
+
+.animate-chat-switch {
+  animation: chatSwitchFade 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

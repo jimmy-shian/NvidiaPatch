@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2 } from 'lucide-react';
+import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight } from 'lucide-react';
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
 
@@ -17,14 +17,18 @@ export default function MessageBubble({
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
-  const [draftText, setDraftText] = useState(message.content);
+  const [draftText, setDraftText] = useState(message.content || '');
+  const [expandedToolResults, setExpandedToolResults] = useState({});
+
+  if (message.role === 'system') return null; // Never render hidden system messages
 
   const isUser = message.role === 'user';
+  const isTool = message.role === 'tool';
   const isFailed = !isUser && (message.content?.includes('[錯誤]') || message.content?.includes('[Error]'));
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(message.content || '');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -33,12 +37,12 @@ export default function MessageBubble({
   };
 
   const handleStartEdit = () => {
-    setDraftText(message.content);
+    setDraftText(message.content || '');
     setIsEditing(true);
   };
 
   const handleCancelEdit = () => {
-    setDraftText(message.content);
+    setDraftText(message.content || '');
     setIsEditing(false);
   };
 
@@ -53,6 +57,62 @@ export default function MessageBubble({
     onDelete?.(message.id);
     setIsConfirmingDelete(false);
   };
+
+  const toggleToolResult = (id) => {
+    setExpandedToolResults(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  // Render standalone Tool Result message if in history
+  if (isTool) {
+    let parsedContent = null;
+    try {
+      parsedContent = typeof message.content === 'string' ? JSON.parse(message.content) : message.content;
+    } catch (_) {
+      parsedContent = message.content;
+    }
+
+    const queryStr = parsedContent?.query || '';
+    const resultsCount = Array.isArray(parsedContent?.results) ? parsedContent.results.length : 0;
+    const isExpanded = Boolean(expandedToolResults[message.id]);
+
+    return (
+      <div className="flex flex-col my-1.5 px-2 w-full items-start">
+        <div className="max-w-[92%] sm:max-w-[85%] rounded-xl p-2.5 bg-slate-900/70 border border-slate-800 text-xs text-slate-300">
+          <button
+            type="button"
+            onClick={() => toggleToolResult(message.id)}
+            className="w-full flex items-center justify-between gap-2 text-left hover:text-white"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Globe size={13} className="text-emerald-400 shrink-0" />
+              <span className="font-semibold text-emerald-300">搜尋工具結果:</span>
+              <span className="text-slate-400 font-mono truncate">{queryStr || message.name || 'web_search'}</span>
+              <span className="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.2 rounded shrink-0">
+                {resultsCount} 筆
+              </span>
+            </div>
+            {isExpanded ? <ChevronDown size={13} className="text-slate-500 shrink-0" /> : <ChevronRight size={13} className="text-slate-500 shrink-0" />}
+          </button>
+
+          {isExpanded && parsedContent?.results && (
+            <div className="mt-2 pt-2 border-t border-slate-800 space-y-1.5 text-[11px] animate-fade-in">
+              {parsedContent.results.map((r, i) => (
+                <div key={i} className="p-1.5 rounded bg-black/40 border border-slate-800/80">
+                  <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
+                    {r.title}
+                  </a>
+                  <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-col my-2.5 px-2 w-full ${isUser ? 'items-end' : 'items-start'}`}>
@@ -88,6 +148,63 @@ export default function MessageBubble({
             isStreaming={isStreaming && isLast}
             isReasoningActive={isReasoningActive && isLast}
           />
+        )}
+
+        {/* Live Tool Executions within this assistant turn */}
+        {!isUser && message.toolExecutions && message.toolExecutions.length > 0 && (
+          <div className="my-2 space-y-1.5">
+            {message.toolExecutions.map((te, idx) => {
+              const isExec = te.status === 'executing' || te.status === 'calling';
+              const queryStr = typeof te.args === 'object' ? te.args?.query : te.args;
+              const resultCount = te.result?.results?.length || 0;
+              const isExpanded = Boolean(expandedToolResults[te.toolCallId || idx]);
+
+              return (
+                <div key={te.toolCallId || idx} className="rounded-xl bg-slate-950/80 border border-slate-800 p-2 text-xs">
+                  <div
+                    onClick={() => te.result && toggleToolResult(te.toolCallId || idx)}
+                    className="flex items-center justify-between gap-2 cursor-pointer"
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {isExec ? (
+                        <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
+                      ) : (
+                        <Search size={13} className="text-emerald-400 shrink-0" />
+                      )}
+                      <span className="font-semibold text-emerald-300">
+                        {isExec ? '正在上網查詢…' : '已完成搜尋'}
+                      </span>
+                      {queryStr && (
+                        <span className="text-slate-400 font-mono truncate max-w-[140px]">
+                          "{queryStr}"
+                        </span>
+                      )}
+                    </div>
+
+                    {!isExec && te.result && (
+                      <div className="flex items-center gap-1 text-[10px] text-slate-400 shrink-0">
+                        <span>{resultCount} 筆</span>
+                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      </div>
+                    )}
+                  </div>
+
+                  {isExpanded && te.result?.results && (
+                    <div className="mt-2 pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] animate-fade-in">
+                      {te.result.results.map((r, ri) => (
+                        <div key={ri} className="p-1.5 rounded bg-black/50 border border-slate-800/80">
+                          <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
+                            {r.title}
+                          </a>
+                          <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {/* Message body / Edit Box */}

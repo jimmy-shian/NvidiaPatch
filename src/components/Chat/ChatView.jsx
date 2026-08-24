@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Menu, Settings, ChevronDown, Bot, Sparkles, MessageSquare, Minimize2, Loader2, Zap, AlertCircle } from 'lucide-react';
+import { Menu, Settings, ChevronDown, Bot, Sparkles, Minimize2, Loader2, Zap, AlertCircle, ArrowDown } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import ChatInput from './ChatInput';
 import { formatTokenNumber } from '../../core/context/modelLimits';
@@ -13,7 +13,7 @@ export default function ChatView({
   isStreaming,
   isReasoningActive,
   isCompressing,
-  contextStats = { usedTokens: 0, maxTokens: 32768, isNearLimit: false },
+  contextStats = { usedTokens: 0, maxTokens: 32768, threshold: 26214, isNearLimit: false },
   compressionToast,
   onCompressContext,
   onSend,
@@ -32,20 +32,56 @@ export default function ChatView({
 }) {
   const { t } = useTranslation();
   const messagesEndRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const autoFollowRef = useRef(true);
+  const [isNearBottom, setIsNearBottom] = useState(true);
 
-  // Auto scroll to bottom
-  useEffect(() => {
+  // Smooth scroll to bottom handler
+  const scrollToBottom = useCallback(() => {
+    autoFollowRef.current = true;
+    setIsNearBottom(true);
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  // Monitor user scroll position to toggle auto-follow
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nearBottom = distanceFromBottom <= 90;
+    setIsNearBottom(nearBottom);
+    autoFollowRef.current = nearBottom;
+  }, []);
+
+  // Auto follow bottom during streaming only if user is already at the bottom
+  useEffect(() => {
+    if (autoFollowRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+    }
   }, [messages, isStreaming]);
+
+  // Wrap send to re-enable auto follow
+  const handleSendWrapped = useCallback(() => {
+    autoFollowRef.current = true;
+    setIsNearBottom(true);
+    onSend();
+  }, [onSend]);
 
   const shortModelName = currentModelId
     ? (currentModelId.includes('/') ? currentModelId.split('/').pop() : currentModelId)
     : t('chat.selectModel');
 
-  const { usedTokens = 0, maxTokens = 32768, isNearLimit = false, isOverThreshold = false } = contextStats;
+  const {
+    usedTokens = 0,
+    maxTokens = 32768,
+    threshold = 26214,
+    isNearLimit = false,
+    isOverThreshold = false,
+    isAuthoritative = false
+  } = contextStats;
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#0b0f17] text-slate-100 overflow-hidden">
+    <div className="flex flex-col h-full w-full bg-[#0b0f17] text-slate-100 overflow-hidden relative">
       {/* Top App Header */}
       <header className="flex items-center justify-between px-3 py-2 bg-[#0e1420]/95 border-b border-slate-800/80 backdrop-blur-md z-10 safe-area-top">
         <button
@@ -75,9 +111,8 @@ export default function ChatView({
         </button>
       </header>
 
-      {/* Context Usage Bar & Manual Compress Header Toolbar */}
+      {/* Context Usage Bar & Dynamic 80% Compression Indicator */}
       <div className="flex items-center justify-between px-3.5 py-1.5 bg-[#0b101a] border-b border-slate-800/60 text-[11px] text-slate-400 select-none">
-        {/* Token Counter & Warning Badge */}
         <div className="flex items-center gap-1.5 truncate">
           <Zap size={11} className={isNearLimit ? "text-amber-400" : "text-emerald-400"} />
           <span className="font-mono">
@@ -86,12 +121,17 @@ export default function ChatView({
           {isCompressing ? (
             <span className="flex items-center gap-1 text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1.5 py-0.2 rounded-md font-sans text-[10px] animate-pulse">
               <Loader2 size={10} className="animate-spin" />
-              <span>正在壓縮…</span>
+              <span>壓縮中…</span>
+            </span>
+          ) : isOverThreshold ? (
+            <span className="flex items-center gap-1 text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.2 rounded-md font-sans text-[10px]">
+              <AlertCircle size={10} />
+              <span>達 80% 上限</span>
             </span>
           ) : isNearLimit ? (
             <span className="flex items-center gap-1 text-amber-400 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.2 rounded-md font-sans text-[10px]">
               <AlertCircle size={10} />
-              <span>接近自動壓縮</span>
+              <span>接近壓縮門檻</span>
             </span>
           ) : null}
         </div>
@@ -103,7 +143,7 @@ export default function ChatView({
             onClick={onCompressContext}
             disabled={isCompressing || isStreaming}
             className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-[11px] disabled:opacity-40 active:scale-95 border border-slate-700/60"
-            title="手動將較早對話壓縮為結構化摘要"
+            title="手動將歷史對話壓縮為結構化摘要"
           >
             {isCompressing ? (
               <Loader2 size={11} className="animate-spin text-emerald-400" />
@@ -123,43 +163,64 @@ export default function ChatView({
         </div>
       )}
 
-      {/* Messages List Area */}
-      <main className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-4 space-y-2 max-w-full">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center px-4 py-12 text-slate-500 gap-3">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-950/30">
-              <Bot size={28} />
+      {/* Messages List Area with Transition & Scroll Damping */}
+      <main
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 chat-scroll-container p-2 sm:p-4 space-y-2 max-w-full relative"
+      >
+        <div key={conversation?.id || 'empty_conv'} className="animate-chat-switch space-y-2">
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center px-4 py-16 text-slate-500 gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-950/30">
+                <Bot size={28} />
+              </div>
+              <div>
+                <h3 className="font-bold text-white text-base">NvidiaPatch Chat</h3>
+                <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
+                  支援本機技能與即時網路搜尋。請輸入訊息開始對話。
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-bold text-white text-base">NvidiaPatch Chat</h3>
-              <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
-                Local-first 獨立 AI 對話與 Agent。請先選取技能或模型開始對話。
-              </p>
-            </div>
-          </div>
-        ) : (
-          messages.map((msg, idx) => (
-            <MessageBubble
-              key={msg.id || idx}
-              message={msg}
-              isLast={idx === messages.length - 1}
-              isStreaming={isStreaming}
-              isReasoningActive={isReasoningActive}
-              onRegenerate={onRegenerate}
-              onDelete={onDeleteMessage}
-              onEdit={onEditMessage}
-            />
-          ))
-        )}
-        <div ref={messagesEndRef} />
+          ) : (
+            messages
+              .filter(msg => msg.role !== 'system') // Never render system messages in UI
+              .map((msg, idx) => (
+                <div key={msg.id || idx} className="chat-message-anchor">
+                  <MessageBubble
+                    message={msg}
+                    isLast={idx === messages.length - 1}
+                    isStreaming={isStreaming}
+                    isReasoningActive={isReasoningActive}
+                    onRegenerate={onRegenerate}
+                    onDelete={onDeleteMessage}
+                    onEdit={onEditMessage}
+                  />
+                </div>
+              ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
       </main>
+
+      {/* Floating Scroll to Bottom Button */}
+      {!isNearBottom && messages.length > 0 && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute right-4 bottom-20 z-20 p-2.5 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-950/60 hover:bg-emerald-400 active:scale-95 transition-all animate-fade-in flex items-center justify-center"
+          title="回到底部"
+        >
+          <ArrowDown size={16} />
+        </button>
+      )}
 
       {/* Bottom Sticky Chat Input */}
       <ChatInput
         input={input}
         setInput={setInput}
         isStreaming={isStreaming}
-        onSend={onSend}
+        onSend={handleSendWrapped}
         onStop={onStop}
         availableSkills={availableSkills}
         selectedSkillIds={selectedSkillIds}
