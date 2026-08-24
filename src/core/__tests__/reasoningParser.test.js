@@ -20,7 +20,28 @@ describe('StreamReasoningParser', () => {
     expect(content).toBe('Hello, this is the final answer.');
   });
 
-  it('should parse in-band <think>...</think> tags inside content stream', () => {
+  it('should parse delta.reasoning, delta.thinking, delta.thought, and delta.analysis', () => {
+    let thinking = '';
+    let content = '';
+
+    const parser = new StreamReasoningParser({
+      onThinking: (d) => { thinking += d; },
+      onContent: (d) => { content += d; }
+    });
+
+    parser.processChunk({ reasoning: 'GPT-OSS reasoning text. ' });
+    parser.processChunk({ delta: { thinking: 'Claude thinking text. ' } });
+    parser.processChunk({ delta: { thought: 'Qwen thought text. ' } });
+    parser.processChunk({ delta: { analysis: 'DeepSeek analysis text.' } });
+    parser.processChunk({ content: 'Result content.' });
+    parser.flush();
+
+    expect(thinking).toBe('GPT-OSS reasoning text. Claude thinking text. Qwen thought text. DeepSeek analysis text.');
+    expect(content).toBe('Result content.');
+    expect(parser.hasEmittedThinking).toBe(true);
+  });
+
+  it('should parse in-band <think>...</think> and [THINK] tags inside content stream', () => {
     let thinking = '';
     let content = '';
 
