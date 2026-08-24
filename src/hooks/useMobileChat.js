@@ -3,8 +3,8 @@ import { LocalDB } from '../core/storage/localDatabase';
 import { AgentCore } from '../core/agent/agentCore';
 import { createProvider } from '../core/providers';
 import { ContextCompressor } from '../core/context/contextCompressor';
-import { estimateFullContextTokens } from '../core/context/tokenManager';
-import { getModelContextLimit, AUTO_COMPRESSION_THRESHOLD } from '../core/context/modelLimits';
+import { estimateFullContextTokens, normalizeApiUsage, projectNextTurnContext } from '../core/context/tokenManager';
+import { getModelContextLimit, getCompressionThreshold, getModelContextInfo } from '../core/context/modelLimits';
 import { generateTitleFromPrompt, cleanFallbackTitle } from '../core/agent/titleGenerator';
 
 export function useMobileChat({
@@ -25,6 +25,7 @@ export function useMobileChat({
   const [compressionToast, setCompressionToast] = useState(null);
 
   const agentCoreRef = useRef(null);
+  const loadMessagesGenRef = useRef(0); // Anti-race condition generation counter
 
   // Load conversations on mount
   useEffect(() => {
@@ -48,14 +49,21 @@ export function useMobileChat({
     loadConversations();
   }, []);
 
-  // Load messages and skill settings when current conversation changes
+  // Load messages and skill settings with Anti-Race Condition Generation Protection
   useEffect(() => {
     if (!currentConversationId) return;
+
+    const currentGen = ++loadMessagesGenRef.current;
+
     async function loadMessages() {
       const msgs = await LocalDB.getMessages(currentConversationId);
+      if (loadMessagesGenRef.current !== currentGen) return; // Stale query discarded
+
       setMessages(msgs);
 
       const conv = await LocalDB.getConversation(currentConversationId);
+      if (loadMessagesGenRef.current !== currentGen) return;
+
       if (conv?.skillIds) {
         setSelectedSkillIds(conv.skillIds);
       }
@@ -63,25 +71,60 @@ export function useMobileChat({
     loadMessages();
   }, [currentConversationId]);
 
-  // Calculate live Context Token usage & Model limit
+  // Calculate live Context Token usage & Model limit (API usage baseline + Preflight Projection)
   const contextStats = useMemo(() => {
-    const maxTokens = getModelContextLimit(currentModelId);
-    const estimate = estimateFullContextTokens({
-      systemPrompt: 'NvidiaPatch Chat Base System Prompt + Personal Context + Skills',
-      messages,
-      currentInput: input
+    const contextInfo = getModelContextInfo(currentModelId);
+    const maxTokens = contextInfo.limit;
+    const threshold = getCompressionThreshold(currentModelId);
+
+    // Empty conversation has strictly 0 tokens
+    if (messages.length === 0 && !input.trim()) {
+      return {
+        usedTokens: 0,
+        maxTokens,
+        threshold,
+        isNearLimit: false,
+        isOverThreshold: false,
+        provenance: contextInfo.provenance,
+        isAuthoritative: false
+      };
+    }
+
+    // Find latest message with authoritative API usage
+    let latestApiUsage = null;
+    let messagesSinceLastUsage = [];
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.usage && m.usage.totalTokens > 0) {
+        latestApiUsage = m.usage;
+        messagesSinceLastUsage = messages.slice(i + 1);
+        break;
+      }
+    }
+
+    if (!latestApiUsage) {
+      messagesSinceLastUsage = messages;
+    }
+
+    const projectedTokens = projectNextTurnContext({
+      lastAuthoritativeUsage: latestApiUsage,
+      newMessagesSinceLastTurn: messagesSinceLastUsage,
+      currentInput: input,
+      systemPrompt: 'System Prompt + Context'
     });
 
-    const usedTokens = estimate.totalTokens;
-    const isNearLimit = usedTokens >= AUTO_COMPRESSION_THRESHOLD - 500;
-    const isOverThreshold = usedTokens >= AUTO_COMPRESSION_THRESHOLD;
+    const isNearLimit = projectedTokens >= Math.floor(threshold * 0.9);
+    const isOverThreshold = projectedTokens >= threshold;
 
     return {
-      usedTokens,
+      usedTokens: projectedTokens,
       maxTokens,
+      threshold,
       isNearLimit,
       isOverThreshold,
-      autoThreshold: AUTO_COMPRESSION_THRESHOLD
+      provenance: contextInfo.provenance,
+      isAuthoritative: Boolean(latestApiUsage)
     };
   }, [currentModelId, messages, input]);
 
@@ -103,7 +146,7 @@ export function useMobileChat({
     setInput('');
   }, [currentProviderId, currentModelId, selectedSkillIds, isStreaming]);
 
-  // Select conversation
+  // Select conversation with generation check
   const selectConversation = useCallback((convId) => {
     if (isStreaming) agentCoreRef.current?.abort();
     setCurrentConversationId(convId);
@@ -144,7 +187,6 @@ export function useMobileChat({
 
     const activeConfig = providerConfigs[currentProviderId] || {};
     const provider = createProvider(currentProviderId, activeConfig);
-
     const tokensBefore = contextStats.usedTokens;
 
     try {
@@ -157,7 +199,6 @@ export function useMobileChat({
       });
 
       if (result.compressed) {
-        // Re-estimate after compression
         const afterEstimate = estimateFullContextTokens({
           systemPrompt: 'System',
           summary: result.summary?.summary || '',
@@ -187,13 +228,14 @@ export function useMobileChat({
     const activeConfig = providerConfigs[currentProviderId] || {};
     const provider = createProvider(currentProviderId, activeConfig);
 
-    // 1. Check Automatic Context Compression (> 6000 tokens)
+    // 1. Dynamic 80% Context Compression check
+    const compressionThreshold = getCompressionThreshold(currentModelId);
     const currentTokens = estimateFullContextTokens({
       systemPrompt: 'System',
       messages: historyMessages
     }).totalTokens;
 
-    if (currentTokens >= AUTO_COMPRESSION_THRESHOLD && historyMessages.length >= 4) {
+    if (currentTokens >= compressionThreshold && historyMessages.length >= 4) {
       setIsCompressing(true);
       try {
         await ContextCompressor.compressIfNeeded({
@@ -210,7 +252,7 @@ export function useMobileChat({
       }
     }
 
-    // 2. Build model request messages (uses compressed summary if available, preserving recent messages)
+    // 2. Build model request messages (uses compressed summary if available)
     const modelRequestMessages = await ContextCompressor.buildRequestContextMessages({
       conversationId: currentConversationId,
       messages: historyMessages
@@ -223,7 +265,10 @@ export function useMobileChat({
       modelName: currentModelId.split('/').pop(),
       content: '',
       thinkingContent: '',
-      createdAt: Date.now() + 1
+      tool_calls: null,
+      toolExecutions: [], // Live UI state: [{ toolCallId, toolName, status, args, result }]
+      createdAt: Date.now() + 1,
+      ordinal: historyMessages.length
     };
 
     setMessages([...historyMessages, assistantMsg]);
@@ -235,11 +280,15 @@ export function useMobileChat({
 
     const payloadForAgent = modelRequestMessages.map(m => ({
       role: m.role,
-      content: m.content
+      content: m.content,
+      ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id, name: m.name } : {})
     }));
 
     let accumulatedContent = '';
     let accumulatedThinking = '';
+    let liveToolExecutions = [];
+    let latestReportedUsage = null;
 
     await agent.runChat({
       messages: payloadForAgent,
@@ -255,10 +304,7 @@ export function useMobileChat({
           if (last.role !== 'assistant') return prev;
           return [
             ...prev.slice(0, lastIdx),
-            {
-              ...last,
-              thinkingContent: accumulatedThinking
-            }
+            { ...last, thinkingContent: accumulatedThinking }
           ];
         });
       },
@@ -272,22 +318,97 @@ export function useMobileChat({
           if (last.role !== 'assistant') return prev;
           return [
             ...prev.slice(0, lastIdx),
-            {
-              ...last,
-              content: accumulatedContent,
-              thinkingContent: accumulatedThinking
-            }
+            { ...last, content: accumulatedContent, thinkingContent: accumulatedThinking }
           ];
         });
       },
-      onDone: async () => {
+      onToolStart: (toolCalls) => {
+        setIsReasoningActive(false);
+        liveToolExecutions = toolCalls.map(tc => ({
+          toolCallId: tc.id,
+          toolName: tc.function.name,
+          status: 'calling',
+          args: tc.function.arguments
+        }));
+        setMessages(prev => {
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
+          if (last.role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            { ...last, tool_calls: toolCalls, toolExecutions: [...liveToolExecutions] }
+          ];
+        });
+      },
+      onToolStatus: ({ toolCallId, toolName, status, args }) => {
+        liveToolExecutions = liveToolExecutions.map(te =>
+          te.toolCallId === toolCallId ? { ...te, status, args } : te
+        );
+        setMessages(prev => {
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
+          if (last.role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            { ...last, toolExecutions: [...liveToolExecutions] }
+          ];
+        });
+      },
+      onToolResult: ({ toolCallId, toolName, args, result }) => {
+        liveToolExecutions = liveToolExecutions.map(te =>
+          te.toolCallId === toolCallId ? { ...te, status: 'completed', args, result } : te
+        );
+        setMessages(prev => {
+          if (prev.length === 0) return prev;
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
+          if (last.role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            { ...last, toolExecutions: [...liveToolExecutions] }
+          ];
+        });
+      },
+      onUsage: (rawUsage) => {
+        latestReportedUsage = normalizeApiUsage(rawUsage);
+      },
+      onDone: async (doneData) => {
         setIsStreaming(false);
         setIsReasoningActive(false);
-        await LocalDB.saveMessage({
+
+        const finalNormalizedUsage = doneData?.usage ? normalizeApiUsage(doneData.usage) : latestReportedUsage;
+
+        const finalAssistantMsg = {
           ...assistantMsg,
           content: accumulatedContent,
-          thinkingContent: accumulatedThinking
-        });
+          thinkingContent: accumulatedThinking,
+          tool_calls: assistantMsg.tool_calls || null,
+          toolExecutions: liveToolExecutions,
+          usage: finalNormalizedUsage
+        };
+
+        // Transactionally save all generated tool messages and assistant responses
+        const msgsToPersist = [];
+        if (doneData?.toolMessages && doneData.toolMessages.length > 0) {
+          doneData.toolMessages.forEach((tm, idx) => {
+            msgsToPersist.push({
+              id: `msg_${Date.now()}_tm_${idx}`,
+              conversationId: currentConversationId,
+              role: tm.role,
+              content: tm.content,
+              tool_calls: tm.tool_calls || null,
+              tool_call_id: tm.tool_call_id || null,
+              name: tm.name || null,
+              createdAt: Date.now() + idx,
+              ordinal: historyMessages.length + idx
+            });
+          });
+        }
+        msgsToPersist.push(finalAssistantMsg);
+
+        await LocalDB.saveMessages(msgsToPersist);
 
         // Smart Title generation for first turn via LLM
         if (historyMessages.length === 1 && historyMessages[0].role === 'user') {
@@ -313,6 +434,12 @@ export function useMobileChat({
         setIsStreaming(false);
         setIsReasoningActive(false);
         const errMsg = `\n[錯誤]: ${err.message}`;
+        const finalAssistantMsg = {
+          ...assistantMsg,
+          content: (accumulatedContent || '') + errMsg,
+          thinkingContent: accumulatedThinking,
+          toolExecutions: liveToolExecutions
+        };
         setMessages(prev => {
           if (prev.length === 0) return prev;
           const lastIdx = prev.length - 1;
@@ -320,18 +447,10 @@ export function useMobileChat({
           if (last.role !== 'assistant') return prev;
           return [
             ...prev.slice(0, lastIdx),
-            {
-              ...last,
-              content: (last.content || '') + errMsg,
-              thinkingContent: accumulatedThinking
-            }
+            finalAssistantMsg
           ];
         });
-        await LocalDB.saveMessage({
-          ...assistantMsg,
-          content: accumulatedContent + errMsg,
-          thinkingContent: accumulatedThinking
-        });
+        await LocalDB.saveMessage(finalAssistantMsg);
       }
     });
   }, [currentModelId, currentConversationId, currentProviderId, providerConfigs, selectedSkillIds]);
@@ -346,13 +465,13 @@ export function useMobileChat({
       conversationId: currentConversationId,
       role: 'user',
       content: textToSend,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      ordinal: messages.length
     };
 
     await LocalDB.saveMessage(userMsg);
     setInput('');
 
-    // Temporary title placeholder until LLM generates smart title
     if (messages.length === 0) {
       const initialTitle = cleanFallbackTitle(textToSend);
       await LocalDB.saveConversation({
@@ -396,11 +515,10 @@ export function useMobileChat({
   const deleteMessage = useCallback(async (msgId) => {
     await LocalDB.deleteMessage(msgId);
     setMessages(prev => prev.filter(m => m.id !== msgId));
-    // Invalidate summary if deleted message was inside summarized scope
     await ContextCompressor.invalidateSummaryIfNeeded(currentConversationId, msgId, messages);
   }, [currentConversationId, messages]);
 
-  // Edit message & Re-trigger model call if user message
+  // Edit message
   const editMessage = useCallback(async (msgId, newContent) => {
     const targetIdx = messages.findIndex(m => m.id === msgId);
     if (targetIdx === -1) return;
@@ -411,9 +529,7 @@ export function useMobileChat({
     await LocalDB.updateMessage(msgId, { content: newContent });
 
     if (targetMsg.role === 'user') {
-      // Invalidate existing summary if edited message was within summary
       await ContextCompressor.invalidateSummaryIfNeeded(currentConversationId, msgId, messages);
-
       await LocalDB.deleteMessagesAfter(currentConversationId, targetMsg.createdAt);
       const newHistory = [...messages.slice(0, targetIdx), updatedMsg];
       setMessages(newHistory);
