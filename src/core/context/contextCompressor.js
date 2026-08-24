@@ -1,15 +1,19 @@
 /**
  * Context Compression & Summarization Engine
- * Automatically / Manually compresses older conversation turns into structured summaries
- * when total context exceeds 6,000 tokens while preserving recent messages verbatim.
+ * Compresses older conversation turns into structured summaries
+ * when total context exceeds 80% of model context window while preserving recent messages verbatim.
+ * 
+ * Safety:
+ * - Hidden system instructions, skill manuals, personal context are strictly excluded from summaries.
+ * - Tool execution results preserve factual data/conclusions/URLs while omitting raw JSON wrappers.
  */
 import { LocalDB } from '../storage/localDatabase';
-import { AUTO_COMPRESSION_THRESHOLD } from './modelLimits';
-import { estimateTextTokens, estimateMessageTokens } from './tokenManager';
+import { getCompressionThreshold } from './modelLimits';
+import { estimateTextTokens } from './tokenManager';
 
 const SUMMARIZE_SYSTEM_PROMPT = `You are a Context Compression and Summarization Specialist.
 Your task is to compress the provided prior conversation into a dense, structured, lossless summary in Traditional Chinese (繁體中文).
-Preserve all crucial information needed for continuing the conversation seamlessly:
+Preserve all crucial user goals, confirmed preferences, key factual data/URLs obtained from tools, decisions, and completed tasks:
 
 === 結構化摘要格式 (STRUCTURED SUMMARY FORMAT) ===
 ## 使用者主要目標 (User Goals)
@@ -18,11 +22,11 @@ Preserve all crucial information needed for continuing the conversation seamless
 - ...
 ## 關鍵技術架構與決策 (Technical Decisions & Architecture)
 - ...
+## 搜尋與工具關鍵結果 (Key Tool Results & URLs)
+- ...
 ## 已完成事項與狀態 (Completed Work)
 - ...
 ## 尚未完成事項 / 待辦 (Outstanding Tasks / TODO)
-- ...
-## 重要限制與約定 (Constraints & Rules)
 - ...`;
 
 export const ContextCompressor = {
@@ -43,7 +47,7 @@ export const ContextCompressor = {
     // 1. Check existing summary
     const existingSummary = await LocalDB.getConversationSummary(conversationId);
 
-    // 2. Determine recent message cutoff (keep last 2-4 messages / ~1500 tokens verbatim)
+    // 2. Determine recent message cutoff (keep last 3-4 messages verbatim)
     const RECENT_MESSAGES_COUNT = 3;
     const messagesToSummarize = messages.slice(0, -RECENT_MESSAGES_COUNT);
     const recentMessages = messages.slice(-RECENT_MESSAGES_COUNT);
@@ -78,13 +82,25 @@ export const ContextCompressor = {
       });
     }
 
-    const messagesContent = unsummarizedOldMessages
-      .map(m => `[${m.role.toUpperCase()}]: ${m.content}`)
+    // Format historical messages safely:
+    // Exclude system instructions, format tool results cleanly
+    const safeMessagesContent = unsummarizedOldMessages
+      .filter(m => m.role !== 'system')
+      .map(m => {
+        if (m.role === 'tool') {
+          return `[TOOL RESULT (${m.name || 'search'})]: ${m.content}`;
+        }
+        if (m.role === 'assistant' && m.tool_calls) {
+          const calls = Array.isArray(m.tool_calls) ? m.tool_calls.map(c => c.function?.name || 'tool').join(', ') : 'tool';
+          return `[ASSISTANT (Called ${calls})]: ${m.content || ''}`;
+        }
+        return `[${m.role.toUpperCase()}]: ${m.content || ''}`;
+      })
       .join('\n\n');
 
     summarizePayload.push({
       role: 'user',
-      content: `請整合並產出最新的結構化對話摘要：\n\n${messagesContent}`
+      content: `請整合並產出最新的結構化對話摘要（僅保留實質對話與事實）：\n\n${safeMessagesContent}`
     });
 
     // 4. Call Model with 3x Retry
@@ -101,7 +117,9 @@ export const ContextCompressor = {
           temperature: 0.3,
           max_tokens: 1500
         })) {
-          if (chunk.type === 'content') {
+          if (chunk.content) {
+            newSummaryText += chunk.content;
+          } else if (chunk.type === 'content') {
             newSummaryText += chunk.delta;
           }
         }
