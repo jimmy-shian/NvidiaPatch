@@ -4,13 +4,15 @@ import { NvidiaNimProvider } from '../providers/NvidiaNimProvider';
 import { OpenAICompatibleProvider } from '../providers/OpenAICompatibleProvider';
 
 describe('Provider Factory & Adapters', () => {
-  it('creates NVIDIA NIM provider with defaults', () => {
+  it('creates NVIDIA NIM provider with defaults and capability detection', () => {
     const provider = createProvider('nvidia', { apiKey: 'nvapi-test' });
     expect(provider).toBeInstanceOf(NvidiaNimProvider);
     expect(provider.id).toBe('nvidia');
     expect(provider.baseUrl).toBe('https://integrate.api.nvidia.com/v1');
-    expect(provider.supportsToolCalling('meta/llama-3.1-70b-instruct')).toBe(true);
-    expect(provider.supportsToolCalling('some-other-model')).toBe(false);
+    expect(provider.getToolCallingCapability('meta/llama-3.1-70b-instruct')).toBe('supported');
+    expect(provider.getToolCallingCapability('nvidia/embed-qa-4')).toBe('unsupported');
+    expect(provider.getToolCallingCapability('unknown-model-id')).toBe('unknown');
+    expect(provider.supportsToolCalling('nvidia/embed-qa-4')).toBe(false);
   });
 
   it('creates OpenAI Compatible provider with custom URL', () => {
