@@ -79,6 +79,50 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
+
+  /* Table Scroll Container */
+  .table-scroll-container {
+    overflow-x: auto;
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-container table {
+    width: max-content;
+    min-width: 100%;
+    table-layout: auto;
+  }
+
+  .table-scroll-container th {
+    white-space: nowrap;
+    min-width: 4.5rem;
+    padding: 0.625rem 0.875rem;
+  }
+
+  .table-scroll-container td {
+    min-width: 6.5rem;
+    max-width: 22rem;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+    padding: 0.625rem 0.875rem;
+  }
+
+  .table-scroll-container::-webkit-scrollbar {
+    height: 4px;
+    width: 4px;
+  }
+
+  .table-scroll-container::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 4px;
+  }
+
+  .table-scroll-container::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.5);
+    border-radius: 4px;
+  }
 }
 
 /* Animations */

@@ -4,6 +4,35 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import CodeBlock from './CodeBlock';
 
+/**
+ * Safely transforms literal <br>, <br/>, <br /> in text nodes into native React <br /> elements
+ * without allowing arbitrary or unsafe HTML execution.
+ */
+export function renderContentWithLineBreaks(children) {
+  if (typeof children === 'string') {
+    if (!/<br\s*\/?>/i.test(children)) return children;
+    const parts = children.split(/<br\s*\/?>/gi);
+    return parts.map((part, idx) => (
+      <React.Fragment key={idx}>
+        {idx > 0 && <br />}
+        {part}
+      </React.Fragment>
+    ));
+  }
+  if (Array.isArray(children)) {
+    return children.map((c, i) => (
+      <React.Fragment key={i}>{renderContentWithLineBreaks(c)}</React.Fragment>
+    ));
+  }
+  if (React.isValidElement(children) && children.props?.children) {
+    return React.cloneElement(children, {
+      ...children.props,
+      children: renderContentWithLineBreaks(children.props.children)
+    });
+  }
+  return children;
+}
+
 export default function MarkdownRenderer({ content }) {
   if (!content) return null;
 
@@ -42,18 +71,29 @@ export default function MarkdownRenderer({ content }) {
           },
           table({ children }) {
             return (
-              <div className="overflow-x-auto my-3 border border-slate-800 rounded-lg">
-                <table className="min-w-full divide-y divide-slate-800 text-xs text-left">
+              <div className="table-scroll-container my-3 max-w-full overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/40 shadow-inner">
+                <table className="w-max min-w-full table-auto divide-y divide-slate-800 text-xs text-left">
                   {children}
                 </table>
               </div>
             );
           },
+          thead({ children }) {
+            return <thead className="bg-slate-800/90 text-slate-200 font-semibold">{children}</thead>;
+          },
           th({ children }) {
-            return <th className="px-3 py-2 bg-slate-800/80 font-semibold text-slate-200">{children}</th>;
+            return (
+              <th className="px-3.5 py-2.5 font-semibold text-slate-200 text-left align-middle border-b border-slate-700/70 whitespace-nowrap min-w-[5rem]">
+                {renderContentWithLineBreaks(children)}
+              </th>
+            );
           },
           td({ children }) {
-            return <td className="px-3 py-2 border-t border-slate-800/60 text-slate-300">{children}</td>;
+            return (
+              <td className="px-3.5 py-2.5 border-t border-slate-800/60 text-slate-300 align-top leading-relaxed text-left min-w-[6.5rem] max-w-[22rem]">
+                {renderContentWithLineBreaks(children)}
+              </td>
+            );
           },
           a({ href, children }) {
             return (
