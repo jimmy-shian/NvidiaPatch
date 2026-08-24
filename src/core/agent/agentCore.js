@@ -1,5 +1,5 @@
 /**
- * AgentCore - Mobile AI Agent Controller v0.1.8
+ * AgentCore - Mobile AI Agent Controller v0.1.9
  * 
  * Features:
  * 1. Run Lifecycle & RunId isolation: Guarantees stale runs and aborted streams do not leak callbacks.
@@ -280,7 +280,11 @@ export class AgentCore {
                 if (progress.phase === 'reading') {
                   onStatusChange?.({
                     phase: 'reading',
-                    meta: { count: progress.count, urls: progress.urls },
+                    meta: {
+                      resultCount: progress.resultCount,
+                      pagesToReadCount: progress.pagesToReadCount || progress.count,
+                      urls: progress.urls
+                    },
                     runId
                   });
                 } else if (progress.phase === 'retrying_query') {
