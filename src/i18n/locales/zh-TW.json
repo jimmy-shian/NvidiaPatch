@@ -33,11 +33,32 @@
     "save": "儲存設定",
     "cancel": "取消",
     "saved": "系統設定已儲存！",
-    "portNotice": "提示：變更連接埠需要重啟應用程式才會生效。",
+    "portNotice": "提示：變更連接埠需要重啟 Gateway 才會生效。",
     "settingsButton": "系統設定",
     "resetConfirm": "確定要重設所有參數為預設值嗎？",
-    "enableContentValidation": "啟用回傳內容校驗"
+    "enableContentValidation": "啟用回傳內容校驗",
+    "autoStart": "Windows 開機自動啟動 (常駐系統匣)",
+    "autoStartDescription": "Windows 登入後自動於背景啟動程式並常駐系統匣，Gateway Server 預設不啟動。"
   },
+  "gateway": {
+    "start": "啟動 Gateway",
+    "stop": "關閉 Gateway",
+    "restart": "重新啟動 Gateway",
+    "running": "Gateway 運行中",
+    "stopped": "Gateway 已停止",
+    "starting": "Gateway 啟動中...",
+    "stopping": "Gateway 停止中...",
+    "error": "Gateway 異常",
+    "idle": "待命模式 (Server 未啟動)",
+    "retry": "重新嘗試啟動",
+    "startingNotice": "Gateway 啟動中...",
+    "stoppingNotice": "Gateway 關閉中...",
+    "restartingNotice": "Gateway 重新啟動中...",
+    "startedNotice": "Gateway 服務已成功啟動！",
+    "stoppedNotice": "Gateway 服務已停止運行，已釋放埠號。",
+    "restartedNotice": "Gateway 服務已重新啟動！"
+  },
+
   "keys": {
     "title": "NVIDIA NIM API Keys 管理池",
     "description": "對應 patcher-main，在 429 時自動按序冷卻並切換 Key。",
@@ -192,6 +213,8 @@
     "cancel": "取消",
     "confirmRestartApp": "確定要重啟應用程式嗎？這將會關閉並重新啟動整個應用。",
     "confirmRestartGateway": "確定要重啟 Gateway 服務嗎？",
+    "confirmStopGateway": "確定要關閉 Gateway 服務嗎？關閉後將停止監聽 Port 並釋放伺服器資源。",
+    "confirmStartGateway": "確定要啟動 Gateway 服務嗎？",
     "toggleTheme": "切換主題",
     "sse": "SSE",
     "dragToReorder": "拖曳重新排序",

@@ -17,7 +17,10 @@ export default function Sidebar({
   stats,
   rulesCount,
   gatewayHealth,
-  isRestartingGateway,
+  gatewayState = 'STOPPED',
+  isOperatingGateway,
+  handleStartGateway,
+  handleStopGateway,
   handleRestartGateway,
   restartNotice,
   theme,
@@ -29,6 +32,27 @@ export default function Sidebar({
   apiError
 }) {
   const { t, i18n } = useTranslation();
+
+  const isRunning = gatewayState === 'RUNNING' || gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy';
+  const isStarting = gatewayState === 'STARTING';
+  const isStopping = gatewayState === 'STOPPING';
+  const isError = gatewayState === 'ERROR';
+  const isStopped = gatewayState === 'STOPPED' || (!isRunning && !isStarting && !isStopping && !isError);
+
+  const getStatusColor = () => {
+    if (isRunning) return 'var(--status-active)';
+    if (isStarting || isStopping) return 'var(--status-cooldown)';
+    if (isError) return '#ef4444';
+    return 'var(--status-inactive)';
+  };
+
+  const getStatusText = () => {
+    if (isRunning) return t('gateway.running');
+    if (isStarting) return t('gateway.starting');
+    if (isStopping) return t('gateway.stopping');
+    if (isError) return t('gateway.error');
+    return t('gateway.stopped');
+  };
 
   return (
     <div className="glass-panel" style={{ width: '240px', margin: '12px 6px 12px 12px', display: 'flex', flexDirection: 'column', padding: '20px 12px' }}>
@@ -87,47 +111,85 @@ export default function Sidebar({
 
       <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <div className="glass-panel" style={{ padding: '10px 12px', borderRadius: '8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: isRunning ? '6px' : '0' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
               <div style={{
                 width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                backgroundColor: (gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy') 
-                  ? 'var(--status-active)' 
-                  : (gatewayHealth === null ? 'var(--status-inactive)' : 'var(--status-cooldown)'),
-                boxShadow: (gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy') 
-                  ? '0 0 6px var(--status-active-glow-start)' 
-                  : 'none'
+                backgroundColor: getStatusColor(),
+                boxShadow: isRunning ? '0 0 6px var(--status-active-glow-start)' : 'none'
               }} />
               <span style={{ 
                 fontSize: '12px', 
-                color: (gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy') 
-                  ? 'var(--status-active)' 
-                  : (gatewayHealth === null ? 'var(--status-inactive)' : 'var(--status-cooldown)'), 
+                color: getStatusColor(), 
                 fontWeight: '600', 
                 whiteSpace: 'nowrap', 
                 overflow: 'hidden', 
                 textOverflow: 'ellipsis' 
               }}>
-                {(gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy' || gatewayHealth?.status === 'degraded') 
-                  ? t('dashboard.gatewayRunning') 
-                  : (gatewayHealth === null ? t('dashboard.gatewayOffline') : t('dashboard.gatewayError'))}
+                {getStatusText()}
               </span>
             </div>
-            <button
-              className="btn btn-secondary"
-              style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', flexShrink: 0 }}
-              onClick={handleRestartGateway}
-              disabled={isRestartingGateway}
-              title={t('dashboard.restart')}
-            >
-              {isRestartingGateway ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />}
-              <span>{isRestartingGateway ? t('dashboard.restarting') : t('dashboard.restart')}</span>
-            </button>
+            
+            {isRunning && (
+              <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}
+                  onClick={handleRestartGateway}
+                  disabled={isOperatingGateway || isStarting || isStopping}
+                  title={t('gateway.restart')}
+                >
+                  <RotateCw size={11} className={isStarting || isStopping ? 'animate-spin' : ''} />
+                  <span>{t('dashboard.restart')}</span>
+                </button>
+                <button
+                  className="btn btn-danger"
+                  style={{ padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}
+                  onClick={handleStopGateway}
+                  disabled={isOperatingGateway || isStarting || isStopping}
+                  title={t('gateway.stop')}
+                >
+                  <span>⏹️</span>
+                </button>
+              </div>
+            )}
           </div>
-          {(gatewayHealth?.status === 'running' || gatewayHealth?.status === 'healthy' || gatewayHealth?.status === 'degraded') && (
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>{t('dashboard.uptime', { minutes: Math.round((gatewayHealth.uptime ?? gatewayHealth.metrics?.uptime ?? 0) / 60) })}</span>
-              <span>{t('dashboard.keysStatus', { active: gatewayHealth.keys?.active ?? stats?.activeKeysCount ?? 0, total: gatewayHealth.keys?.total ?? stats?.keysCount ?? 0 })}</span>
+
+          {isStopped && (
+            <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                {t('gateway.idle')}
+              </div>
+              <button
+                className="btn btn-primary"
+                style={{ width: '100%', padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                onClick={handleStartGateway}
+                disabled={isOperatingGateway || isStarting || isStopping}
+              >
+                {isStarting ? <Loader2 size={12} className="animate-spin" /> : <span>▶️</span>}
+                <span>{isStarting ? t('gateway.startingNotice') : t('gateway.start')}</span>
+              </button>
+            </div>
+          )}
+
+          {isError && (
+            <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <button
+                className="btn btn-secondary"
+                style={{ width: '100%', padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                onClick={handleStartGateway}
+                disabled={isOperatingGateway || isStarting || isStopping}
+              >
+                <RotateCw size={12} />
+                <span>{t('gateway.retry')}</span>
+              </button>
+            </div>
+          )}
+
+          {isRunning && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '6px' }}>
+              <span>{t('dashboard.uptime', { minutes: Math.round((gatewayHealth?.uptime ?? gatewayHealth?.metrics?.uptime ?? 0) / 60) })}</span>
+              <span>{t('dashboard.keysStatus', { active: gatewayHealth?.keys?.active ?? stats?.activeKeysCount ?? 0, total: gatewayHealth?.keys?.total ?? stats?.keysCount ?? 0 })}</span>
             </div>
           )}
         </div>
@@ -143,6 +205,7 @@ export default function Sidebar({
             {restartNotice.message}
           </div>
         )}
+
 
         <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
           {LANGUAGE_OPTIONS.map(lang => (

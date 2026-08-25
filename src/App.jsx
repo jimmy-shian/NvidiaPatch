@@ -49,9 +49,11 @@ export default function App() {
   const [copiedId, setCopiedId] = useState(null);
   const [apiError, setApiError] = useState('');
   const [gatewayHealth, setGatewayHealth] = useState(null);
-  const [isRestartingGateway, setIsRestartingGateway] = useState(false);
+  const [gatewayState, setGatewayState] = useState('STOPPED');
+  const [isOperatingGateway, setIsOperatingGateway] = useState(false);
   const [restartNotice, setRestartNotice] = useState(null);
   const restartNoticeTimerRef = useRef(null);
+
 
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
@@ -139,7 +141,11 @@ export default function App() {
         await Promise.all(promises);
         setApiError('');
       } catch (err) {
-        setApiError('Unable to connect to Gateway.');
+        if (gatewayState === 'RUNNING') {
+          setApiError('Unable to connect to Gateway.');
+        } else {
+          setApiError('');
+        }
       } finally {
         fetchDataPromiseRef.current = null;
       }
@@ -147,7 +153,8 @@ export default function App() {
 
     fetchDataPromiseRef.current = runFetch();
     return fetchDataPromiseRef.current;
-  }, [api, setSelectedTestModel]);
+  }, [api, setSelectedTestModel, gatewayState]);
+
 
   // Dedicated modular state hooks
   const keysState = useKeysState(api, fetchData, showConfirm);
@@ -201,12 +208,47 @@ export default function App() {
   }, [api]);
 
   useEffect(() => {
-    if (!window.electronAPI || !window.electronAPI.onGatewayRestarted) return;
-    const unsubscribe = window.electronAPI.onGatewayRestarted(() => {
-      checkGatewayHealth();
-      fetchData();
-    });
-    return unsubscribe;
+    if (!window.electronAPI) return;
+
+    if (window.electronAPI.getGatewayState) {
+      window.electronAPI.getGatewayState().then(res => {
+        if (res && res.state) {
+          setGatewayState(res.state);
+          if (res.state === 'RUNNING') {
+            checkGatewayHealth();
+            fetchData({ force: true });
+          }
+        }
+      }).catch(console.error);
+    }
+
+    const unsubs = [];
+    if (window.electronAPI.onGatewayStateChanged) {
+      unsubs.push(window.electronAPI.onGatewayStateChanged((data) => {
+        if (data && data.state) {
+          setGatewayState(data.state);
+          if (data.state === 'RUNNING') {
+            checkGatewayHealth();
+            fetchData({ force: true });
+          } else if (data.state === 'STOPPED') {
+            setGatewayHealth(null);
+            setApiError('');
+          }
+        }
+      }));
+    }
+
+    if (window.electronAPI.onGatewayRestarted) {
+      unsubs.push(window.electronAPI.onGatewayRestarted(() => {
+        setGatewayState('RUNNING');
+        checkGatewayHealth();
+        fetchData({ force: true });
+      }));
+    }
+
+    return () => {
+      unsubs.forEach(fn => typeof fn === 'function' && fn());
+    };
   }, [checkGatewayHealth, fetchData]);
 
   useEffect(() => {
@@ -229,14 +271,14 @@ export default function App() {
 
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && adminToken) {
+      if (document.visibilityState === 'visible' && adminToken && gatewayState === 'RUNNING') {
         fetchData();
         checkGatewayHealth();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [adminToken, fetchData, checkGatewayHealth]);
+  }, [adminToken, fetchData, checkGatewayHealth, gatewayState]);
 
   useEffect(() => {
     if (!sseConnected) {
@@ -253,38 +295,76 @@ export default function App() {
     }, 10000);
   }, []);
 
+  const handleStartGateway = useCallback(async () => {
+    if (isOperatingGateway) return;
+    setIsOperatingGateway(true);
+    showRestartNotice('info', t('gateway.startingNotice'));
+
+    if (window.electronAPI?.startGateway) {
+      const res = await window.electronAPI.startGateway();
+      if (res?.success) {
+        showRestartNotice('success', t('gateway.startedNotice'));
+        setGatewayState('RUNNING');
+        checkGatewayHealth();
+        fetchData({ force: true });
+      } else {
+        showRestartNotice('error', res?.error || 'Gateway start failed');
+      }
+    }
+    setIsOperatingGateway(false);
+  }, [isOperatingGateway, checkGatewayHealth, showRestartNotice, fetchData, t]);
+
+  const handleStopGateway = useCallback(async () => {
+    if (isOperatingGateway) return;
+    const ok = await showConfirm({
+      title: t('common.confirm'),
+      message: t('common.confirmStopGateway'),
+      type: 'danger'
+    });
+    if (!ok) return;
+
+    setIsOperatingGateway(true);
+    showRestartNotice('info', t('gateway.stoppingNotice'));
+
+    if (window.electronAPI?.stopGateway) {
+      const res = await window.electronAPI.stopGateway();
+      if (res?.success) {
+        showRestartNotice('success', t('gateway.stoppedNotice'));
+        setGatewayState('STOPPED');
+        setGatewayHealth(null);
+        setApiError('');
+      } else {
+        showRestartNotice('error', res?.error || 'Gateway stop failed');
+      }
+    }
+    setIsOperatingGateway(false);
+  }, [isOperatingGateway, showConfirm, showRestartNotice, t]);
+
   const handleRestartGateway = useCallback(async () => {
-    if (isRestartingGateway) return;
+    if (isOperatingGateway) return;
     const ok = await showConfirm({
       title: t('common.confirm'),
       message: t('common.confirmRestartGateway'),
       type: 'danger'
     });
     if (!ok) return;
-    setIsRestartingGateway(true);
-    showRestartNotice('info', t('dashboard.restarting') + '...');
+
+    setIsOperatingGateway(true);
+    showRestartNotice('info', t('gateway.restartingNotice'));
 
     try {
       await api.resetCooldowns();
     } catch (_) {}
 
-    if (window.electronAPI && window.electronAPI.restartGateway) {
-      window.electronAPI.restartGateway();
-      
-      let attempts = 0;
-      const maxAttempts = 30;
-      while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 150));
-        const health = await checkGatewayHealth();
-        if (health && (health.status === 'running' || health.status === 'healthy' || health.status === 'degraded')) {
-          showRestartNotice('success', `Gateway restarted!`);
-          fetchData();
-          break;
-        }
-        attempts++;
-      }
-      if (attempts >= maxAttempts) {
-        showRestartNotice('error', 'Gateway restart timed out. Please check if port is in use.');
+    if (window.electronAPI?.restartGateway) {
+      const res = await window.electronAPI.restartGateway();
+      if (res?.success) {
+        showRestartNotice('success', t('gateway.restartedNotice'));
+        setGatewayState('RUNNING');
+        checkGatewayHealth();
+        fetchData({ force: true });
+      } else {
+        showRestartNotice('error', res?.error || 'Gateway restart failed');
       }
     } else {
       try {
@@ -296,8 +376,8 @@ export default function App() {
       }
     }
 
-    setIsRestartingGateway(false);
-  }, [isRestartingGateway, api, checkGatewayHealth, showRestartNotice, fetchData, t, showConfirm]);
+    setIsOperatingGateway(false);
+  }, [isOperatingGateway, api, checkGatewayHealth, showRestartNotice, fetchData, t, showConfirm]);
 
   const handleRestartApp = useCallback(async () => {
     const ok = await showConfirm({
@@ -325,7 +405,10 @@ export default function App() {
         stats={statsState.stats}
         rulesCount={rulesState.rules.length}
         gatewayHealth={gatewayHealth}
-        isRestartingGateway={isRestartingGateway}
+        gatewayState={gatewayState}
+        isOperatingGateway={isOperatingGateway}
+        handleStartGateway={handleStartGateway}
+        handleStopGateway={handleStopGateway}
         handleRestartGateway={handleRestartGateway}
         restartNotice={restartNotice}
         theme={theme}
@@ -336,6 +419,7 @@ export default function App() {
         handleRestartApp={handleRestartApp}
         apiError={apiError}
       />
+
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', margin: '12px 12px 12px 6px', overflow: 'hidden' }}>
         {activeTab === 'dashboard' && (

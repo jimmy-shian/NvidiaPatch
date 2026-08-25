@@ -33,11 +33,32 @@
     "save": "Save Settings",
     "cancel": "Cancel",
     "saved": "Settings saved!",
-    "portNotice": "Port changes require app restart.",
+    "portNotice": "Port changes require Gateway restart.",
     "settingsButton": "Settings",
     "resetConfirm": "Reset all parameters to default values?",
-    "enableContentValidation": "Enable Content Validation"
+    "enableContentValidation": "Enable Content Validation",
+    "autoStart": "Launch on Windows Startup (Minimized to Tray)",
+    "autoStartDescription": "Automatically starts the app minimized in the tray on Windows login. Gateway Server remains stopped by default."
   },
+  "gateway": {
+    "start": "Start Gateway",
+    "stop": "Stop Gateway",
+    "restart": "Restart Gateway",
+    "running": "Gateway Running",
+    "stopped": "Gateway Stopped",
+    "starting": "Gateway Starting...",
+    "stopping": "Gateway Stopping...",
+    "error": "Gateway Error",
+    "idle": "Standby Mode (Server not started)",
+    "retry": "Retry Starting",
+    "startingNotice": "Gateway is starting...",
+    "stoppingNotice": "Gateway is stopping...",
+    "restartingNotice": "Gateway is restarting...",
+    "startedNotice": "Gateway started successfully!",
+    "stoppedNotice": "Gateway stopped and port released.",
+    "restartedNotice": "Gateway restarted successfully!"
+  },
+
   "keys": {
     "title": "NVIDIA NIM API Keys Pool",
     "description": "Auto-cooldown on 429 errors.",
@@ -192,6 +213,9 @@
     "cancel": "Cancel",
     "confirmRestartApp": "Restart the application? This will close and restart the entire app.",
     "confirmRestartGateway": "Restart the Gateway service?",
+    "confirmStopGateway": "Stop the Gateway service? This will close port listening and release server resources.",
+    "confirmStartGateway": "Start the Gateway service?",
+
     "toggleTheme": "Toggle theme",
     "sse": "SSE",
     "dragToReorder": "Drag to reorder",

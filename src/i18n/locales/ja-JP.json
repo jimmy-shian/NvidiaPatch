@@ -33,10 +33,33 @@
     "save": "保存",
     "cancel": "キャンセル",
     "saved": "設定を保存しました！",
-    "portNotice": "ポート変更はアプリ再起動が必要です。",
+
+    "portNotice": "ポート変更は Gateway 再起動が必要です。",
     "settingsButton": "設定",
-    "enableContentValidation": "応答内容の検証を有効化"
+    "resetConfirm": "すべてのパラメータをデフォルト値にリセットしますか？",
+    "enableContentValidation": "応答内容の検証を有効化",
+    "autoStart": "Windows 起動時に自動開始 (トレイ常駐)",
+    "autoStartDescription": "Windows ログイン時にバックグラウンドで最小化起動します。Gateway サーバーはデフォルトで停止状態を維持します。"
   },
+  "gateway": {
+    "start": "Gateway 起動",
+    "stop": "Gateway 停止",
+    "restart": "Gateway 再起動",
+    "running": "Gateway 稼働中",
+    "stopped": "Gateway 停止中",
+    "starting": "Gateway 起動中...",
+    "stopping": "Gateway 停止処理中...",
+    "error": "Gateway エラー",
+    "idle": "スタンバイモード (サーバー未起動)",
+    "retry": "再試行",
+    "startingNotice": "Gateway を起動しています...",
+    "stoppingNotice": "Gateway を停止しています...",
+    "restartingNotice": "Gateway を再起動しています...",
+    "startedNotice": "Gateway サービスが正常に起動しました！",
+    "stoppedNotice": "Gateway サービスを停止し、ポートを解放しました。",
+    "restartedNotice": "Gateway サービスが再起動しました！"
+  },
+
   "keys": {
     "title": "NVIDIA NIM APIキープール",
     "description": "429時に自動冷却とローテーション。",
@@ -191,6 +214,9 @@
     "cancel": "キャンセル",
     "confirmRestartApp": "アプリケーションを再起動しますか？これによりアプリが終了して再起動されます。",
     "confirmRestartGateway": "Gateway サービスを再起動しますか？",
+    "confirmStopGateway": "Gateway サービスを停止しますか？ポートのリッスンを停止し、リソースを解放します。",
+    "confirmStartGateway": "Gateway サービスを起動しますか？",
+
     "toggleTheme": "テーマ切替",
     "sse": "SSE",
     "dragToReorder": "ドラッグで並べ替え",

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
@@ -29,6 +29,17 @@ export default function SettingsModal({
   saveSettings
 }) {
   const { t } = useTranslation();
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && window.electronAPI?.getAutoStart) {
+      window.electronAPI.getAutoStart().then((res) => {
+        if (res && typeof res.enabled === 'boolean') {
+          setAutoStartEnabled(res.enabled);
+        }
+      }).catch(console.error);
+    }
+  }, [isOpen]);
 
   if (!isOpen || !tempSettings) return null;
 
@@ -36,6 +47,7 @@ export default function SettingsModal({
     if (!window.confirm(t('settings.resetConfirm') || '確定要重設所有參數為預設值嗎？')) return;
     setTempSettings({ ...DEFAULT_SETTINGS });
   };
+
 
   return (
     <div
@@ -188,6 +200,43 @@ export default function SettingsModal({
               {tempSettings.ENABLE_CONTENT_VALIDATION ? 'ON' : 'OFF'}
             </button>
           </div>
+
+          <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0' }}>
+              <div>
+                <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>🚀 {t('settings.autoStart')}</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {t('settings.autoStartDescription')}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const nextVal = !autoStartEnabled;
+                  setAutoStartEnabled(nextVal);
+                  if (window.electronAPI?.setAutoStart) {
+                    await window.electronAPI.setAutoStart(nextVal);
+                  }
+                }}
+                style={{
+                  padding: '6px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  background: autoStartEnabled ? 'var(--status-active)' : 'var(--status-inactive)',
+                  color: '#fff',
+                  transition: 'background 150ms ease',
+                  flexShrink: 0,
+                  marginLeft: '12px'
+                }}
+              >
+                {autoStartEnabled ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          </div>
+
 
           <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontWeight: '700', color: 'var(--accent-color)', fontSize: '15px' }}>
             💰 {t('settings.pricing')}
