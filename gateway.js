@@ -29,6 +29,32 @@ function createGatewayApp() {
   return app;
 }
 
+function closeGatewayResources() {
+  try {
+    const adminRouter = require('./gateway/routes/adminRoutes');
+    if (typeof adminRouter.stopHealthBroadcast === 'function') {
+      adminRouter.stopHealthBroadcast();
+    }
+  } catch (_) {}
+  try {
+    const eventManager = require('./gateway/sse/eventManager');
+    if (typeof eventManager.closeAll === 'function') {
+      eventManager.closeAll();
+    }
+  } catch (_) {}
+}
+
+function startGatewayResources() {
+  try {
+    const adminRouter = require('./gateway/routes/adminRoutes');
+    if (typeof adminRouter.startHealthBroadcast === 'function') {
+      adminRouter.startHealthBroadcast();
+    }
+  } catch (_) {}
+}
+
 module.exports = {
-  createGatewayApp
-};
+  createGatewayApp,
+  closeGatewayResources,
+  startGatewayResources
+};

@@ -29,17 +29,34 @@ router.post('/api/auth/login', requireAdminAuth, (req, res) => {
   res.json({ success: true });
 });
 
-// 定期廣播健康狀態 (Heartbeat) 到所有已連線的 SSE 用戶端
-setInterval(async () => {
-  try {
-    if (eventManager.clients.size > 0) {
-      const healthData = await healthService.getHealthStatus(false);
-      broadcastEvent('health', healthData);
+let healthBroadcastTimer = null;
+
+function startHealthBroadcast() {
+  if (healthBroadcastTimer) return;
+  healthBroadcastTimer = setInterval(async () => {
+    try {
+      if (eventManager.clients.size > 0) {
+        const healthData = await healthService.getHealthStatus(false);
+        broadcastEvent('health', healthData);
+      }
+    } catch (err) {
+      // ignore
     }
-  } catch (err) {
-    // ignore
+  }, 10000);
+  if (healthBroadcastTimer.unref) {
+    healthBroadcastTimer.unref();
   }
-}, 10000);
+}
+
+function stopHealthBroadcast() {
+  if (healthBroadcastTimer) {
+    clearInterval(healthBroadcastTimer);
+    healthBroadcastTimer = null;
+  }
+}
+
+startHealthBroadcast();
+
 
 // SSE 即時事件推送端點
 router.get('/api/events', requireSseAuth, async (req, res) => {
@@ -313,4 +330,8 @@ router.get('/models', (req, res, next) => {
   }
 });
 
+router.startHealthBroadcast = startHealthBroadcast;
+router.stopHealthBroadcast = stopHealthBroadcast;
+
 module.exports = router;
+
