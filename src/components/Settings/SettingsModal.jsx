@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Server, User, Sparkles, Info, ShieldCheck } from 'lucide-react';
+import { X, Server, User, Sparkles, Plug, Info, ShieldCheck } from 'lucide-react';
 import { APP_VERSION } from '../../version';
 import ProviderConfigTab from './ProviderConfigTab';
 import PersonalContextTab from './PersonalContextTab';
 import SkillsManagerTab from './SkillsManagerTab';
+import MCPManagerTab from './MCPManagerTab';
 
 export default function SettingsModal({
   isOpen,
@@ -21,7 +22,13 @@ export default function SettingsModal({
   skills,
   onImportSkill,
   onSaveSkill,
-  onDeleteSkill
+  onDeleteSkill,
+  mcpServers = [],
+  onAddMcpServer,
+  onToggleMcpServer,
+  onDeleteMcpServer,
+  onSyncMcpServer,
+  onTestMcpConnection
 }) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('providers');
@@ -84,6 +91,18 @@ export default function SettingsModal({
           </button>
 
           <button
+            onClick={() => setActiveTab('mcp')}
+            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+              activeTab === 'mcp'
+                ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Plug size={14} />
+            <span>MCP 工具</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('about')}
             className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
               activeTab === 'about'
@@ -123,6 +142,17 @@ export default function SettingsModal({
               onImportSkill={onImportSkill}
               onSaveSkill={onSaveSkill}
               onDeleteSkill={onDeleteSkill}
+            />
+          )}
+
+          {activeTab === 'mcp' && (
+            <MCPManagerTab
+              mcpServers={mcpServers}
+              onAddServer={onAddMcpServer}
+              onToggleServer={onToggleMcpServer}
+              onDeleteServer={onDeleteMcpServer}
+              onSyncServer={onSyncMcpServer}
+              onTestConnection={onTestMcpConnection}
             />
           )}
 

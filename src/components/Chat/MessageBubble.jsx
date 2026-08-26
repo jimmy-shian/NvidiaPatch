@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight, Sparkles, Plug } from 'lucide-react';
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
 
@@ -251,7 +251,8 @@ export default function MessageBubble({
           <div className="my-2 space-y-1.5">
             {message.toolExecutions.map((te, idx) => {
               const isExec = te.status === 'executing' || te.status === 'calling';
-              const queryStr = typeof te.args === 'object' ? te.args?.query : te.args;
+              const isMcp = te.toolName?.startsWith('mcp__') || te.toolName === 'request_mcp_connection' || te.toolName === 'search_mcp_tools';
+              const queryStr = typeof te.args === 'object' ? (te.args?.query || te.args?.url || te.args?.taskId || JSON.stringify(te.args)) : te.args;
 
               let parsedResult = te.result;
               if (typeof parsedResult === 'string') {
@@ -263,6 +264,19 @@ export default function MessageBubble({
               const resultCount = parsedResult?.resultCount ?? parsedResult?.count ?? resultsList.length;
               const isExpanded = Boolean(expandedToolResults[te.toolCallId || idx]);
 
+              let toolTitle = '搜尋工具';
+              if (te.toolName === 'request_mcp_connection') {
+                toolTitle = isExec ? '正在連線 MCP 伺服器…' : '已連線 MCP 伺服器';
+              } else if (te.toolName === 'search_mcp_tools') {
+                toolTitle = isExec ? '正在搜尋 MCP 工具…' : '已搜尋 MCP 工具';
+              } else if (te.toolName?.startsWith('mcp__')) {
+                const parts = te.toolName.split('__');
+                const rawName = parts.length >= 3 ? parts.slice(2).join('__') : te.toolName;
+                toolTitle = isExec ? `正在執行 MCP [${rawName}]…` : `MCP 工具 [${rawName}]`;
+              } else {
+                toolTitle = isExec ? '正在搜尋…' : '已完成搜尋';
+              }
+
               return (
                 <div key={te.toolCallId || idx} className="rounded-xl bg-slate-950/80 border border-slate-800 p-2 text-xs">
                   <div
@@ -272,11 +286,13 @@ export default function MessageBubble({
                     <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
                       {isExec ? (
                         <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
+                      ) : isMcp ? (
+                        <Plug size={13} className="text-emerald-400 shrink-0" />
                       ) : (
                         <Search size={13} className="text-emerald-400 shrink-0" />
                       )}
                       <span className="font-semibold text-emerald-300 whitespace-nowrap shrink-0">
-                        {isExec ? '正在搜尋…' : '已完成搜尋'}
+                        {toolTitle}
                       </span>
                       {queryStr && (
                         <span className="text-slate-400 font-mono truncate min-w-0 flex-1">
@@ -287,7 +303,7 @@ export default function MessageBubble({
 
                     {!isExec && te.result && (
                       <div className="flex items-center gap-1 text-[10px] text-slate-400 shrink-0">
-                        <span>{resultCount} 筆</span>
+                        {resultCount > 0 && <span>{resultCount} 筆</span>}
                         {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       </div>
                     )}
@@ -295,18 +311,26 @@ export default function MessageBubble({
 
                   {isExpanded && (
                     <div className="mt-2 pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] animate-fade-in">
-                      {resultsList.length > 0 ? (
+                      {parsedResult?.formattedText ? (
+                        <div className="p-2 rounded bg-black/50 border border-slate-800/80 whitespace-pre-wrap font-mono text-slate-300 text-[11px]">
+                          {parsedResult.formattedText}
+                        </div>
+                      ) : resultsList.length > 0 ? (
                         resultsList.map((r, ri) => (
                           <div key={ri} className="p-1.5 rounded bg-black/50 border border-slate-800/80">
-                            <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
-                              {r.title}
-                            </a>
-                            <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet || r.content}</p>
+                            {r.url ? (
+                              <a href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-400 hover:underline truncate block">
+                                {r.title || r.name}
+                              </a>
+                            ) : (
+                              <span className="font-semibold text-emerald-400 block">{r.name || r.title}</span>
+                            )}
+                            <p className="text-slate-400 mt-0.5 line-clamp-2">{r.snippet || r.content || r.description}</p>
                           </div>
                         ))
                       ) : (
-                        <div className="p-2 rounded bg-black/30 text-slate-400 text-xs italic">
-                          {parsedResult?.message || '未檢索到直接相關網頁，已由模型知識庫進行分析整合。'}
+                        <div className="p-2 rounded bg-black/30 text-slate-400 text-xs italic font-mono">
+                          {typeof parsedResult === 'object' ? JSON.stringify(parsedResult, null, 2) : String(parsedResult)}
                         </div>
                       )}
                     </div>
