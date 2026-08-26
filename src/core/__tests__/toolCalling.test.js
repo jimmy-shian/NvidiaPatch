@@ -40,8 +40,10 @@ describe('Universal Web Search & AgentCore Integration', () => {
     expect(WEB_SEARCH_TOOL_DEFINITION.type).toBe('function');
     expect(WEB_SEARCH_TOOL_DEFINITION.function.name).toBe('web_search');
     expect(WEB_SEARCH_TOOL_DEFINITION.function.parameters.required).toContain('query');
-    expect(SYSTEM_TOOLS.length).toBe(1);
-    expect(SYSTEM_TOOLS[0].function.name).toBe('web_search');
+    expect(SYSTEM_TOOLS.length).toBeGreaterThanOrEqual(3);
+    expect(SYSTEM_TOOLS.map(t => t.function.name)).toContain('web_search');
+    expect(SYSTEM_TOOLS.map(t => t.function.name)).toContain('request_mcp_connection');
+    expect(SYSTEM_TOOLS.map(t => t.function.name)).toContain('search_mcp_tools');
   });
 
   it('executes universal web search by discovering URLs and reading full webpage content', async () => {

@@ -3,9 +3,9 @@ import { APP_VERSION } from '../../version';
 import packageJson from '../../../package.json';
 
 describe('Elapsed Duration & Version Verification', () => {
-  it('has package.json and version.js in sync with version 0.1.9', () => {
-    expect(APP_VERSION).toBe('0.1.9');
-    expect(packageJson.version).toBe('0.1.9');
+  it('has package.json and version.js in sync with version', () => {
+    expect(APP_VERSION).toBe(packageJson.version);
+    expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('calculates durationMs accurately from startedAt and completedAt', () => {
