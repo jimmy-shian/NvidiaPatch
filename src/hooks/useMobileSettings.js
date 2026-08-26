@@ -3,6 +3,7 @@ import { SecureStorage } from '../core/security/secureStorage';
 import { LocalDB } from '../core/storage/localDatabase';
 import { ContextManager } from '../core/context/contextManager';
 import { SkillManager } from '../core/skills/skillManager';
+import { MCPManager } from '../core/mcp/MCPManager';
 import { createProvider, PROVIDER_TYPES } from '../core/providers';
 import { CURATED_NVIDIA_MODELS, DEFAULT_NVIDIA_MODEL } from '../core/providers/NvidiaNimProvider';
 
@@ -16,6 +17,7 @@ export function useMobileSettings() {
   const [availableModels, setAvailableModels] = useState(CURATED_NVIDIA_MODELS);
   const [contextSettings, setContextSettings] = useState({});
   const [skills, setSkills] = useState([]);
+  const [mcpServers, setMcpServers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -66,6 +68,10 @@ export function useMobileSettings() {
       // 5. Skills
       const allSkills = await SkillManager.getAllSkills();
       setSkills(allSkills);
+
+      // 6. MCP Servers
+      const loadedMcp = await MCPManager.getServers();
+      setMcpServers(loadedMcp);
     } catch (err) {
       console.error('[useMobileSettings loadAll error]:', err);
     } finally {
@@ -202,6 +208,40 @@ export function useMobileSettings() {
     setSkills(updatedList);
   }, []);
 
+  // MCP Server management
+  const addMcpServer = useCallback(async (serverParams) => {
+    const res = await MCPManager.connectServer({
+      ...serverParams,
+      isManualUserAction: true
+    });
+    const updated = await MCPManager.getServers();
+    setMcpServers(updated);
+    return res;
+  }, []);
+
+  const toggleMcpServer = useCallback(async (id, enabled) => {
+    await MCPManager.toggleServer(id, enabled);
+    const updated = await MCPManager.getServers();
+    setMcpServers(updated);
+  }, []);
+
+  const deleteMcpServer = useCallback(async (id) => {
+    await MCPManager.deleteServer(id);
+    const updated = await MCPManager.getServers();
+    setMcpServers(updated);
+  }, []);
+
+  const syncMcpServer = useCallback(async (id) => {
+    const res = await MCPManager.syncServerTools(id);
+    const updated = await MCPManager.getServers();
+    setMcpServers(updated);
+    return res;
+  }, []);
+
+  const testMcpConnection = useCallback(async (params) => {
+    return MCPManager.testConnection(params);
+  }, []);
+
   return {
     isLoading,
     isSyncing,
@@ -211,6 +251,7 @@ export function useMobileSettings() {
     availableModels,
     contextSettings,
     skills,
+    mcpServers,
     changeProvider,
     selectModel,
     updateProviderConfig,
@@ -219,6 +260,11 @@ export function useMobileSettings() {
     updateContext,
     importSkill,
     saveSkill,
-    deleteSkill
+    deleteSkill,
+    addMcpServer,
+    toggleMcpServer,
+    deleteMcpServer,
+    syncMcpServer,
+    testMcpConnection
   };
 }

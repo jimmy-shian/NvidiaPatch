@@ -9,6 +9,33 @@ import { Preferences } from '@capacitor/preferences';
 const STORAGE_PREFIX = 'sec_';
 const SALT_KEY = '__sec_device_salt__';
 
+// In-memory fallback store for Node.js / unit tests environments
+const memPreferences = new Map();
+
+async function safePrefGet(key) {
+  try {
+    const res = await Preferences.get({ key });
+    if (res && res.value !== null && res.value !== undefined) {
+      return res;
+    }
+  } catch (_) {}
+  return { value: memPreferences.get(key) || null };
+}
+
+async function safePrefSet(key, value) {
+  memPreferences.set(key, value);
+  try {
+    await Preferences.set({ key, value });
+  } catch (_) {}
+}
+
+async function safePrefRemove(key) {
+  memPreferences.delete(key);
+  try {
+    await Preferences.remove({ key });
+  } catch (_) {}
+}
+
 // Helper: Get or create device-specific encryption key
 let cachedKey = null;
 
@@ -16,16 +43,20 @@ async function getEncryptionKey() {
   if (cachedKey) return cachedKey;
 
   // Retrieve or generate device salt
-  let { value: saltBase64 } = await Preferences.get({ key: SALT_KEY });
+  let { value: saltBase64 } = await safePrefGet(SALT_KEY);
   let salt;
   if (!saltBase64) {
     const randomBytes = new Uint8Array(16);
     crypto.getRandomValues(randomBytes);
-    saltBase64 = btoa(String.fromCharCode(...randomBytes));
-    await Preferences.set({ key: SALT_KEY, value: saltBase64 });
+    saltBase64 = typeof Buffer !== 'undefined'
+      ? Buffer.from(randomBytes).toString('base64')
+      : btoa(String.fromCharCode(...randomBytes));
+    await safePrefSet(SALT_KEY, saltBase64);
     salt = randomBytes;
   } else {
-    salt = Uint8Array.from(atob(saltBase64), c => c.charCodeAt(0));
+    salt = typeof Buffer !== 'undefined'
+      ? new Uint8Array(Buffer.from(saltBase64, 'base64'))
+      : Uint8Array.from(atob(saltBase64), c => c.charCodeAt(0));
   }
 
   // Derive master key from hardware/app context seed
@@ -74,15 +105,20 @@ export const SecureStorage = {
         encodedValue
       );
 
+      const ivBase64 = typeof Buffer !== 'undefined'
+        ? Buffer.from(iv).toString('base64')
+        : btoa(String.fromCharCode(...iv));
+
+      const dataBase64 = typeof Buffer !== 'undefined'
+        ? Buffer.from(new Uint8Array(ciphertext)).toString('base64')
+        : btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
+
       const payload = {
-        iv: btoa(String.fromCharCode(...iv)),
-        data: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
+        iv: ivBase64,
+        data: dataBase64
       };
 
-      await Preferences.set({
-        key: `${STORAGE_PREFIX}${key}`,
-        value: JSON.stringify(payload)
-      });
+      await safePrefSet(`${STORAGE_PREFIX}${key}`, JSON.stringify(payload));
     } catch (err) {
       console.error('[SecureStorage] Encryption error:', err);
       throw new Error('Failed to securely store sensitive data');
@@ -94,14 +130,19 @@ export const SecureStorage = {
    */
   async getItem(key) {
     try {
-      const { value: storedJson } = await Preferences.get({ key: `${STORAGE_PREFIX}${key}` });
+      const { value: storedJson } = await safePrefGet(`${STORAGE_PREFIX}${key}`);
       if (!storedJson) return null;
 
       const payload = JSON.parse(storedJson);
       if (!payload.iv || !payload.data) return null;
 
-      const iv = Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0));
-      const ciphertext = Uint8Array.from(atob(payload.data), c => c.charCodeAt(0));
+      const iv = typeof Buffer !== 'undefined'
+        ? new Uint8Array(Buffer.from(payload.iv, 'base64'))
+        : Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0));
+
+      const ciphertext = typeof Buffer !== 'undefined'
+        ? new Uint8Array(Buffer.from(payload.data, 'base64'))
+        : Uint8Array.from(atob(payload.data), c => c.charCodeAt(0));
 
       const cryptoKey = await getEncryptionKey();
       const decrypted = await crypto.subtle.decrypt(
@@ -121,17 +162,25 @@ export const SecureStorage = {
    * Remove a sensitive item
    */
   async removeItem(key) {
-    await Preferences.remove({ key: `${STORAGE_PREFIX}${key}` });
+    await safePrefRemove(`${STORAGE_PREFIX}${key}`);
   },
 
   /**
    * Clear all secure keys
    */
   async clear() {
-    const { keys } = await Preferences.keys();
-    for (const k of keys) {
-      if (k.startsWith(STORAGE_PREFIX)) {
-        await Preferences.remove({ key: k });
+    try {
+      const { keys } = await Preferences.keys();
+      for (const k of keys) {
+        if (k.startsWith(STORAGE_PREFIX)) {
+          await safePrefRemove(k);
+        }
+      }
+    } catch (_) {
+      for (const k of memPreferences.keys()) {
+        if (k.startsWith(STORAGE_PREFIX)) {
+          memPreferences.delete(k);
+        }
       }
     }
   }

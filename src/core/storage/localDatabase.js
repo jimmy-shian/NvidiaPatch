@@ -5,7 +5,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'NvidiaPatchMobileDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -16,7 +16,8 @@ const memStores = {
   user_skills: new Map(),
   personal_context: new Map(),
   provider_configs: new Map(),
-  conversation_summaries: new Map()
+  conversation_summaries: new Map(),
+  mcp_servers: new Map()
 };
 
 const isIndexedDBAvailable = typeof indexedDB !== 'undefined';
@@ -48,6 +49,9 @@ export function getDatabase() {
         }
         if (!db.objectStoreNames.contains('conversation_summaries')) {
           db.createObjectStore('conversation_summaries', { keyPath: 'conversationId' });
+        }
+        if (!db.objectStoreNames.contains('mcp_servers')) {
+          db.createObjectStore('mcp_servers', { keyPath: 'id' });
         }
       }
     });
@@ -372,5 +376,53 @@ export const LocalDB = {
       return;
     }
     await db.put('provider_configs', config);
+  },
+
+  // --- MCP Servers ---
+  async getMcpServers() {
+    const db = await getDatabase();
+    if (!db) {
+      const list = Array.from(memStores.mcp_servers.values());
+      return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    }
+    const list = await db.getAll('mcp_servers');
+    return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  },
+
+  async getMcpServer(id) {
+    const db = await getDatabase();
+    if (!db) return memStores.mcp_servers.get(id) || null;
+    return db.get('mcp_servers', id);
+  },
+
+  async saveMcpServer(server) {
+    const toSave = {
+      ...server,
+      updatedAt: Date.now(),
+      createdAt: server.createdAt || Date.now()
+    };
+    const db = await getDatabase();
+    if (!db) {
+      memStores.mcp_servers.set(toSave.id, toSave);
+      return toSave;
+    }
+    await db.put('mcp_servers', toSave);
+    return toSave;
+  },
+
+  async deleteMcpServer(id) {
+    const db = await getDatabase();
+    if (!db) {
+      memStores.mcp_servers.delete(id);
+      return;
+    }
+    await db.delete('mcp_servers', id);
+  },
+
+  async toggleMcpServer(id, enabled) {
+    const server = await this.getMcpServer(id);
+    if (!server) return null;
+    server.enabled = Boolean(enabled);
+    return this.saveMcpServer(server);
   }
 };
