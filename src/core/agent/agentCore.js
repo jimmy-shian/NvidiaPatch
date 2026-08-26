@@ -1,5 +1,5 @@
 /**
- * AgentCore - Mobile AI Agent Controller v0.1.9
+ * AgentCore - Mobile AI Agent Controller
  * 
  * Features:
  * 1. Run Lifecycle & RunId isolation: Guarantees stale runs and aborted streams do not leak callbacks.
@@ -11,6 +11,7 @@
 import { buildCompleteMessages } from './promptBuilder';
 import { StreamReasoningParser } from './reasoningParser';
 import { SYSTEM_TOOLS, executeTool } from '../tools';
+import { MCPManager } from '../mcp/MCPManager';
 
 export const AGENT_SAFETY_LIMITS = {
   MAX_TOOL_ROUNDS: 8,
@@ -94,6 +95,11 @@ export class AgentCore {
 
       onStatusChange?.({ phase: 'thinking', runId });
 
+      MCPManager.resetTurn();
+      const lastUserMsg = (messages || []).filter(m => m.role === 'user').pop()?.content || '';
+      let dynamicMcpTools = await MCPManager.getDynamicToolsForPrompt(lastUserMsg, 16);
+      let activeTools = [...SYSTEM_TOOLS, ...dynamicMcpTools];
+
       let round = 0;
       let totalToolCalls = 0;
       let finalContent = '';
@@ -130,7 +136,7 @@ export class AgentCore {
 
         // Pass tools in earlier rounds; allow final synthesis without re-triggering tools once budget is reached
         const hasBudget = totalToolCalls < AGENT_SAFETY_LIMITS.MAX_TOOL_CALLS_PER_RUN;
-        const toolsToPass = hasBudget ? (round <= 3 ? SYSTEM_TOOLS : (round <= 5 ? SYSTEM_TOOLS : undefined)) : undefined;
+        const toolsToPass = hasBudget ? (round <= 5 ? activeTools : undefined) : undefined;
 
         const stream = this.provider.chatStream({
           model,
@@ -317,6 +323,14 @@ export class AgentCore {
 
           currentMessages.push(toolResultMsg);
           allExecutedToolMessages.push(toolResultMsg);
+
+          // If new MCP tools were registered, refresh active tools for subsequent rounds
+          if (toolName === 'request_mcp_connection' || toolName === 'search_mcp_tools') {
+            try {
+              const refreshedMcpTools = await MCPManager.getDynamicToolsForPrompt(lastUserMsg, 16);
+              activeTools = [...SYSTEM_TOOLS, ...refreshedMcpTools];
+            } catch (_) {}
+          }
 
           onToolResult?.({
             toolCallId: tc.id,

@@ -7,6 +7,9 @@ import ChatView from './components/Chat/ChatView';
 import HistoryDrawer from './components/Drawer/HistoryDrawer';
 import ModelSelectorModal from './components/Chat/ModelSelectorModal';
 import SettingsModal from './components/Settings/SettingsModal';
+import MCPApprovalModal from './components/Chat/MCPApprovalModal';
+import MRTRInputModal from './components/Chat/MRTRInputModal';
+import { LocalDB } from './core/storage/localDatabase';
 import { PROVIDER_TYPES } from './core/providers';
 
 export default function App() {
@@ -38,9 +41,17 @@ export default function App() {
   });
 
   const toggleSkill = (skillId) => {
-    setSelectedSkillIds(prev =>
-      prev.includes(skillId) ? prev.filter(id => id !== skillId) : [...prev, skillId]
-    );
+    setSelectedSkillIds(prev => {
+      const next = prev.includes(skillId) ? prev.filter(id => id !== skillId) : [...prev, skillId];
+      if (chat.currentConversationId) {
+        LocalDB.getConversation(chat.currentConversationId).then(conv => {
+          if (conv) {
+            LocalDB.saveConversation({ ...conv, skillIds: next });
+          }
+        });
+      }
+      return next;
+    });
   };
 
   const currentProviderObj = PROVIDER_TYPES.find(p => p.id === settings.currentProviderId);
@@ -133,7 +144,19 @@ export default function App() {
         onImportSkill={settings.importSkill}
         onSaveSkill={settings.saveSkill}
         onDeleteSkill={settings.deleteSkill}
+        mcpServers={settings.mcpServers}
+        onAddMcpServer={settings.addMcpServer}
+        onToggleMcpServer={settings.toggleMcpServer}
+        onDeleteMcpServer={settings.deleteMcpServer}
+        onSyncMcpServer={settings.syncMcpServer}
+        onTestMcpConnection={settings.testMcpConnection}
       />
+
+      {/* Interactive MCP Security Approval Modal */}
+      <MCPApprovalModal />
+
+      {/* Interactive MRTR Parameter Elicitation Modal */}
+      <MRTRInputModal />
     </div>
   );
 }
