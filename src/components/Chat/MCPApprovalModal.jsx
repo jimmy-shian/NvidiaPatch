@@ -48,14 +48,26 @@ export default function MCPApprovalModal() {
           {type === 'connection' ? (
             <>
               <div>
-                <span className="text-[11px] text-slate-500">端點 URL:</span>
-                <p className="font-mono text-emerald-400 text-xs break-all">{payload.url}</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500">端點 URL:</span>
+                  {payload.isPrivateNetwork && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-950/80 text-amber-300 border border-amber-800/80">
+                      區域網路 / 自訂端點 (LAN)
+                    </span>
+                  )}
+                </div>
+                <p className="font-mono text-emerald-400 text-xs break-all pt-0.5">{payload.url}</p>
               </div>
               {payload.reason && (
                 <div>
                   <span className="text-[11px] text-slate-500">連線目的:</span>
                   <p className="text-slate-300 text-xs">{payload.reason}</p>
                 </div>
+              )}
+              {payload.isPrivateNetwork && (
+                <p className="text-[11px] text-slate-400 leading-relaxed pt-1 border-t border-slate-800">
+                  此端點為同網域或本機私有端點（如 192.168.x.x 或 HTTP 服務），授權後將以系統全域權限信任並允許連線。
+                </p>
               )}
             </>
           ) : (
@@ -86,18 +98,18 @@ export default function MCPApprovalModal() {
         {/* Action Buttons */}
         <div className="space-y-2 pt-1">
           <button
-            onClick={() => handleDecision(true, 'chat_session')}
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5"
+            onClick={() => handleDecision(true, 'always_trusted')}
+            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40"
           >
             <Check size={14} />
-            <span>允許 (本次對話信任)</span>
+            <span>允許 (系統全域永久信任)</span>
           </button>
 
           <button
-            onClick={() => handleDecision(true, 'once')}
+            onClick={() => handleDecision(true, 'chat_session')}
             className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-xs transition-colors"
           >
-            僅允許本次執行
+            僅此對話中允許
           </button>
 
           <button
@@ -105,7 +117,7 @@ export default function MCPApprovalModal() {
             className="w-full py-2 bg-transparent hover:bg-rose-950/30 text-rose-400 font-medium rounded-xl text-xs transition-colors flex items-center justify-center gap-1"
           >
             <X size={14} />
-            <span>拒絕執行</span>
+            <span>拒絕</span>
           </button>
         </div>
       </div>

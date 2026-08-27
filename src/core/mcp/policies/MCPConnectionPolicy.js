@@ -45,13 +45,15 @@ export class MCPConnectionPolicy {
     url,
     reason = '',
     knownServer = null,
-    isManualUserAction = false
+    isManualUserAction = false,
+    allowPrivateNetwork = false
   }) {
     // 1. Validate URL & SSRF
-    const allowLocal = knownServer?.allowPrivateNetwork ?? false;
+    const allowLocal = (knownServer?.allowPrivateNetwork ?? false) || allowPrivateNetwork || (knownServer?.trustLevel === MCPTrustLevel.ALWAYS_TRUSTED);
     const urlValidation = validateMcpUrl(url, { allowLocalNetwork: allowLocal });
 
-    if (!urlValidation.valid) {
+    // If validation failed on non-private issues (e.g. invalid format or credentials), reject immediately
+    if (!urlValidation.valid && !urlValidation.isPrivateNetwork) {
       return {
         allowed: false,
         error: `MCP 連線安全策略拒絕: ${urlValidation.error}`
@@ -59,10 +61,11 @@ export class MCPConnectionPolicy {
     }
 
     const canonicalUrl = canonicalizeEndpoint(url);
+    const isPrivateNetwork = Boolean(urlValidation.isPrivateNetwork);
 
     // 2. Manual UI action from settings tab is inherently approved by user
     if (isManualUserAction) {
-      return { allowed: true, canonicalUrl };
+      return { allowed: true, canonicalUrl, isPrivateNetwork, trustScope: MCPTrustLevel.ALWAYS_TRUSTED };
     }
 
     // 3. Check connection budget per turn (prevent runaway MCP chaining)
@@ -73,34 +76,37 @@ export class MCPConnectionPolicy {
       };
     }
 
-    // 4. Check trust level
+    // 4. Check trust level (if already system-wide trusted)
     if (knownServer && knownServer.trustLevel === MCPTrustLevel.ALWAYS_TRUSTED) {
       this.sessionConnectionsCount++;
-      return { allowed: true, canonicalUrl };
+      return { allowed: true, canonicalUrl, isPrivateNetwork, trustScope: MCPTrustLevel.ALWAYS_TRUSTED };
     }
 
     if (this.sessionTrustedEndpoints.has(canonicalUrl)) {
       this.sessionConnectionsCount++;
-      return { allowed: true, canonicalUrl };
+      return { allowed: true, canonicalUrl, isPrivateNetwork, trustScope: MCPTrustLevel.CHAT_SESSION };
     }
 
-    // 5. Untrusted / First-time connection requires User Approval via ApprovalController
+    // 5. Untrusted / First-time / LAN connection requires User Approval via ApprovalController
     if (this.approvalController) {
       const approved = await this.approvalController.requestConnectionApproval({
         url: canonicalUrl,
         reason,
-        serverName: knownServer?.displayName || '未命名 MCP 伺服器'
+        serverName: knownServer?.displayName || 'MCP 伺服器',
+        isPrivateNetwork
       });
 
       if (approved.allowed) {
-        if (approved.trustScope === MCPTrustLevel.CHAT_SESSION) {
+        const grantedScope = approved.trustScope || MCPTrustLevel.ALWAYS_TRUSTED;
+        if (grantedScope === MCPTrustLevel.CHAT_SESSION) {
           this.sessionTrustedEndpoints.add(canonicalUrl);
         }
         this.sessionConnectionsCount++;
         return {
           allowed: true,
           canonicalUrl,
-          trustScope: approved.trustScope
+          isPrivateNetwork,
+          trustScope: grantedScope
         };
       } else {
         return {

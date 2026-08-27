@@ -76,7 +76,7 @@ export function isPrivateOrReservedIp(ipStr) {
  * @param {string} urlString
  * @param {Object} options
  * @param {boolean} [options.allowLocalNetwork=false]
- * @returns {{ valid: boolean, error?: string, parsedUrl?: URL }}
+ * @returns {{ valid: boolean, error?: string, parsedUrl?: URL, isPrivateNetwork?: boolean }}
  */
 export function validateMcpUrl(urlString, options = {}) {
   const { allowLocalNetwork = false } = options;
@@ -92,13 +92,9 @@ export function validateMcpUrl(urlString, options = {}) {
     return { valid: false, error: '無法解析的 URL 格式' };
   }
 
-  // 1. Scheme Check: Only HTTPS is allowed in production (HTTP allowed only if explicitly enabling local network)
-  if (parsed.protocol === 'http:') {
-    if (!allowLocalNetwork) {
-      return { valid: false, error: '基於安全性考量，生產環境僅允許 HTTPS 端點。若需測試本機端點，請明確啟用本機網路權限。' };
-    }
-  } else if (parsed.protocol !== 'https:') {
-    return { valid: false, error: `不支援的協議 Scheme: "${parsed.protocol}"，僅支援 HTTPS` };
+  // 1. Scheme Check
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { valid: false, error: `不支援的協議 Scheme: "${parsed.protocol}"，僅支援 HTTP 或 HTTPS` };
   }
 
   // 2. Reject credentials in URL (e.g. https://user:pass@host)
@@ -107,21 +103,33 @@ export function validateMcpUrl(urlString, options = {}) {
   }
 
   const hostname = parsed.hostname.toLowerCase();
+  const isLocalhost = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '[::1]';
+  const isPrivateIp = isPrivateOrReservedIp(hostname);
+  const isPrivateNetwork = parsed.protocol === 'http:' || isLocalhost || isPrivateIp;
 
-  // 3. Localhost & Loopback detection
-  if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '[::1]') {
-    if (!allowLocalNetwork) {
-      return { valid: false, error: '預設禁止連線本機端點 (localhost / 127.0.0.1)。' };
-    }
+  // 3. Scheme check for production vs private network
+  if (parsed.protocol === 'http:' && !allowLocalNetwork) {
+    return {
+      valid: false,
+      isPrivateNetwork: true,
+      error: '基於安全性考量，生產環境僅允許 HTTPS 端點。若需連線同網域/本機端點，請透過授權確認放行。',
+      parsedUrl: parsed
+    };
   }
 
-  // 4. IP address safety check
-  if (!allowLocalNetwork && isPrivateOrReservedIp(hostname)) {
-    return { valid: false, error: `禁止連線至私有或保留 IP 位址 (${hostname})` };
+  // 4. Localhost / Private IP safety check
+  if (isPrivateNetwork && !allowLocalNetwork) {
+    return {
+      valid: false,
+      isPrivateNetwork: true,
+      error: `端點屬於區域網路/私有網段 (${hostname})，需經使用者授權確認。`,
+      parsedUrl: parsed
+    };
   }
 
   return {
     valid: true,
+    isPrivateNetwork,
     parsedUrl: parsed
   };
 }

@@ -105,7 +105,8 @@ export class MCPManagerClass {
     const policyResult = await this.connectionPolicy.evaluateConnectionRequest({
       url,
       reason,
-      isManualUserAction
+      isManualUserAction,
+      allowPrivateNetwork
     });
 
     if (!policyResult.allowed) {
@@ -171,8 +172,8 @@ export class MCPManagerClass {
       authType,
       secretRef,
       enabled: true,
-      trustLevel: isManualUserAction ? MCPTrustLevel.ALWAYS_TRUSTED : (policyResult.trustScope || MCPTrustLevel.CHAT_SESSION),
-      allowPrivateNetwork,
+      trustLevel: isManualUserAction ? MCPTrustLevel.ALWAYS_TRUSTED : (policyResult.trustScope || MCPTrustLevel.ALWAYS_TRUSTED),
+      allowPrivateNetwork: allowPrivateNetwork || Boolean(policyResult.isPrivateNetwork),
       serverInfo: discoveryResult.serverInfo,
       capabilities: discoveryResult.capabilities,
       tools: processedTools,
