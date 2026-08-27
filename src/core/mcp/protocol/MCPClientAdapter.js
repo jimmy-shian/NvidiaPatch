@@ -5,6 +5,7 @@
 import { StreamableHttpTransport } from '../transports/StreamableHttpTransport';
 import { LegacySseTransport } from '../transports/LegacySseTransport';
 import { MCPResponseNormalizer } from './MCPResponseNormalizer';
+import { APP_VERSION } from '../../../version';
 
 export class MCPClientAdapter {
   constructor({ endpoint, secretRef = null, authType = 'bearer', protocolVersion = null } = {}) {
@@ -19,6 +20,23 @@ export class MCPClientAdapter {
   }
 
   /**
+   * Build standard MCP protocol metadata object for JSON-RPC params
+   */
+  _buildMeta() {
+    return {
+      'io.modelcontextprotocol/protocolVersion': this.protocolVersion || '2026-07-28',
+      'io.modelcontextprotocol/clientInfo': {
+        name: 'NvidiaPatchMobile',
+        version: APP_VERSION || '0.2.1'
+      },
+      'io.modelcontextprotocol/clientCapabilities': {
+        tools: { listChanged: true },
+        elicitation: {}
+      }
+    };
+  }
+
+  /**
    * Automatic Version Negotiation & Discovery
    * @param {Object} [options]
    * @returns {Promise<{ protocolVersion: string, serverInfo: Object, capabilities: Object }>}
@@ -30,7 +48,9 @@ export class MCPClientAdapter {
         jsonrpc: '2.0',
         id: `disc_${Date.now()}`,
         method: 'server/discover',
-        params: {}
+        params: {
+          _meta: this._buildMeta()
+        }
       };
       const res = await this.streamableTransport.send(discoverReq, options);
       if (res?.result) {
@@ -52,7 +72,9 @@ export class MCPClientAdapter {
         jsonrpc: '2.0',
         id: `list_${Date.now()}`,
         method: 'tools/list',
-        params: {}
+        params: {
+          _meta: this._buildMeta()
+        }
       };
       const res = await this.streamableTransport.send(listReq, options);
       if (res?.result && Array.isArray(res.result.tools)) {
@@ -91,7 +113,9 @@ export class MCPClientAdapter {
       jsonrpc: '2.0',
       id: `tools_${Date.now()}`,
       method: 'tools/list',
-      params: {}
+      params: {
+        _meta: this._buildMeta()
+      }
     };
 
     let response;
@@ -135,7 +159,8 @@ export class MCPClientAdapter {
 
     const callParams = {
       name: toolName,
-      arguments: args
+      arguments: args,
+      _meta: this._buildMeta()
     };
 
     // If this is an MRTR follow-up, echo the opaque requestState

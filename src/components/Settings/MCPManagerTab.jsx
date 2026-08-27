@@ -28,6 +28,7 @@ export default function MCPManagerTab({
 }) {
   const { t } = useTranslation();
   const [isAdding, setIsAdding] = useState(false);
+  const [expandedServerId, setExpandedServerId] = useState(null);
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
   const [authType, setAuthType] = useState('none');
@@ -209,11 +210,11 @@ export default function MCPManagerTab({
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://botsz-tower-check-mcp.hf.space/mcp"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2.5">
             <div className="space-y-1">
               <label className="text-[11px] font-semibold text-slate-400">自訂顯示名稱 (選填)</label>
               <input
@@ -254,9 +255,9 @@ export default function MCPManagerTab({
                             : 'text-slate-300 hover:bg-slate-800 hover:text-white'
                         }`}
                       >
-                        <div className="flex flex-col">
-                          <span>{opt.label}</span>
-                          <span className="text-[10px] text-slate-500">{opt.desc}</span>
+                        <div className="flex flex-col min-w-0 pr-2">
+                          <span className="truncate">{opt.label}</span>
+                          <span className="text-[10px] text-slate-500 truncate">{opt.desc}</span>
                         </div>
                         {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}
                       </button>
@@ -283,24 +284,24 @@ export default function MCPManagerTab({
             </div>
           )}
 
-          <div className="flex items-center gap-2 pt-1">
+          <div className="flex items-start gap-2 pt-1">
             <input
               type="checkbox"
               id="allowPrivateNetwork"
               checked={allowPrivateNetwork}
               onChange={(e) => setAllowPrivateNetwork(e.target.checked)}
-              className="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0"
+              className="mt-0.5 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0 shrink-0"
             />
-            <label htmlFor="allowPrivateNetwork" className="text-[11px] text-slate-400">
+            <label htmlFor="allowPrivateNetwork" className="text-[11px] text-slate-400 leading-tight">
               允許連線本機/區域網路測試端點 (開發者選項)
             </label>
           </div>
 
-          <div className="pt-2 flex justify-end gap-2">
+          <div className="pt-2 flex justify-end">
             <button
               type="submit"
               disabled={isLoading || !url.trim()}
-              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-xl text-xs transition-colors"
+              className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-xl text-xs transition-colors shadow-md shadow-emerald-950/40"
             >
               {isLoading ? (
                 <>
@@ -349,38 +350,38 @@ export default function MCPManagerTab({
               }`}
             >
               {/* Server Header Row */}
-              <div className="p-4 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="p-3.5 flex items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div className={`p-2 rounded-xl shrink-0 ${server.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>
                     <Layers size={16} />
                   </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-white text-xs truncate">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-bold text-white text-xs truncate max-w-[130px] sm:max-w-[200px]">
                         {server.displayName || 'MCP 伺服器'}
                       </span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-emerald-400 border border-slate-700">
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-slate-800 text-emerald-400 border border-slate-700 shrink-0">
                         {server.protocolVersion || '2026-07-28'}
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-400 font-mono truncate max-w-[220px]">
+                    <p className="text-[10px] text-slate-400 font-mono truncate max-w-[140px] sm:max-w-[220px]">
                       {server.canonicalEndpoint || server.endpoint}
                     </p>
                   </div>
                 </div>
 
                 {/* Right Action Controls */}
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
                   {/* Enable Switch */}
                   <button
                     onClick={() => onToggleServer(server.id, !server.enabled)}
-                    className={`w-9 h-5 rounded-full transition-colors relative ${
+                    className={`w-8 h-4.5 rounded-full transition-colors relative mr-1 shrink-0 ${
                       server.enabled ? 'bg-emerald-500' : 'bg-slate-700'
                     }`}
                   >
                     <div
-                      className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${
-                        server.enabled ? 'left-[18px]' : 'left-0.5'
+                      className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-transform ${
+                        server.enabled ? 'left-[16px]' : 'left-0.5'
                       }`}
                     />
                   </button>
@@ -390,33 +391,33 @@ export default function MCPManagerTab({
                     onClick={() => handleSync(server.id)}
                     disabled={isSyncing}
                     title="重新同步工具清單"
-                    className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                    className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
                   >
-                    <RefreshCw size={14} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
+                    <RefreshCw size={13} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
                   </button>
 
                   {/* Delete Button */}
                   <button
                     onClick={() => onDeleteServer(server.id)}
                     title="刪除伺服器"
-                    className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition-colors"
+                    className="p-1 text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition-colors"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={13} />
                   </button>
 
                   {/* Expand Tools Accordion */}
                   <button
                     onClick={() => toggleExpand(server.id)}
-                    className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                    className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
                   >
-                    {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   </button>
                 </div>
               </div>
 
               {/* Tools Accordion Dropdown */}
               {isExpanded && (
-                <div className="px-4 pb-4 pt-1 border-t border-slate-800/80 bg-slate-950/50 space-y-2">
+                <div className="px-3.5 pb-3.5 pt-1 border-t border-slate-800/80 bg-slate-950/50 space-y-2">
                   <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
                     <span>掛載工具清單 ({tools.length} 個)</span>
                     <span className="text-[10px] text-slate-500 font-mono">
@@ -427,22 +428,22 @@ export default function MCPManagerTab({
                   {tools.length === 0 ? (
                     <p className="text-slate-500 text-[11px] italic py-1">無可用工具</p>
                   ) : (
-                    <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                       {tools.map((t) => (
                         <div
                           key={t.providerToolName || t.name}
-                          className="p-2 bg-slate-900/80 border border-slate-800/60 rounded-xl space-y-1"
+                          className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-xl space-y-1 overflow-hidden"
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono text-emerald-400 font-semibold text-[11px]">
+                          <div className="flex items-center justify-between gap-2 min-w-0">
+                            <span className="font-mono text-emerald-400 font-bold text-xs truncate">
                               {t.name}
                             </span>
-                            <span className="text-[10px] text-slate-500 font-mono">
+                            <span className="text-[9px] text-slate-500 font-mono truncate max-w-[120px] shrink-0 text-right bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">
                               {t.providerToolName}
                             </span>
                           </div>
                           {t.description && (
-                            <p className="text-slate-400 text-[11px] line-clamp-2">
+                            <p className="text-slate-300 text-[11px] leading-relaxed line-clamp-2">
                               {t.description}
                             </p>
                           )}
