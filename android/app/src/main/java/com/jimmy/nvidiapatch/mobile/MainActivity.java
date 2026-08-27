@@ -33,6 +33,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        setTheme(R.style.AppTheme_NoActionBar);
         super.onCreate(savedInstanceState);
 
         // Ensure edge-to-edge window compatibility (Android 15+ targetSdk 35)
@@ -40,6 +41,10 @@ public class MainActivity extends BridgeActivity {
 
         // Set Root Window & DecorView background to pure black #0B0F17
         getWindow().getDecorView().setBackgroundColor(Color.parseColor("#0B0F17"));
+
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
+        }
 
         View contentView = findViewById(android.R.id.content);
         if (contentView != null) {

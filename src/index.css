@@ -18,7 +18,23 @@
     padding: 0;
     overflow: hidden;
     user-select: none;
+    -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  ::selection {
+    background-color: rgba(16, 185, 129, 0.35);
+    color: #ffffff;
+  }
+
+  input, textarea, [contenteditable="true"] {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+
+  .selectable-text, .markdown-body, pre, code {
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   /* Safe Area Support */

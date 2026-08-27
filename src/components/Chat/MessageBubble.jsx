@@ -343,11 +343,11 @@ export default function MessageBubble({
 
         {/* Message body / Edit Box */}
         {isEditing ? (
-          <div className="flex flex-col gap-2 mt-1 min-w-[240px]">
+          <div className="flex flex-col gap-2 mt-1 min-w-[240px] max-w-full">
             <textarea
               value={draftText}
               onChange={e => setDraftText(e.target.value)}
-              className="w-full bg-black/50 border border-slate-700 rounded-xl p-2.5 text-xs text-white resize-none outline-none focus:border-emerald-400 font-sans leading-relaxed"
+              className="w-full bg-slate-950/90 border border-slate-700 rounded-xl p-2.5 text-xs text-white resize-none outline-none focus:border-emerald-400 font-sans leading-relaxed select-text shadow-inner"
               rows={3}
               autoFocus
             />
@@ -355,7 +355,7 @@ export default function MessageBubble({
               <button
                 type="button"
                 onClick={handleCancelEdit}
-                className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors text-xs font-medium"
               >
                 取消
               </button>
@@ -363,14 +363,14 @@ export default function MessageBubble({
                 type="button"
                 onClick={handleSaveEdit}
                 disabled={!draftText.trim()}
-                className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-semibold text-white transition-colors disabled:opacity-40"
+                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-semibold text-white transition-colors disabled:opacity-40 text-xs shadow-sm shadow-emerald-950/30"
               >
                 儲存並送出
               </button>
             </div>
           </div>
         ) : isUser ? (
-          <div className="whitespace-pre-wrap break-words break-all leading-relaxed max-w-full overflow-hidden">{message.content}</div>
+          <div className="whitespace-pre-wrap break-words break-all leading-relaxed max-w-full overflow-hidden select-text selectable-text">{message.content}</div>
         ) : isFailed ? (
           <div className="space-y-2 max-w-full overflow-hidden">
             <div className="flex items-center gap-1.5 text-rose-400 font-semibold text-xs">
@@ -394,9 +394,9 @@ export default function MessageBubble({
             {message.content ? (
               <MarkdownRenderer content={message.content} />
             ) : isStreaming && isLast ? (
-              <div className="flex items-center gap-2 text-slate-400 py-1 text-xs">
-                <Loader2 size={13} className="animate-spin text-emerald-400" />
-                <span>正在生成回覆…</span>
+              <div className="flex items-center gap-2 text-slate-300 py-1 text-xs animate-pulse">
+                <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
+                <span>{isReasoningActive ? '正在思考與等待回覆…' : '正在等待回覆…'}</span>
               </div>
             ) : message.toolExecutions && message.toolExecutions.length > 0 ? (
               <div className="text-xs text-slate-400 italic py-1">
