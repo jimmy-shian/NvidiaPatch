@@ -260,12 +260,15 @@ export default function ChatView({
             </div>
           ) : (
             messages
-              .filter(msg => {
+              .filter((msg, idx, arr) => {
                 if (msg.role === 'system') return false;
                 // Filter out raw protocol tool messages from visual timeline
                 if (msg.role === 'tool') return false;
-                // Filter out empty intermediate assistant tool-call headers
+                // Filter out empty intermediate assistant tool-call headers EXCEPT when actively streaming current turn
                 if (msg.role === 'assistant' && !msg.content?.trim() && !msg.thinkingContent?.trim() && (!msg.toolExecutions || msg.toolExecutions.length === 0)) {
+                  if (isStreaming && idx === arr.length - 1) {
+                    return true;
+                  }
                   return false;
                 }
                 return true;

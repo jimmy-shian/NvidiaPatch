@@ -86,12 +86,15 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
     }
     const lower = modelId.toLowerCase();
     if (
-      lower.includes('meta/llama-3.1') ||
-      lower.includes('meta/llama-3.3') ||
+      lower.includes('llama-3.1') ||
+      lower.includes('llama-3.3') ||
+      lower.includes('nemotron') ||
       lower.includes('mistralai/mixtral') ||
       lower.includes('mistralai/mistral-large') ||
       lower.includes('qwen/qwen2.5') ||
-      lower.includes('openai/gpt-oss')
+      lower.includes('qwen2.5') ||
+      lower.includes('openai/gpt-oss') ||
+      lower.includes('deepseek')
     ) {
       return 'supported';
     }

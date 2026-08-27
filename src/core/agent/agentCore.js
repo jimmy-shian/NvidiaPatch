@@ -12,6 +12,7 @@ import { buildCompleteMessages } from './promptBuilder';
 import { StreamReasoningParser } from './reasoningParser';
 import { SYSTEM_TOOLS, executeTool } from '../tools';
 import { MCPManager } from '../mcp/MCPManager';
+import { parseInBandToolCalls } from './inBandToolParser';
 
 export const AGENT_SAFETY_LIMITS = {
   MAX_TOOL_ROUNDS: 8,
@@ -191,8 +192,16 @@ export class AgentCore {
 
         reasoningParser.flush();
 
-        // Check if model called any tools in this round
-        const validToolCalls = accumulatedToolCalls.filter(tc => Boolean(tc && tc.function?.name));
+        // Check if model called any tools in this round (native SSE tool_calls or In-Band <tool_call> tags)
+        let validToolCalls = accumulatedToolCalls.filter(tc => Boolean(tc && tc.function?.name));
+
+        if (validToolCalls.length === 0 && hasBudget) {
+          const inBandResult = parseInBandToolCalls(roundContent || finalContent);
+          if (inBandResult.toolCalls.length > 0) {
+            validToolCalls = inBandResult.toolCalls;
+            finalContent = inBandResult.cleanedText;
+          }
+        }
 
         if (validToolCalls.length === 0 || !hasBudget) {
           // Clean up if finalContent is merely raw tool call JSON arguments (e.g. { "query": ... })
@@ -206,10 +215,17 @@ export class AgentCore {
               const toolResults = allExecutedToolMessages.filter(m => m.role === 'tool');
               if (toolResults.length > 0) {
                 try {
-                  const parsed = JSON.parse(toolResults[toolResults.length - 1].content);
+                  const lastTool = toolResults[toolResults.length - 1];
+                  const parsed = typeof lastTool.content === 'string' ? JSON.parse(lastTool.content) : lastTool.content;
                   if (parsed.results && parsed.results.length > 0) {
                     const top = parsed.results[0];
                     finalContent = top.content || top.snippet || top.title || '';
+                  } else if (parsed.formattedText) {
+                    finalContent = parsed.formattedText;
+                  } else if (parsed.error) {
+                    finalContent = `[工具執行回報]: ${parsed.error}`;
+                  }
+                  if (finalContent) {
                     onContent?.(finalContent, { runId });
                   }
                 } catch (_) {}
@@ -348,10 +364,17 @@ export class AgentCore {
         const toolResults = allExecutedToolMessages.filter(m => m.role === 'tool');
         if (toolResults.length > 0) {
           try {
-            const parsed = JSON.parse(toolResults[toolResults.length - 1].content);
+            const lastTool = toolResults[toolResults.length - 1];
+            const parsed = typeof lastTool.content === 'string' ? JSON.parse(lastTool.content) : lastTool.content;
             if (parsed.results && parsed.results.length > 0) {
               const top = parsed.results[0];
               finalContent = top.content || top.snippet || top.title || '';
+            } else if (parsed.formattedText) {
+              finalContent = parsed.formattedText;
+            } else if (parsed.error) {
+              finalContent = `[工具執行回報]: ${parsed.error}`;
+            }
+            if (finalContent) {
               onContent?.(finalContent, { runId });
             }
           } catch (_) {}
