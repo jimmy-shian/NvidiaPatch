@@ -68,11 +68,22 @@ function injectDefaultSkills(messages) {
 
   if (firstSystemIndex >= 0) {
     const original = result[firstSystemIndex];
-    const originalContent = typeof original.content === 'string'
-      ? original.content
-      : (original.content == null ? '' : JSON.stringify(original.content));
-    const newContent = aggregated + '\n\n---\n\n' + originalContent;
-    result[firstSystemIndex] = { ...original, content: newContent };
+    if (typeof original.content === 'string') {
+      const newContent = aggregated + '\n\n---\n\n' + original.content;
+      result[firstSystemIndex] = { ...original, content: newContent };
+    } else if (Array.isArray(original.content)) {
+      result[firstSystemIndex] = {
+        ...original,
+        content: [
+          { type: 'text', text: aggregated + '\n\n---\n\n' },
+          ...original.content
+        ]
+      };
+    } else {
+      const originalContent = original.content == null ? '' : JSON.stringify(original.content);
+      const newContent = aggregated + '\n\n---\n\n' + originalContent;
+      result[firstSystemIndex] = { ...original, content: newContent };
+    }
     return result;
   }
 

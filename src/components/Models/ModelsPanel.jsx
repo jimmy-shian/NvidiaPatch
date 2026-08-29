@@ -10,7 +10,7 @@ const getSyncSourceLabel = (source) => {
   if (!source) return '';
   if (source.includes('build.nvidia.com')) return 'NVIDIA Build Free Endpoint';
   if (source.includes('featured-models')) return 'Featured Catalog';
-  if (source.includes('/v1/models')) return '/v1/models';
+  if (source.includes('integrate.api.nvidia.com')) return 'NVIDIA Integrate API (/v1/models)';
   return source;
 };
 
@@ -265,7 +265,7 @@ export default function ModelsPanel({
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {['ALL', 'Llama', 'GPT', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Nvidia', 'Other'].map(cat => (
+                {['ALL', 'Llama', 'DeepSeek', 'Qwen', 'Mistral', 'Gemma', 'GPT', 'Nemotron', 'Phi', 'MiniMax', 'Step', 'Nvidia', 'Other'].map(cat => (
                   <button
                     key={cat}
                     className={`btn ${selectedCategory === cat ? 'btn-primary' : 'btn-secondary'}`}

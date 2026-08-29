@@ -27,5 +27,7 @@ export const getModelCategory = (modelId) => {
   if (id.includes('minimax') || id.includes('minimaxai')) return 'MiniMax';
   if (id.includes('step')) return 'Step';
   if (id.includes('nvidia')) return 'Nvidia';
+  if (id.includes('deepseek')) return 'DeepSeek';
+  if (id.includes('qwen')) return 'Qwen';
   return 'Other';
 };

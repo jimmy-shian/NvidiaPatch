@@ -4,6 +4,8 @@ const { getTaiwanISOString } = require('../../utils/date');
 const eventManager = require('../sse/eventManager');
 const packageInfo = require('../../package.json');
 
+const { resolveModelsCheckUrl, isCustomUpstreamUrl } = require('../utils/urlHelper');
+
 class HealthService {
   constructor() {
     this.lastUpstreamCheck = {
@@ -24,10 +26,10 @@ class HealthService {
     }
   }
 
-  async checkNvidiaApiReachable(timeoutMs = 3000) {
+  async checkNvidiaApiReachable(timeoutMs = 5000) {
     const now = Date.now();
-    // 限制每 30 秒最多向外部探測一次，避免高頻 health check 造成上游負擔
-    if (now - this.lastUpstreamCheck.timestamp < 30000) {
+    // 60 秒記憶體快取以防短時間高頻重複打擊上游端點
+    if (now - this.lastUpstreamCheck.timestamp < 60000) {
       return {
         reachable: this.lastUpstreamCheck.reachable,
         latencyMs: this.lastUpstreamCheck.latencyMs,
@@ -36,14 +38,14 @@ class HealthService {
     }
 
     const currentSettings = settings.get();
-    const targetUrl = currentSettings.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+    const targetUrl = resolveModelsCheckUrl(currentSettings.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1');
     const startTime = Date.now();
 
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       
-      const res = await fetch(`${targetUrl}/models`, {
+      const res = await fetch(targetUrl, {
         method: 'GET',
         signal: controller.signal
       }).catch(err => ({ ok: false, status: err.name === 'AbortError' ? 408 : 500 }));
@@ -95,6 +97,8 @@ class HealthService {
   }
 
   async getHealthStatus(includeDeepChecks = false) {
+    const currentSettings = settings.get();
+    const isCustom = isCustomUpstreamUrl(currentSettings.NVIDIA_API_URL);
     const activeKeys = apiKeys.getActiveKeys();
     const allKeys = apiKeys.getAll();
     const activeModels = modelsConfig.getAll().filter(m => m.is_active === 1);
@@ -111,7 +115,7 @@ class HealthService {
     let overallStatus = 'healthy';
     if (dbHealth.status !== 'healthy') {
       overallStatus = 'unhealthy';
-    } else if (activeKeys.length === 0 || activeModels.length === 0 || !upstreamHealth.reachable || metrics.memory.heapUsedRatio > 0.9) {
+    } else if ((!isCustom && activeKeys.length === 0) || activeModels.length === 0 || !upstreamHealth.reachable || metrics.memory.heapUsedRatio > 0.9) {
       overallStatus = 'degraded';
     }
 

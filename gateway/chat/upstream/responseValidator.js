@@ -38,7 +38,7 @@ function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
   });
 }
 
-function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef) {
+function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef) {
   const cleanLine = String(rawLine || '').endsWith('\r')
     ? String(rawLine || '').slice(0, -1)
     : String(rawLine || '');
@@ -52,32 +52,70 @@ function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef) {
     const dataStr = trimmed.slice(5).trim();
     const chunk = JSON.parse(dataStr);
 
+    const delta = chunk?.choices?.[0]?.delta;
+    const msg = chunk?.choices?.[0]?.message;
+
+    // 檢查是否有 tool_calls / function_call
+    if (delta?.tool_calls || delta?.function_call || msg?.tool_calls || msg?.function_call) {
+      if (hasToolCallsRef) hasToolCallsRef.value = true;
+    }
+
+    // 記錄 finish_reason（如 "length" 表示輸出被截斷，"tool_calls" 表示工具調用）
+    const finishReason = chunk?.choices?.[0]?.finish_reason;
+    if (finishReason && finishReasonRef && !finishReasonRef.value) {
+      finishReasonRef.value = finishReason;
+    }
+    if (finishReason === 'tool_calls' || finishReason === 'function_call') {
+      if (hasToolCallsRef) hasToolCallsRef.value = true;
+    }
+
     // 過濾僅含假串流字元 \uE000 的 chunk，避免汙染校驗用的 fullContent。
-    const fakeCandidate = chunk?.choices?.[0]?.delta?.content
-      || chunk?.choices?.[0]?.delta?.reasoning_content
-      || chunk?.choices?.[0]?.message?.content
-      || chunk?.choices?.[0]?.message?.reasoning_content
+    const fakeCandidate = delta?.content
+      || delta?.reasoning_content
+      || delta?.reasoning
+      || delta?.thought
+      || delta?.thinking
+      || msg?.content
+      || msg?.reasoning_content
+      || msg?.reasoning
+      || msg?.thought
+      || msg?.thinking
       || chunk?.choices?.[0]?.text
       || chunk?.choices?.[0]?.content;
     if (typeof fakeCandidate === 'string' && isFakeStreamContent(fakeCandidate)) {
       return chunk?.usage || null;
     }
 
-    // 記錄 finish_reason（如 "length" 表示輸出被截斷），供後續判斷是否需重試。
-    const finishReason = chunk?.choices?.[0]?.finish_reason;
-    if (finishReason && finishReasonRef && !finishReasonRef.value) {
-      finishReasonRef.value = finishReason;
+    // 支援多種可能欄位（含思考過程 reasoning / thinking / thought 等）
+    if (delta?.content) {
+      fullContentRef.value += delta.content;
     }
-
-    // 支援多種可能欄位
-    if (chunk?.choices?.[0]?.delta?.content) {
-      fullContentRef.value += chunk.choices[0].delta.content;
+    if (delta?.reasoning_content) {
+      fullContentRef.value += delta.reasoning_content;
     }
-    if (chunk?.choices?.[0]?.delta?.reasoning_content) {
-      fullContentRef.value += chunk.choices[0].delta.reasoning_content;
+    if (delta?.reasoning) {
+      fullContentRef.value += delta.reasoning;
     }
-    if (chunk?.choices?.[0]?.message?.content) {
-      fullContentRef.value += chunk.choices[0].message.content;
+    if (delta?.thought) {
+      fullContentRef.value += delta.thought;
+    }
+    if (delta?.thinking) {
+      fullContentRef.value += delta.thinking;
+    }
+    if (msg?.content) {
+      fullContentRef.value += msg.content;
+    }
+    if (msg?.reasoning_content) {
+      fullContentRef.value += msg.reasoning_content;
+    }
+    if (msg?.reasoning) {
+      fullContentRef.value += msg.reasoning;
+    }
+    if (msg?.thought) {
+      fullContentRef.value += msg.thought;
+    }
+    if (msg?.thinking) {
+      fullContentRef.value += msg.thinking;
     }
     if (chunk?.choices?.[0]?.text) {
       fullContentRef.value += chunk.choices[0].text;
@@ -102,6 +140,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
   const sseLines = [];
   const fullContentRef = { value: '' };
   const finishReasonRef = { value: null };
+  const hasToolCallsRef = { value: false };
   let streamUsage = null;
 
   try {
@@ -117,12 +156,13 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       streamBuffer = lines.pop() || '';
 
       for (const line of lines) {
-        const usage = consumeSseLine(line, sseLines, fullContentRef, finishReasonRef);
+        const usage = consumeSseLine(line, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef);
         if (usage) streamUsage = usage;
       }
     }
 
     const fullContent = fullContentRef.value;
+    const hasToolCalls = hasToolCallsRef.value || finishReasonRef.value === 'tool_calls' || finishReasonRef.value === 'function_call';
 
     // 若 NVIDIA 回傳 finish_reason = "length"，表示輸出因 max_tokens 被截斷，
     // 視為模型層級失敗，立即切換下一個模型（或重試），避免把不完整內容當成功回傳。
@@ -133,8 +173,8 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
     }
 
-    // 1. 檢查空內容
-    if (fullContent === null || fullContent === undefined || fullContent === '') {
+    // 1. 檢查空內容（若有 tool_calls 或 function_call 則為正常的工具調用，不判定為空內容）
+    if (!hasToolCalls && (fullContent === null || fullContent === undefined || fullContent === '')) {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
       stats.recordRequest(false);
@@ -142,7 +182,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
     }
 
     // 2. 檢查 HTTP 200 假成功（內容為伺服器錯誤）
-    if (isUpstreamErrorContent(fullContent)) {
+    if (fullContent && isUpstreamErrorContent(fullContent)) {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」串流回傳 HTTP 200 但內容為上游錯誤訊息（${fullContent.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${fullContent.substring(0, 80)}`);
       stats.recordRequest(false);
@@ -153,7 +193,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       if (!streamUsage) {
         const promptText = JSON.stringify(originalBody.messages || '');
         const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
-        const estimatedCompletion = Math.max(1, Math.round(fullContent.length / 3.2));
+        const estimatedCompletion = Math.max(1, Math.round((fullContent || '').length / 3.2));
         streamUsage = {
           prompt_tokens: estimatedPrompt,
           completion_tokens: estimatedCompletion,
@@ -163,19 +203,21 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
     }
 
-    const validation = smartValidate(fullContent, { maxLength: 10000 });
-    if (!validation.valid) {
-      const validationIssue = formatValidationIssue(validation);
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+    if (fullContent && fullContent.trim()) {
+      const validation = smartValidate(fullContent, { maxLength: 10000 });
+      if (!validation.valid) {
+        const validationIssue = formatValidationIssue(validation);
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+        apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+        stats.recordRequest(false);
+        return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+      }
     }
 
     if (!streamUsage) {
       const promptText = JSON.stringify(originalBody.messages || '');
       const estimatedPrompt = Math.max(1, Math.round(promptText.length / 3.2));
-      const estimatedCompletion = Math.max(1, Math.round(fullContent.length / 3.2));
+      const estimatedCompletion = Math.max(1, Math.round((fullContent || '').length / 3.2));
       streamUsage = {
         prompt_tokens: estimatedPrompt,
         completion_tokens: estimatedCompletion,
@@ -226,10 +268,17 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
     }
 
-    const contentToCheck = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.message?.reasoning_content || '';
+    const targetMsg = json?.choices?.[0]?.message;
+    const hasToolCalls = Boolean(
+      targetMsg?.function_call ||
+      targetMsg?.tool_calls ||
+      finishReason === 'tool_calls' ||
+      finishReason === 'function_call'
+    );
+    const contentToCheck = targetMsg?.content || targetMsg?.reasoning_content || targetMsg?.reasoning || targetMsg?.thought || targetMsg?.thinking || '';
 
     // 1. 檢查上游 JSON 或內容是否為伺服器錯誤結構
-    if (isUpstreamErrorContent(json) || isUpstreamErrorContent(contentToCheck)) {
+    if (isUpstreamErrorContent(json) || (contentToCheck && isUpstreamErrorContent(contentToCheck))) {
       const errDetail = typeof json === 'object' && json.message ? json.message : (contentToCheck || '上游伺服器內部錯誤');
       addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${String(errDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${String(errDetail).substring(0, 80)}`);
@@ -237,8 +286,8 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${String(errDetail).substring(0, 120)}` };
     }
 
-    // 2. 檢查空內容
-    if (contentToCheck === '' && !json?.choices?.[0]?.message?.function_call && !json?.choices?.[0]?.message?.tool_calls) {
+    // 2. 檢查空內容（若有 tool_calls 或 function_call 則為正常工具調用，不判定為空內容）
+    if (!hasToolCalls && contentToCheck === '') {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
       stats.recordRequest(false);

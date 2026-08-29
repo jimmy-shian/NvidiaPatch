@@ -13,12 +13,15 @@ const { addLog } = require('../logs/logger');
 const { sanitizeChatCompletionBody } = require('../utils/sanitize');
 const { smartValidate, formatValidationIssue } = require('../engine/contentValidator');
 const ContentValidationError = require('../errors/ContentValidationError');
+const { resolveChatCompletionsUrl, isCustomUpstreamUrl } = require('../utils/urlHelper');
 
 async function handleTestChat(req, res) {
   const { model, messages, stream, response_format } = req.body;
   const currentSettings = settings.get();
   const enableContentValidation = currentSettings.ENABLE_CONTENT_VALIDATION;
-  const targetBaseUrl = currentSettings.NVIDIA_API_URL || process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+  const rawBaseUrl = currentSettings.NVIDIA_API_URL || process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+  const targetUrl = resolveChatCompletionsUrl(rawBaseUrl);
+  const isCustomUrl = isCustomUpstreamUrl(rawBaseUrl);
 
   if (!model || !messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Model and messages array are required' });
@@ -27,9 +30,13 @@ async function handleTestChat(req, res) {
   const sanitized = sanitizeChatCompletionBody({ model, messages, stream, response_format });
   const cleanMessages = sanitized.messages;
 
-  const activeKeys = apiKeys.getActiveKeys();
+  let activeKeys = apiKeys.getActiveKeys();
   if (activeKeys.length === 0) {
-    return res.status(503).json({ error: 'No active/healthy API Keys available in the Gateway pool.' });
+    if (isCustomUrl) {
+      activeKeys = [{ id: 'local', key_value: 'local-key', status: 'active' }];
+    } else {
+      return res.status(503).json({ error: 'No active/healthy API Keys available in the Gateway pool.' });
+    }
   }
 
   async function attemptTestChat(keyIndex) {
@@ -74,18 +81,18 @@ async function handleTestChat(req, res) {
     }
 
     try {
-      const response = await fetch(`${targetBaseUrl}/chat/completions`, {
+      const response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${selectedKey.key_value}`
+          'Authorization': `Bearer ${selectedKey.key_value || 'local-key'}`
         },
         body: JSON.stringify({
+          ...sanitized,
           model: model,
           messages: cleanMessages,
           stream: !!stream,
-          temperature: 1,
-          ...(sanitized.response_format ? { response_format: sanitized.response_format } : {})
+          temperature: sanitized.temperature !== undefined ? sanitized.temperature : 1
         }),
         signal: abortController.signal
       });
@@ -101,23 +108,23 @@ async function handleTestChat(req, res) {
         const errText = await response.text();
 
         if (response.status === 404) {
-          addLog('error', `[模型測試] 模型「${model}」在 NVIDIA 端點回傳 404（模型不存在或端點不支援）：${errText.substring(0, 160)}`);
+          addLog('error', `[模型測試] 模型「${model}」在端點回傳 404（模型不存在或端點不支援）：${errText.substring(0, 160)}`);
           return res.status(404).json({
             error: {
-              message: `模型「${model}」不存在或端點不支援（NIM HTTP 404）：${errText}`,
+              message: `模型「${model}」不存在或端點不支援（HTTP 404）：${errText}`,
               type: 'invalid_request_error',
               code: 'model_not_found'
             }
           });
         }
 
-        addLog('warning', `[模型測試] Key ID ${selectedKey.id} 收到 NIM HTTP ${response.status}：${errText}`);
+        addLog('warning', `[模型測試] Key ID ${selectedKey.id} 收到 HTTP ${response.status}：${errText}`);
 
         if (response.status === 401 || response.status === 403) {
-          apiKeys.updateStatus(selectedKey.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
+          if (isNumericKey) apiKeys.updateStatus(selectedKey.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
           return attemptTestChat(keyIndex + 1);
         } else if (response.status === 429) {
-          apiKeys.recordCooldown(selectedKey.id, 30, '429 Rate Limit Exceeded');
+          if (isNumericKey) apiKeys.recordCooldown(selectedKey.id, 30, '429 Rate Limit Exceeded');
           return attemptTestChat(keyIndex + 1);
         } else if (response.status >= 500) {
           return attemptTestChat(keyIndex + 1);
@@ -165,12 +172,14 @@ async function handleTestChat(req, res) {
           }
         }
 
+        let hasToolCalls = false;
+
         async function readTestStream() {
           while (true) {
             const { done, value } = await reader.read();
             if (done) {
               if (!noValidation) {
-                if (!fullContent || !fullContent.trim()) {
+                if (!hasToolCalls && (!fullContent || !fullContent.trim())) {
                   addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
                   if (!res.headersSent) {
                     throw new ContentValidationError('模型回傳空內容 (Empty Content)');
@@ -178,15 +187,17 @@ async function handleTestChat(req, res) {
                   writeStreamError('模型回傳空內容');
                   return;
                 }
-                const validation = smartValidate(fullContent, { maxLength: 10000 });
-                if (!validation.valid) {
-                  const issue = formatValidationIssue(validation);
-                  addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${issue}。`);
-                  if (!res.headersSent) {
-                    throw new ContentValidationError(fullContent);
+                if (fullContent && fullContent.trim()) {
+                  const validation = smartValidate(fullContent, { maxLength: 10000 });
+                  if (!validation.valid) {
+                    const issue = formatValidationIssue(validation);
+                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${issue}。`);
+                    if (!res.headersSent) {
+                      throw new ContentValidationError(fullContent);
+                    }
+                    writeStreamError('內容校驗失敗', issue);
+                    return;
                   }
-                  writeStreamError('內容校驗失敗', issue);
-                  return;
                 }
               }
               if (!res.headersSent) {
@@ -229,11 +240,21 @@ async function handleTestChat(req, res) {
                     const msg = parsed.choices[0].message;
                     const txt = parsed.choices[0].text;
                     const content = parsed.choices[0].content;
+                    const finishReason = parsed.choices[0].finish_reason;
+                    if (delta?.tool_calls || delta?.function_call || msg?.tool_calls || msg?.function_call || finishReason === 'tool_calls' || finishReason === 'function_call') {
+                      hasToolCalls = true;
+                    }
                     const add = (s) => { if (typeof s === 'string') fullContent += s; };
                     add(delta && delta.content);
                     add(delta && delta.reasoning_content);
+                    add(delta && delta.reasoning);
+                    add(delta && delta.thought);
+                    add(delta && delta.thinking);
                     add(msg && msg.content);
                     add(msg && msg.reasoning_content);
+                    add(msg && msg.reasoning);
+                    add(msg && msg.thought);
+                    add(msg && msg.thinking);
                     add(txt);
                     add(content);
                   }

@@ -20,6 +20,7 @@ const { maskKeyValue } = require('../../utils/keyMasking');
 const { sortKeysByAvailability } = require('../keyQueue');
 const { sendSingleRequest } = require('../upstream/sendSingleRequest');
 const { validateSuccessfulResponse } = require('../upstream/responseValidator');
+const { isCustomUpstreamUrl } = require('../../utils/urlHelper');
 
 /**
  * 對單一模型 + 多把 Key 進行嘗試，含空回傳重試迴圈。
@@ -34,11 +35,16 @@ const { validateSuccessfulResponse } = require('../upstream/responseValidator');
 async function tryModelWithKeys({ context, model, roundNumber, sanitizedBody, MAX_EMPTY_RESPONSE_RETRIES }) {
   const { requestId, activeConfig } = context;
   const modelId = model.model_id;
-  const availableKeys = apiKeys.getActiveKeys();
+  let availableKeys = apiKeys.getActiveKeys();
 
   if (availableKeys.length === 0) {
-    addLog('error', `請求 #${requestId}：模型「${modelId}」無法嘗試，因為目前沒有健康的 API Key。`);
-    return { success: false, noHealthyKeys: true, errorText: '目前沒有健康的 API Key。' };
+    if (isCustomUpstreamUrl(activeConfig?.NVIDIA_API_URL)) {
+      // 本地端點 / 自訂端點（Ollama, LM Studio 等）：免配置 Key 即可以 Local 虛擬 Key 運作
+      availableKeys = [{ id: 'local', key_value: 'local-key', status: 'active' }];
+    } else {
+      addLog('error', `請求 #${requestId}：模型「${modelId}」無法嘗試，因為目前沒有健康的 API Key。`);
+      return { success: false, noHealthyKeys: true, errorText: '目前沒有健康的 API Key。' };
+    }
   }
 
   const sortedKeys = sortKeysByAvailability(availableKeys, activeConfig);
@@ -193,6 +199,7 @@ async function tryModelWithKeys({ context, model, roundNumber, sanitizedBody, MA
       return {
         success: false,
         forceFallbackModel: true,
+        isContextLimit: Boolean(result.isContextLimit),
         statusCode: result.statusCode,
         errorText: result.errorText || `HTTP ${result.statusCode}`
       };

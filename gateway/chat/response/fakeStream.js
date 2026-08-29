@@ -1,30 +1,24 @@
 /**
- * 假串流機制（Fake / Heartbeat Stream）
+ * 假串流與心跳機制（Fake / Heartbeat Stream Controller）
  *
- * 在長時間等待模型回應時，前端可能因為長時間無資料而自行斷線。
- * 為避免這個問題，每 10 秒推送一個僅含特殊字元 \uE000 的 chunk 作為心跳訊號，
- * 直到真正的串流回應開始寫入為止（參考請求 #253）。
+ * 在長時間等待模型回應時（如 90k+ tokens 需耗時 10 秒以上），部分前端（如 Kilo / Roo Code）
+ * 會因長時間未收到 SSE data chunk 而判定逾時斷線。
  *
- * 為何仍使用 data: chunk 而不是 SSE 註解：
- *  - 部分前端（含 Cline / Roo Code / Cursor 等 OpenAI 相容客戶端）只會把
- *    `data: { ... }` 視為模型輸出的 chunk，才會有 keep-alive 效果；
- *    SSE 註解行在某些客戶端不會刷新 timeout。
- *  - 使用私有 Unicode 字元 \uE000（會出現在 content/delta.content 中）做為心跳內容，
- *    這個字元在一般對話中幾乎不會出現，方便後續在Gateway與前端做過濾識別。
- *  - 客戶端收到含 \uE000 的 chunk 後，若把這段 assistant content 送回來，
- *    Gateway 會在 sanitize 階段自動過濾，避免汙染上下文。
+ * 機制：
+ *  - 不在 0ms 立即發送，避免干擾正常快速回應之用戶端（如 Cline / OpenAI SDK）
+ *  - 僅在等待超過 FAKE_INTERVAL_MS（5 秒）且上游尚未返回時，每 5 秒推送包含 \uE000 的假串流 chunk 與 : keep-alive
+ *  - 刷新 Kilo 的 data 接收計時器與網路連線活性，防止客戶端中斷
+ *  - 下游 sanitize 模組會自動過濾 \uE000，確保歷史上下文不被污染
  */
 
 const FAKE_CHAR = '\uE000';
-// 縮短心跳間隔至 5 秒，避免部分前端（如 Kilo）的 timeout 小於 10 秒時被強制中斷。
 const FAKE_INTERVAL_MS = 5000;
 
 function createFakeStreamController({ res, originalBody, requestId, isClientGone }) {
-  let charIndex = 0;
   let timer = null;
   let active = false;
 
-  function sendFakeStreamChar() {
+  function sendHeartbeatChunk() {
     if (!active) return;
     if (isClientGone() || res.writableEnded || res.destroyed) {
       active = false;
@@ -39,6 +33,7 @@ function createFakeStreamController({ res, originalBody, requestId, isClientGone
     });
     try {
       res.write(`data: ${chunkData}\n\n`);
+      res.write(': keep-alive\n\n');
     } catch (e) {
       active = false;
     }
@@ -46,8 +41,8 @@ function createFakeStreamController({ res, originalBody, requestId, isClientGone
 
   function start() {
     active = true;
-    timer = setInterval(() => sendFakeStreamChar(), FAKE_INTERVAL_MS);
-    sendFakeStreamChar();
+    // 延遲 5 秒後才開始發送心跳，不於 0ms 立即發送
+    timer = setInterval(() => sendHeartbeatChunk(), FAKE_INTERVAL_MS);
   }
 
   function stop() {

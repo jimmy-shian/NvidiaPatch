@@ -145,6 +145,13 @@ export default function TokenDetailRow({
                         if (typeof item === 'string') return item;
                         if (item && typeof item === 'object') {
                           if (item.type === 'text') return item.text || '';
+                          if (item.type === 'image_url') {
+                            const url = item.image_url?.url || '';
+                            if (url.startsWith('data:')) {
+                              return `🖼️ [Image: Base64 Data (${Math.round(url.length / 1024)} KB)]`;
+                            }
+                            return `🖼️ [Image URL: ${url}]`;
+                          }
                           return item.text || JSON.stringify(item);
                         }
                         return String(item);

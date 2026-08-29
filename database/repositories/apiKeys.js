@@ -224,10 +224,14 @@ const apiKeys = {
     ensureCacheLoaded();
     const keys = Array.from(cachedKeys.values());
     const results = [];
-    
+    const settings = require('./settings');
+    const { resolveModelsCheckUrl } = require('../../gateway/utils/urlHelper');
+    const rawBaseUrl = settings.get().NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+    const targetUrl = resolveModelsCheckUrl(rawBaseUrl);
+
     for (const key of keys) {
       try {
-        const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
+        const res = await fetch(targetUrl, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${key.key_value}`

@@ -1,4 +1,4 @@
-const { modelsConfig, apiKeys } = require('../../database');
+const { modelsConfig, apiKeys, settings } = require('../../database');
 const { addLog } = require('../logs/logger');
 const { broadcastEvent } = require('../utils/broadcast');
 const { clearAllModelCooldowns } = require('../cooldown/modelCooldown');
@@ -47,12 +47,21 @@ class ModelService {
   async syncFromNvidia(requestId = null) {
     const activeKeys = apiKeys.getActiveKeys();
     const fallbackKey = activeKeys.length > 0 ? activeKeys[0].key_value : null;
+    const currentSettings = settings.get();
+    const rawBaseUrl = currentSettings.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+    const targetBaseUrl = rawBaseUrl.trim().replace(/\/+$/, '');
+    const isCustomUrl = !targetBaseUrl.includes('integrate.api.nvidia.com') && !targetBaseUrl.includes('build.nvidia.com');
 
-    addLog('info', '開始從 NVIDIA Build 目錄同步 Free Endpoint 模型清單。', { requestId });
+    if (isCustomUrl) {
+      addLog('info', `開始從自訂端點同步模型清單：${targetBaseUrl}/models`, { requestId });
+    } else {
+      addLog('info', '開始從 NVIDIA Build 目錄同步 Free Endpoint 模型清單。', { requestId });
+    }
+
     const result = await modelsConfig.syncFromNvidia(fallbackKey);
     if (result.success) {
-      const expectedText = result.expectedCount ? ` / NVIDIA Build 標示 ${result.expectedCount} 個` : '';
-      addLog('success', `Free Endpoint 模型清單同步完成：解析 ${result.parsedCount} 個，入庫 ${result.savedCount} 個${expectedText}。來源：${result.source || 'NVIDIA Build 目錄'}`, { requestId });
+      const expectedText = result.expectedCount ? ` / 標示 ${result.expectedCount} 個` : '';
+      addLog('success', `模型清單同步完成：解析 ${result.parsedCount} 個，入庫 ${result.savedCount} 個${expectedText}。來源：${result.source || targetBaseUrl}`, { requestId });
       broadcastEvent('models', { action: 'sync-complete' });
       return {
         success: true,
@@ -64,7 +73,7 @@ class ModelService {
       };
     } else {
       addLog('error', `同步模型失敗：${result.error}`, { requestId });
-      throw new UpstreamError(result.error || 'Failed to sync models from NVIDIA', { requestId });
+      throw new UpstreamError(result.error || 'Failed to sync models', { requestId });
     }
   }
 

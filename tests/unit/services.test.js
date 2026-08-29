@@ -58,6 +58,121 @@ describe('Service Layer Unit Tests', () => {
       const groups = modelService.getGroups();
       expect(groups.activeGroup).toBe(2);
     });
+
+    it('should sync models from custom Base URL when configured', async () => {
+      const origFetch = global.fetch;
+      settingsService.updateSettings({ NVIDIA_API_URL: 'http://127.0.0.1:8765/v1/' });
+
+      global.fetch = async (url) => {
+        expect(url).toBe('http://127.0.0.1:8765/v1/models');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            data: [
+              { id: 'custom/model-alpha', name: 'Model Alpha', created: 1700000000 },
+              { id: 'custom/model-beta', name: 'Model Beta', created: 1700000001 }
+            ]
+          }),
+          json: async () => ({
+            data: [
+              { id: 'custom/model-alpha', name: 'Model Alpha', created: 1700000000 },
+              { id: 'custom/model-beta', name: 'Model Beta', created: 1700000001 }
+            ]
+          })
+        };
+      };
+
+      try {
+        const syncResult = await modelService.syncFromNvidia('test-req-custom');
+        expect(syncResult.success).toBe(true);
+        expect(syncResult.savedCount).toBe(2);
+        expect(syncResult.source).toBe('http://127.0.0.1:8765/v1/models');
+
+        const avail = modelService.getAvailable();
+        expect(avail.models.length).toBe(2);
+        expect(avail.models.some(m => m.id === 'custom/model-alpha')).toBe(true);
+        expect(avail.lastSyncSource).toBe('http://127.0.0.1:8765/v1/models');
+      } finally {
+        global.fetch = origFetch;
+        settingsService.updateSettings({ NVIDIA_API_URL: 'https://integrate.api.nvidia.com/v1' });
+      }
+    });
+
+    it('should sync models from Ollama /api/tags when base URL is http://localhost:11434', async () => {
+      const origFetch = global.fetch;
+      settingsService.updateSettings({ NVIDIA_API_URL: 'http://localhost:11434' });
+
+      global.fetch = async (url) => {
+        if (url === 'http://localhost:11434/models' || url === 'http://localhost:11434/v1/models') {
+          return { ok: false, status: 404 };
+        }
+        if (url === 'http://localhost:11434/api/tags') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              models: [
+                { name: 'llama3:latest', model: 'llama3:latest', modified_at: '2024-05-01T12:00:00Z' },
+                { name: 'qwen2.5-coder:7b', model: 'qwen2.5-coder:7b', modified_at: '2024-05-01T12:00:00Z' }
+              ]
+            })
+          };
+        }
+        return { ok: false, status: 404 };
+      };
+
+      try {
+        const syncResult = await modelService.syncFromNvidia('test-ollama');
+        expect(syncResult.success).toBe(true);
+        expect(syncResult.savedCount).toBe(2);
+        expect(syncResult.source).toBe('http://localhost:11434/api/tags');
+
+        const avail = modelService.getAvailable();
+        expect(avail.models.some(m => m.id === 'llama3:latest')).toBe(true);
+        expect(avail.models.some(m => m.id === 'qwen2.5-coder:7b')).toBe(true);
+      } finally {
+        global.fetch = origFetch;
+        settingsService.updateSettings({ NVIDIA_API_URL: 'https://integrate.api.nvidia.com/v1' });
+      }
+    });
+
+    it('should sync models from LM Studio /api/v0/models when base URL is http://localhost:1234', async () => {
+      const origFetch = global.fetch;
+      settingsService.updateSettings({ NVIDIA_API_URL: 'http://localhost:1234' });
+
+      global.fetch = async (url) => {
+        if (url === 'http://localhost:1234/models' || url === 'http://localhost:1234/v1/models' || url === 'http://localhost:1234/api/tags') {
+          return { ok: false, status: 404 };
+        }
+        if (url === 'http://localhost:1234/api/v0/models') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              models: [
+                { id: 'deepseek-coder-v2-lite', type: 'llm', loaded: true },
+                { id: 'mistral-nemo-instruct-2407', type: 'llm', loaded: false }
+              ]
+            })
+          };
+        }
+        return { ok: false, status: 404 };
+      };
+
+      try {
+        const syncResult = await modelService.syncFromNvidia('test-lmstudio');
+        expect(syncResult.success).toBe(true);
+        expect(syncResult.savedCount).toBe(2);
+        expect(syncResult.source).toBe('http://localhost:1234/api/v0/models');
+
+        const avail = modelService.getAvailable();
+        expect(avail.models.some(m => m.id === 'deepseek-coder-v2-lite')).toBe(true);
+      } finally {
+        global.fetch = origFetch;
+        settingsService.updateSettings({ NVIDIA_API_URL: 'https://integrate.api.nvidia.com/v1' });
+      }
+    });
   });
 
   describe('RulesService', () => {

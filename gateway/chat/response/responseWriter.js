@@ -130,19 +130,9 @@ async function sendValidatedResponse({ context, result, currentModel }) {
     }
 
     await waitForResponseFinish(res, () => {
-      const chunks = ssePayload.split('\n\n');
-      let firstChunk = true;
-      for (const chunk of chunks) {
-        if (chunk.trim()) {
-          if (firstChunk) {
-            res.write('==\n\n');
-            firstChunk = false;
-          }
-          res.write(chunk + '\n\n');
-        }
-      }
-      res.end();
       if (fakeStreamController) fakeStreamController.stop();
+      res.write(ssePayload);
+      res.end();
     });
    } else {
     const json = result.jsonData;
@@ -192,7 +182,7 @@ async function sendValidatedResponse({ context, result, currentModel }) {
  * 即時透傳上游串流回客戶端（僅在 ENABLE_CONTENT_VALIDATION === false 時使用）。
  *
  * 流程：
- *  - 寫 SSE header 與 `==\n\n` 起始標記（與原串流格式對齊）
+ *  - 寫 SSE header
  *  - 逐 chunk 將原始位元組寫到 res，不重新組裝
  *  - end() 後計算耗時、寫 token usage、廣播 SSE
  *  - 客戶端中斷 / 寫入失敗拋出，由 dispatchRequest 處理
@@ -212,13 +202,12 @@ async function sendPassthroughResponse({ context, result, currentModel }) {
   }
 
   await waitForResponseFinish(res, () => {
-    res.write('==\n\n');
+    if (fakeStreamController) fakeStreamController.stop();
     const rawChunks = Array.isArray(result.rawChunks) ? result.rawChunks : [];
     for (const chunk of rawChunks) {
       if (chunk && chunk.length) res.write(Buffer.from(chunk));
     }
     res.end();
-    if (fakeStreamController) fakeStreamController.stop();
   });
 
   stats.recordRequest(true);

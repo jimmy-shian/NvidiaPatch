@@ -74,6 +74,119 @@ function refreshCache() {
   }
 }
 
+async function fetchModelsFromEndpoint(baseUrl, keyValue = null) {
+  const cleanBase = (baseUrl || 'https://integrate.api.nvidia.com/v1').trim().replace(/\/+$/, '');
+
+  // 建立候選端點清單（涵蓋 OpenAI 標準、Ollama /api/tags 與 /v1/models、LM Studio /api/v0/models 與 /v1/models）
+  const candidateUrls = [];
+  if (cleanBase.endsWith('/v1')) {
+    candidateUrls.push(`${cleanBase}/models`);
+    const rootBase = cleanBase.replace(/\/v1$/, '');
+    candidateUrls.push(`${rootBase}/api/tags`);
+    candidateUrls.push(`${rootBase}/api/v0/models`);
+    candidateUrls.push(`${rootBase}/models`);
+  } else {
+    candidateUrls.push(`${cleanBase}/models`);
+    candidateUrls.push(`${cleanBase}/v1/models`);
+    candidateUrls.push(`${cleanBase}/api/tags`);
+    candidateUrls.push(`${cleanBase}/api/v0/models`);
+  }
+
+  const uniqueUrls = [...new Set(candidateUrls)];
+  let lastError = null;
+
+  for (const targetUrl of uniqueUrls) {
+    try {
+      const headers = {
+        'Accept': 'application/json, text/plain, */*'
+      };
+      if (keyValue && keyValue !== 'local-key') {
+        headers['Authorization'] = `Bearer ${keyValue}`;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      let response;
+      try {
+        response = await fetch(targetUrl, {
+          method: 'GET',
+          headers,
+          signal: controller.signal
+        });
+      } catch (err) {
+        clearTimeout(timeoutId);
+        lastError = new Error(`無法連接端點 ${targetUrl}：${err.message}`);
+        continue;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        lastError = new Error(`端點回傳 HTTP ${response.status} (${targetUrl})`);
+        continue;
+      }
+
+      const data = await response.json().catch(() => null);
+      if (!data) continue;
+
+      let rawList = [];
+      if (Array.isArray(data)) {
+        rawList = data;
+      } else if (Array.isArray(data.data)) {
+        rawList = data.data;
+      } else if (Array.isArray(data.models)) {
+        rawList = data.models;
+      }
+
+      const seen = new Set();
+      const models = [];
+      rawList.forEach((m) => {
+        let modelId = '';
+        let modelName = '';
+        let created = 0;
+
+        if (typeof m === 'string' && m.trim()) {
+          modelId = m.trim();
+          modelName = modelId.split('/').pop();
+        } else if (m && typeof m === 'object') {
+          // 支援 Ollama (name / model), OpenAI (id / name), LM Studio (id / path)
+          modelId = (typeof m.id === 'string' && m.id.trim())
+            || (typeof m.model === 'string' && m.model.trim())
+            || (typeof m.name === 'string' && m.name.trim())
+            || '';
+          modelName = (typeof m.name === 'string' && m.name.trim())
+            || (typeof m.id === 'string' && m.id.trim())
+            || (modelId ? modelId.split('/').pop() : '');
+          created = Number.isFinite(Number(m.created))
+            ? Number(m.created)
+            : (m.modified_at ? Math.floor(new Date(m.modified_at).getTime() / 1000) : 0);
+        }
+
+        if (!modelId || seen.has(modelId)) return;
+        seen.add(modelId);
+        models.push({
+          id: modelId,
+          name: modelName || modelId.split('/').pop(),
+          created: created || 0
+        });
+      });
+
+      if (models.length > 0) {
+        return {
+          models,
+          expectedCount: models.length,
+          source: targetUrl
+        };
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw lastError || new Error(`無法從 ${cleanBase} 解析到任何有效模型。`);
+}
+
 const modelsConfig = {
   /**
    * 刷新記憶體快取
@@ -215,73 +328,62 @@ const modelsConfig = {
   },
 
   /**
-   * 從 NVIDIA 同步可用模型目錄
+   * 從 NVIDIA 或自訂 Base URL 端點同步可用模型目錄
    */
   syncFromNvidia: async (keyValue = null) => {
     const db = getDb();
+    const settings = require('./settings');
+    const currentSettings = settings.get();
+    const rawBaseUrl = currentSettings.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+    const targetBaseUrl = rawBaseUrl.trim().replace(/\/+$/, '');
+    const isCustomUrl = !targetBaseUrl.includes('integrate.api.nvidia.com') && !targetBaseUrl.includes('build.nvidia.com');
+
     try {
-      let catalog;
+      let catalog = null;
       let lastErr = null;
 
-      try {
-        catalog = await fetchNvidiaBuildFreeEndpointCatalog();
-      } catch (err) {
-        lastErr = err;
-      }
-
-      if (!catalog) {
+      if (isCustomUrl) {
+        // 自訂端點：直接從使用者配置的 Base URL /models 取得可用模型清單
         try {
-          catalog = await fetchNvidiaIntegrateModelsCatalog();
+          catalog = await fetchModelsFromEndpoint(targetBaseUrl, keyValue);
         } catch (err) {
           lastErr = err;
         }
-      }
-
-      if (!catalog) {
+      } else {
+        // 預設 NVIDIA 端點：先嘗試爬取 Free Endpoint 目錄，若失敗則回退至官方 API /models
         try {
-          catalog = await fetchNvidiaFeaturedModelsCatalog();
+          catalog = await fetchNvidiaBuildFreeEndpointCatalog();
         } catch (err) {
           lastErr = err;
         }
-      }
 
-      if (!catalog && keyValue) {
-        try {
-          const res = await fetch("https://integrate.api.nvidia.com/v1/models", {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${keyValue}`
-            }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data && Array.isArray(data.data) && data.data.length > 0) {
-              const seen = new Set();
-              catalog = {
-                models: data.data
-                  .map((m) => {
-                    const modelId = typeof m.id === 'string' ? m.id.trim() : '';
-                    if (!modelId || seen.has(modelId)) return null;
-                    seen.add(modelId);
-                    return {
-                      id: modelId,
-                      name: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : modelId.split('/').pop(),
-                      created: Number.isFinite(Number(m.created)) ? Number(m.created) : 0
-                    };
-                  })
-                  .filter(Boolean),
-                expectedCount: data.data.length,
-                source: 'https://integrate.api.nvidia.com/v1/models'
-              };
-            }
+        if (!catalog) {
+          try {
+            catalog = await fetchNvidiaIntegrateModelsCatalog(targetBaseUrl);
+          } catch (err) {
+            lastErr = err;
           }
-        } catch (err) {
-          lastErr = err;
+        }
+
+        if (!catalog) {
+          try {
+            catalog = await fetchNvidiaFeaturedModelsCatalog();
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+
+        if (!catalog) {
+          try {
+            catalog = await fetchModelsFromEndpoint(targetBaseUrl, keyValue);
+          } catch (err) {
+            lastErr = err;
+          }
         }
       }
 
       if (!catalog || !Array.isArray(catalog.models) || catalog.models.length === 0) {
-        return { success: false, error: lastErr ? lastErr.message : 'Invalid data format from NVIDIA models catalog' };
+        return { success: false, error: lastErr ? lastErr.message : `無法從 ${targetBaseUrl}/models 取得有效模型列表` };
       }
 
       const parsedCount = catalog.models.length;
@@ -309,22 +411,26 @@ const modelsConfig = {
 
         const check = db.prepare("SELECT COUNT(*) as count FROM models_config WHERE group_id = 1").get();
         if (check.count === 0 && syncedModels.length > 0) {
-          const findPreferred = (patterns, exclude = []) => syncedModels.find(id => {
-            const lowered = id.toLowerCase();
-            return !exclude.includes(id) && patterns.some(pattern => lowered.includes(pattern));
-          });
-          const primary = findPreferred(['nemotron-3-ultra', 'deepseek-v4', 'kimi-k2', 'minimax-m3', 'llama-4', 'llama-3.3']) || syncedModels[0];
-          const fallback1 = findPreferred(['qwen', 'glm', 'mistral', 'gemma', 'step'], [primary]) || syncedModels.find(id => id !== primary);
-          const fallback2 = findPreferred(['minimax', 'deepseek', 'moonshotai', 'nvidia'], [primary, fallback1]) || syncedModels.find(id => id !== primary && id !== fallback1);
-
-          const activePresets = [primary, fallback1, fallback2].filter(Boolean);
+          let activePresets = [];
+          if (isCustomUrl) {
+            activePresets = syncedModels.slice(0, 3);
+          } else {
+            const findPreferred = (patterns, exclude = []) => syncedModels.find(id => {
+              const lowered = id.toLowerCase();
+              return !exclude.includes(id) && patterns.some(pattern => lowered.includes(pattern));
+            });
+            const primary = findPreferred(['nemotron-3-ultra', 'deepseek-v4', 'kimi-k2', 'minimax-m3', 'llama-4', 'llama-3.3']) || syncedModels[0];
+            const fallback1 = findPreferred(['qwen', 'glm', 'mistral', 'gemma', 'step'], [primary]) || syncedModels.find(id => id !== primary);
+            const fallback2 = findPreferred(['minimax', 'deepseek', 'moonshotai', 'nvidia'], [primary, fallback1]) || syncedModels.find(id => id !== primary && id !== fallback1);
+            activePresets = [primary, fallback1, fallback2].filter(Boolean);
+          }
           const insertConfig = db.prepare("INSERT INTO models_config (group_id, model_id, priority, is_active) VALUES (1, ?, ?, 1)");
           activePresets.forEach((mId, index) => {
             insertConfig.run(mId, index + 1);
           });
         }
         const savedCount = syncedModels.length;
-        const defaultSource = 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview';
+        const defaultSource = isCustomUrl ? `${targetBaseUrl}/models` : 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview';
         db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_time', ?)").run(getTaiwanISOString());
         db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_source', ?)").run(catalog.source || defaultSource);
         db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_model_sync_expected_count', ?)").run(catalog.expectedCount ? String(catalog.expectedCount) : '');

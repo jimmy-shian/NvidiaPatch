@@ -1,12 +1,13 @@
 const { fetchTextWithTimeout } = require('./fetchHelpers');
 
-const NVIDIA_INTEGRATE_MODELS_URL = 'https://integrate.api.nvidia.com/v1/models';
+const DEFAULT_NVIDIA_INTEGRATE_MODELS_URL = 'https://integrate.api.nvidia.com/v1/models';
 
-async function fetchNvidiaIntegrateModelsCatalog() {
-  const text = await fetchTextWithTimeout(NVIDIA_INTEGRATE_MODELS_URL, {}, 20000);
+async function fetchNvidiaIntegrateModelsCatalog(baseUrl = null) {
+  const targetUrl = baseUrl ? `${baseUrl.trim().replace(/\/+$/, '')}/models` : DEFAULT_NVIDIA_INTEGRATE_MODELS_URL;
+  const text = await fetchTextWithTimeout(targetUrl, {}, 20000);
   const data = JSON.parse(text);
   if (!data || !Array.isArray(data.data) || data.data.length === 0) {
-    throw new Error('Invalid format or empty models array from integrate.api.nvidia.com/v1/models');
+    throw new Error(`Invalid format or empty models array from ${targetUrl}`);
   }
   const seen = new Set();
   const models = data.data
@@ -23,13 +24,13 @@ async function fetchNvidiaIntegrateModelsCatalog() {
     .filter(Boolean);
 
   if (models.length === 0) {
-    throw new Error('No valid models parsed from integrate.api.nvidia.com/v1/models');
+    throw new Error(`No valid models parsed from ${targetUrl}`);
   }
 
   return {
     models,
     expectedCount: data.data.length,
-    source: NVIDIA_INTEGRATE_MODELS_URL
+    source: targetUrl
   };
 }
 

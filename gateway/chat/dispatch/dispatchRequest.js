@@ -146,7 +146,11 @@ function handleRoundFailure({ context, result, currentModel, round }) {
   }
 
   if (result.forceFallbackModel) {
-    markModelFailureCooldown(modelId, result.errorText || '模型層級失敗');
+    if (!result.isContextLimit) {
+      markModelFailureCooldown(modelId, result.errorText || '模型層級失敗');
+    } else {
+      addLog('info', `請求 #${requestId}：模型「${modelId}」因本次請求超出上下文長度限制切換下一個模型，不對該模型設定暫時跳過。`);
+    }
     addLog('warning', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪判定為模型層級失敗，跳過剩餘輪次並切換下一個模型。`);
     return { abortModel: true };
   }
@@ -165,7 +169,9 @@ function handleRoundFailure({ context, result, currentModel, round }) {
 
     // 已達 MAX_ROUNDS_PER_MODEL 上限仍無法成功，標記模型冷卻並切換下一個模型，
     // 避免 fall through 到 return {} 造成「無任何動作」的隱性失敗。
-    markModelFailureCooldown(modelId, result.errorText || `已達最大重試輪數 ${context.MAX_ROUNDS_PER_MODEL} 仍失敗`);
+    if (!result.isContextLimit) {
+      markModelFailureCooldown(modelId, result.errorText || `已達最大重試輪數 ${context.MAX_ROUNDS_PER_MODEL} 仍失敗`);
+    }
     addLog('warning', `請求 #${requestId}：模型「${modelId}」已達最大重試輪數 ${context.MAX_ROUNDS_PER_MODEL} 仍無法完成，標記冷卻並切換下一個模型。`);
     return { abortModel: true };
   }
@@ -185,22 +191,25 @@ async function dispatchRequest({ context, configuredModels, sanitizedBody }) {
   const { requestId, stream, isClientGone, activeConfig, MAX_ROUNDS_PER_MODEL, MAX_EMPTY_RESPONSE_RETRIES } = context;
   const ROUND_DELAY_MS = activeConfig.ROUND_DELAY_MS;
 
-  let skippedByCooldown = 0;
+  const activeCandidateModels = (configuredModels || []).filter(m => !isModelInFailureCooldown(m.model_id));
+  let modelsToAttempt = activeCandidateModels;
+  let skippedByCooldown = (configuredModels || []).length - activeCandidateModels.length;
 
-  for (let modelIndex = 0; modelIndex < configuredModels.length; modelIndex += 1) {
+  if (activeCandidateModels.length === 0 && (configuredModels || []).length > 0) {
+    // 全部模型都在暫時跳過狀態：為了避免 Gateway 陷入拒收請求死鎖，自動解除跳過限制直接嘗試完整模型清單
+    addLog('info', `請求 #${requestId}：所有設定的模型皆處於暫時跳過狀態，為避免死鎖，自動解除跳過限制並嘗試調度模型。`);
+    modelsToAttempt = configuredModels;
+    skippedByCooldown = 0;
+  }
+
+  for (let modelIndex = 0; modelIndex < modelsToAttempt.length; modelIndex += 1) {
     if (isClientGone()) {
       addLog('warning', `請求 #${requestId}：客戶端已中斷，停止模型順位調度。`);
       return;
     }
 
-    const currentModel = configuredModels[modelIndex];
+    const currentModel = modelsToAttempt[modelIndex];
     const modelId = currentModel.model_id;
-
-    if (isModelInFailureCooldown(modelId)) {
-      skippedByCooldown += 1;
-      addLog('info', `請求 #${requestId}：模型「${modelId}」仍在暫時跳過狀態，直接嘗試下一個模型。`);
-      continue;
-    }
 
     addLog('info', `請求 #${requestId}：開始調度模型「${modelId}」（順位 ${currentModel.priority}）。`);
 

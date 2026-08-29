@@ -21,7 +21,15 @@
 const { apiKeys, stats } = require('../../../database');
 const { addLog } = require('../../logs/logger');
 const { reserveSlot, waitForSlot } = require('../keyQueue');
-const { readTextSafely } = require('../utils/readTextSafely');
+const { resolveChatCompletionsUrl } = require('../../utils/urlHelper');
+
+async function readTextSafely(response) {
+  try {
+    return await response.text();
+  } catch (err) {
+    return '';
+  }
+}
 
 function isContextLimitError(errText) {
   const lower = String(errText || '').toLowerCase();
@@ -40,11 +48,6 @@ function isDegradedError(errText) {
   return String(errText || '').toLowerCase().includes('degraded');
 }
 
-/**
- * 判斷是否為 NVIDIA 端伺服器錯誤（即使以 HTTP 400 回傳）。
- * 這類錯誤通常是暫時性的，應視為模型層級失敗（可切換模型/重試），
- * 而非不可重試的 fatal。
- */
 function isServerError(errText) {
   const lower = String(errText || '').toLowerCase();
   return lower.includes('internal server error')
@@ -81,10 +84,11 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
   const forwardBody = {
     ...sanitizedBody,
     model: modelId,
-    temperature: 1
+    temperature: sanitizedBody.temperature !== undefined ? sanitizedBody.temperature : 1
   };
 
-  const preQueueStatus = apiKeys.getKeyStatus(key.id);
+  const isNumericKey = typeof key.id === 'number';
+  const preQueueStatus = isNumericKey ? apiKeys.getKeyStatus(key.id) : 'active';
   if (preQueueStatus !== 'active') {
     addLog('warning', `請求 #${requestId}：金鑰 ID ${key.id} 目前狀態為「${preQueueStatus}」（非 active），直接跳過。`);
     return { success: false, retryScope: 'key', errorText: `金鑰狀態為 ${preQueueStatus}` };
@@ -97,14 +101,14 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
     await waitForSlot(res, waitMs);
   }
 
-  const postSleepStatus = apiKeys.getKeyStatus(key.id);
+  const postSleepStatus = isNumericKey ? apiKeys.getKeyStatus(key.id) : 'active';
   if (postSleepStatus !== 'active') {
     addLog('warning', `請求 #${requestId}：金鑰 ID ${key.id} 在排隊等待期間狀態變更為「${postSleepStatus}」，取消本次發送。`);
     return { success: false, retryScope: 'key', errorText: `金鑰狀態已在等待期變更為 ${postSleepStatus}` };
   }
 
   if (isClientGone()) {
-    addLog('warning', `請求 #${requestId}：金鑰排隊等待完成後檢測到用戶端已中斷連線，取消對 Key ID ${key.id} 的 NVIDIA 請求發送。`);
+    addLog('warning', `請求 #${requestId}：金鑰排隊等待完成後檢測到用戶端已中斷連線，取消對 Key ID ${key.id} 的上游請求發送。`);
     return { success: false, clientGone: true, errorText: '用戶端已於等待期間中斷連線' };
   }
 
@@ -123,14 +127,14 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
   };
   res.once('close', abortOnClientDisconnect);
 
-  const targetBaseUrl = activeConfig?.NVIDIA_API_URL || process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
+  const targetUrl = resolveChatCompletionsUrl(activeConfig?.NVIDIA_API_URL || process.env.NVIDIA_API_URL);
 
   try {
-    const response = await fetch(`${targetBaseUrl}/chat/completions`, {
+    const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${key.key_value}`
+        'Authorization': `Bearer ${key.key_value || 'local-key'}`
       },
       body: JSON.stringify(forwardBody),
       signal: abortController.signal
@@ -144,20 +148,20 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
     }
 
     if (response.ok) {
-      apiKeys.recordSuccess(key.id);
+      if (isNumericKey) apiKeys.recordSuccess(key.id);
       const passthroughEligible = activeConfig.ENABLE_CONTENT_VALIDATION === false;
       if (passthroughEligible && context.stream) {
-        addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到 NVIDIA HTTP 200，校驗已關閉，改採即時透傳以降低延遲。`);
+        addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到上游 HTTP 200，校驗已關閉，改採即時透傳以降低延遲。`);
         return { success: true, response, retryScope: 'none', passthrough: true, statusCode: response.status };
       }
-      addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到 NVIDIA HTTP 200，開始校驗回傳內容。`);
+      addLog('info', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 收到上游 HTTP 200，開始校驗回傳內容。`);
       return { success: true, response, retryScope: 'none', statusCode: response.status };
     }
 
     if (response.status === 429) {
       const errText = await readTextSafely(response);
       addLog('warning', `請求 #${requestId}：Key ID ${key.id} 遇到 429 速率限制，該 Key 進入 30 秒冷卻，改用下一把 Key 繼續同一模型「${modelId}」。`);
-      apiKeys.recordCooldown(key.id, 30, errText || '429 Rate Limit Exceeded');
+      if (isNumericKey) apiKeys.recordCooldown(key.id, 30, errText || '429 Rate Limit Exceeded');
       stats.recordRequest(false);
       return { success: false, retryScope: 'key', statusCode: 429, errorText: errText || '429 Rate Limit Exceeded' };
     }
@@ -165,7 +169,7 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
     if (response.status === 401 || response.status === 403) {
       const errText = await readTextSafely(response);
       addLog('error', `請求 #${requestId}：Key ID ${key.id} 回傳 HTTP ${response.status}，已設為停用，改用下一把 Key 繼續同一模型「${modelId}」。`);
-      apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
+      if (isNumericKey) apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
       stats.recordRequest(false);
       return { success: false, retryScope: 'key', statusCode: response.status, errorText: errText };
     }
@@ -173,7 +177,6 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
     if (response.status === 404) {
       const errText = await readTextSafely(response);
       addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 404，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
-      apiKeys.recordFailure(key.id, `ModelNotFound HTTP 404: ${errText.substring(0, 80)}`);
       stats.recordRequest(false);
       return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 404, errorText: errText || 'HTTP 404' };
     }
@@ -181,7 +184,6 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
     if (response.status >= 500) {
       const errText = await readTextSafely(response);
       addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP ${response.status}，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
-      apiKeys.recordFailure(key.id, `ModelServerError HTTP ${response.status}: ${errText.substring(0, 80)}`);
       stats.recordRequest(false);
       return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText || `HTTP ${response.status}` };
     }
@@ -189,25 +191,21 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
     if (response.status === 400) {
       const errText = await readTextSafely(response);
       if (isContextLimitError(errText)) {
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（長度超出限制），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
-        apiKeys.recordFailure(key.id, `ModelContextLimit HTTP 400: ${errText.substring(0, 80)}`);
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（長度超出限制），判定為本次請求超出上下文，切換下一個模型。錯誤：${errText.substring(0, 160)}`);
         stats.recordRequest(false);
-        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, isContextLimit: true, statusCode: 400, errorText: errText };
       }
       if (isDegradedError(errText)) {
         addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（模型已降級），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
-        apiKeys.recordFailure(key.id, `ModelDegraded HTTP 400: ${errText.substring(0, 80)}`);
         stats.recordRequest(false);
         return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
       }
       if (isServerError(errText)) {
         addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（NVIDIA 端伺服器錯誤），判定為模型層級失敗，發起切換下一個模型。錯誤：${errText.substring(0, 160)}`);
-        apiKeys.recordFailure(key.id, `ModelServerError HTTP 400: ${errText.substring(0, 80)}`);
         stats.recordRequest(false);
         return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
       }
       addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（${errText.substring(0, 160)}），判定為模型層級失敗，發起切換下一個模型重試。`);
-      apiKeys.recordFailure(key.id, `HTTP 400: ${errText.substring(0, 80)}`);
       stats.recordRequest(false);
       return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
     }
