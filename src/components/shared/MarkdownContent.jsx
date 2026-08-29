@@ -3,7 +3,44 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 
-const markdownPlugins = [remarkGfm, remarkBreaks];
+/**
+ * Remark plugin to convert <br>, <br/>, <br />, <BR> in text and HTML nodes
+ * into Markdown AST break nodes ({ type: 'break' }), properly breaking lines in
+ * Markdown tables, lists, and paragraphs while preserving code blocks.
+ */
+function remarkHtmlBreak() {
+  return (tree) => {
+    function transform(node) {
+      if (!node) return;
+      if (node.type === 'code' || node.type === 'inlineCode') return;
+      if (!node.children || !Array.isArray(node.children)) return;
+
+      const newChildren = [];
+      for (const child of node.children) {
+        if (child.type === 'text' && /<br\s*\/?>/i.test(child.value)) {
+          const parts = child.value.split(/(<br\s*\/?>)/gi);
+          for (const part of parts) {
+            if (!part) continue;
+            if (/^<br\s*\/?>$/i.test(part)) {
+              newChildren.push({ type: 'break' });
+            } else {
+              newChildren.push({ type: 'text', value: part });
+            }
+          }
+        } else if (child.type === 'html' && /^<br\s*\/?>$/i.test(child.value.trim())) {
+          newChildren.push({ type: 'break' });
+        } else {
+          transform(child);
+          newChildren.push(child);
+        }
+      }
+      node.children = newChildren;
+    }
+    transform(tree);
+  };
+}
+
+const markdownPlugins = [remarkGfm, remarkBreaks, remarkHtmlBreak];
 
 const markdownComponents = {
   a: ({ node, ...props }) => (
@@ -42,4 +79,4 @@ function MarkdownContent({ children }) {
   );
 }
 
-export default React.memo(MarkdownContent);
+export default React.memo(MarkdownContent);
