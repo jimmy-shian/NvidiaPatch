@@ -26,7 +26,8 @@ export default function SettingsModal({
   setTempSettings,
   settingsData,
   setIsSettingsModalOpen,
-  saveSettings
+  saveSettings,
+  showToast
 }) {
   const { t } = useTranslation();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
@@ -300,8 +301,17 @@ export default function SettingsModal({
             {t('settings.cancel')}
           </button>
           <button className="btn btn-primary" onClick={async () => {
-            await saveSettings(tempSettings);
-            setIsSettingsModalOpen(false);
+            try {
+              await saveSettings(tempSettings);
+              if (showToast) {
+                showToast('success', t('settings.saved') || '系統設定已儲存！', 1500);
+              }
+              setIsSettingsModalOpen(false);
+            } catch (err) {
+              if (showToast) {
+                showToast('error', '儲存設定失敗：' + err.message, 1500);
+              }
+            }
           }}>
             {t('settings.save')}
           </button>

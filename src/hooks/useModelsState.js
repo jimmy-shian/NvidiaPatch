@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export default function useModelsState(api, fetchData, setSelectedTestModel) {
+export default function useModelsState(api, fetchData, setSelectedTestModel, showToast) {
   const { t } = useTranslation();
   const [models, setModels] = useState([]);
   const [activeModelGroup, setActiveModelGroup] = useState(1);
@@ -27,11 +27,14 @@ export default function useModelsState(api, fetchData, setSelectedTestModel) {
   const showSyncNotice = useCallback((type, message) => {
     if (syncNoticeTimerRef.current) clearTimeout(syncNoticeTimerRef.current);
     setSyncNotice({ type, message, createdAt: Date.now() });
+    if (showToast) {
+      showToast(type, message, 1500);
+    }
     syncNoticeTimerRef.current = setTimeout(() => {
       setSyncNotice(null);
       syncNoticeTimerRef.current = null;
-    }, type === 'error' ? 10000 : 7000);
-  }, []);
+    }, 1500);
+  }, [showToast]);
 
   const formatModelSyncSummary = useCallback(({ parsedCount, savedCount, expectedCount }) => {
     const parts = [];
@@ -50,7 +53,7 @@ export default function useModelsState(api, fetchData, setSelectedTestModel) {
       setLastSavedModelCount(data.savedCount ?? data.count ?? null);
       setExpectedModelCount(data.expectedCount || null);
       setLastSyncSource(data.source || null);
-      showSyncNotice('success', `Sync OK: ${formatModelSyncSummary({
+      showSyncNotice('success', `同步完成：${formatModelSyncSummary({
         parsedCount: data.parsedCount,
         savedCount: data.savedCount ?? data.count,
         expectedCount: data.expectedCount,
@@ -58,21 +61,27 @@ export default function useModelsState(api, fetchData, setSelectedTestModel) {
       })}`);
       if (fetchData) fetchData();
     } catch (err) {
-      showSyncNotice('error', `Sync failed: ${err.message}`);
+      showSyncNotice('error', `同步失敗：${err.message}`);
     } finally {
       setIsSyncingModels(false);
     }
   }, [api, showSyncNotice, formatModelSyncSummary, fetchData, t]);
 
-  const saveModelPriorities = useCallback(async (modelIds, groupId = activeModelGroup) => {
+  const saveModelPriorities = useCallback(async (modelIds, groupId = activeModelGroup, showFeedback = true) => {
     try {
       await api.saveModelPriorities(modelIds, groupId);
+      if (showFeedback && showToast) {
+        showToast('success', '已更新模型順位', 1500);
+      }
       if (fetchData) fetchData();
     } catch (err) {
       console.error('Save model priorities failed:', err);
+      if (showFeedback && showToast) {
+        showToast('error', '儲存模型順位失敗：' + err.message, 1500);
+      }
       throw err;
     }
-  }, [api, activeModelGroup, fetchData]);
+  }, [api, activeModelGroup, fetchData, showToast]);
 
   const buildModelsFromOrder = useCallback((modelIds) => {
     return modelIds.map((modelId, index) => {
@@ -103,6 +112,9 @@ export default function useModelsState(api, fetchData, setSelectedTestModel) {
     setActiveModelGroup(groupId);
     try {
       await api.setActiveModelGroup(groupId);
+      if (showToast) {
+        showToast('success', `已切換為第 ${groupId} 組模型順位`, 1500);
+      }
       const [modelsData, groupsData] = await Promise.all([
         api.fetchModels().catch(err => { console.error('fetchModels err:', err); return null; }),
         api.fetchModelGroups().catch(err => { console.error('fetchModelGroups err:', err); return null; })
@@ -110,10 +122,14 @@ export default function useModelsState(api, fetchData, setSelectedTestModel) {
       if (modelsData) setModels(modelsData);
       if (groupsData) setModelGroups(groupsData.groups || []);
     } catch (err) {
-      alert(`Switch group failed: ${err.message}`);
+      if (showToast) {
+        showToast('error', `切換組別失敗：${err.message}`, 1500);
+      } else {
+        alert(`Switch group failed: ${err.message}`);
+      }
       if (fetchData) fetchData();
     }
-  }, [activeModelGroup, api, fetchData]);
+  }, [activeModelGroup, api, fetchData, showToast]);
 
   const handleMovePriority = useCallback(async (index, direction) => {
     const newModels = [...models];
@@ -129,32 +145,32 @@ export default function useModelsState(api, fetchData, setSelectedTestModel) {
     const order = newModels.map(m => m.model_id);
     setModels(buildModelsFromOrder(order));
     try {
-      await saveModelPriorities(order);
+      await saveModelPriorities(order, activeModelGroup, true);
     } catch (err) {
       if (fetchData) fetchData();
     }
-  }, [models, buildModelsFromOrder, saveModelPriorities, fetchData]);
+  }, [models, buildModelsFromOrder, saveModelPriorities, activeModelGroup, fetchData]);
 
   const handleRemoveModelFromPriority = useCallback(async (modelId) => {
     const order = models.map(m => m.model_id).filter(id => id !== modelId);
     setModels(buildModelsFromOrder(order));
     try {
-      await saveModelPriorities(order);
+      await saveModelPriorities(order, activeModelGroup, true);
     } catch (err) {
       if (fetchData) fetchData();
     }
-  }, [models, buildModelsFromOrder, saveModelPriorities, fetchData]);
+  }, [models, buildModelsFromOrder, saveModelPriorities, activeModelGroup, fetchData]);
 
   const handleAddModelToPriority = useCallback(async (modelId) => {
     if (models.some(m => m.model_id === modelId)) return;
     const order = [...models.map(m => m.model_id), modelId];
     setModels(buildModelsFromOrder(order));
     try {
-      await saveModelPriorities(order);
+      await saveModelPriorities(order, activeModelGroup, true);
     } catch (err) {
       if (fetchData) fetchData();
     }
-  }, [models, buildModelsFromOrder, saveModelPriorities, fetchData]);
+  }, [models, buildModelsFromOrder, saveModelPriorities, activeModelGroup, fetchData]);
 
   return {
     models,

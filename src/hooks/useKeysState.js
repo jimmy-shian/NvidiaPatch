@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export default function useKeysState(api, fetchData, showConfirm) {
+export default function useKeysState(api, fetchData, showConfirm, showToast) {
   const { t } = useTranslation();
   const [keys, setKeys] = useState([]);
   const [newKey, setNewKey] = useState('');
@@ -18,11 +18,14 @@ export default function useKeysState(api, fetchData, showConfirm) {
   const showKeyTestNotice = useCallback((type, message) => {
     if (keyTestNoticeTimerRef.current) clearTimeout(keyTestNoticeTimerRef.current);
     setKeyTestNotice({ type, message, createdAt: Date.now() });
+    if (showToast) {
+      showToast(type, message, 1500);
+    }
     keyTestNoticeTimerRef.current = setTimeout(() => {
       setKeyTestNotice(null);
       keyTestNoticeTimerRef.current = null;
-    }, type === 'error' ? 10000 : 7000);
-  }, []);
+    }, 1500);
+  }, [showToast]);
 
   const loadKeys = useCallback(async () => {
     try {
@@ -41,11 +44,19 @@ export default function useKeysState(api, fetchData, showConfirm) {
     try {
       await api.addKey(newKey.trim());
       setNewKey('');
+      if (showToast) {
+        showToast('success', t('keys.addSuccess') || '已成功新增 API Key', 1500);
+      }
       if (fetchData) fetchData();
     } catch (err) {
-      alert(t('keys.addFailed', { error: err.message }));
+      const msg = t('keys.addFailed', { error: err.message });
+      if (showToast) {
+        showToast('error', msg, 1500);
+      } else {
+        alert(msg);
+      }
     }
-  }, [api, newKey, fetchData, t]);
+  }, [api, newKey, fetchData, showToast, t]);
 
   const handleDeleteKey = useCallback(async (id) => {
     const ok = await showConfirm({
@@ -56,11 +67,18 @@ export default function useKeysState(api, fetchData, showConfirm) {
     if (!ok) return;
     try {
       await api.deleteKey(id);
+      if (showToast) {
+        showToast('success', t('keys.deleteSuccess') || '已成功刪除 API Key', 1500);
+      }
       if (fetchData) fetchData();
     } catch (err) {
-      alert('Delete key error');
+      if (showToast) {
+        showToast('error', '刪除金鑰失敗：' + err.message, 1500);
+      } else {
+        alert('Delete key error');
+      }
     }
-  }, [api, showConfirm, fetchData, t]);
+  }, [api, showConfirm, fetchData, showToast, t]);
 
   const handleTestKeys = useCallback(async () => {
     setIsTestingKeys(true);

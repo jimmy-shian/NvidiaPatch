@@ -77,6 +77,8 @@
     "cooldown": "冷卻中 ({{sec}}s)",
     "inactive": "Revoked / 損壞",
     "unused": "未使用",
+    "addSuccess": "已成功新增 API Key！",
+    "deleteSuccess": "已成功刪除 API Key！",
     "addFailed": "新增失敗: {{error}}",
     "deleteConfirm": "確認要刪除此 API Key？",
     "apiKeyColumn": "API Key"

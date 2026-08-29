@@ -36,6 +36,9 @@ export default function useSettingsState(api) {
     try {
       const data = await api.saveSettings(updated);
       if (data) setSettingsData(data);
+      if (window.electronAPI?.notifySettingsUpdated) {
+        window.electronAPI.notifySettingsUpdated();
+      }
       return data;
     } catch (err) {
       console.error('Failed to save settings:', err);

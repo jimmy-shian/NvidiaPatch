@@ -114,3 +114,21 @@
   color: var(--text-muted);
   border-color: rgba(161, 161, 170, 0.15);
 }
+
+/* 浮動系統通知 Toast 樣式 */
+.toast-notification {
+  transform: translateZ(0);
+  transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.toast-notification:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45) !important;
+}
+
+:root.theme-light .toast-notification {
+  background: rgba(255, 255, 255, 0.95) !important;
+  color: #18181b !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15) !important;
+}
+

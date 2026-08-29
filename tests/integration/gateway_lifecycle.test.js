@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-const http = require('http');
-const path = require('path');
-const fs = require('fs');
+import http from 'http';
+import path from 'path';
+import fs from 'fs';
 const { initDatabase, closeDatabase } = require('../../database/database');
 const { createGatewayApp, closeGatewayResources, startGatewayResources } = require('../../gateway');
 

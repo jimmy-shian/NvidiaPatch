@@ -12,11 +12,16 @@ export default function OverviewPanel({
   getTotalRequests,
   calculateSuccessRate,
   getGatewayUrl,
+  gatewayPort,
+  settingsData,
   hoveredHourlyIndex,
   setHoveredHourlyIndex
 }) {
   const { t } = useTranslation();
-  const gatewayUrl = getGatewayUrl();
+  const port = gatewayPort || settingsData?.PORT || 4000;
+  const localGatewayUrl = getGatewayUrl ? getGatewayUrl() : `http://127.0.0.1:${port}`;
+  // Gateway 本地對外服務端點 (供 Cline 等客戶端連接，隨 PORT 設定動態變更)
+  const endpointUrl = `${localGatewayUrl}/v1`;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', minHeight: 0 }}>
@@ -31,7 +36,7 @@ export default function OverviewPanel({
             cursor: 'pointer',
             transition: 'all 0.2s ease'
           }}
-          onClick={() => copyToClipboard('http://127.0.0.1:4000/v1', 'gateway_endpoint')}
+          onClick={() => copyToClipboard(endpointUrl, 'gateway_endpoint')}
           onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
           onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
           title={t('app.copyToClipboard')}
@@ -46,10 +51,10 @@ export default function OverviewPanel({
               <Copy size={12} style={{ color: 'var(--text-muted)' }} />
             )}
           </div>
-          <span style={{ fontSize: '17px', fontWeight: '700', color: 'var(--accent-color)', fontFamily: 'Outfit' }}>http://127.0.0.1:4000/v1</span>
+          <span style={{ fontSize: '17px', fontWeight: '700', color: 'var(--accent-color)', fontFamily: 'Outfit', wordBreak: 'break-all' }}>{endpointUrl}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--status-active)' }}></div>
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{t('app.copyToClipboard')} (Port 4000)</span>
+            <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{t('app.copyToClipboard')} (Port {port})</span>
           </div>
         </div>
 
@@ -79,7 +84,9 @@ export default function OverviewPanel({
       </div>
 
       <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <span style={{ fontSize: '16px', fontWeight: '700', color: 'var(--accent-color)' }}>⚙️ {t('dashboard.openaiTitle')}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <span style={{ fontSize: '16px', fontWeight: '700', color: 'var(--accent-color)' }}>⚙️ {t('dashboard.openaiTitle')}</span>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
           <div
             style={{
@@ -115,13 +122,13 @@ export default function OverviewPanel({
               cursor: 'pointer',
               transition: 'all 0.2s ease'
             }}
-            onClick={() => copyToClipboard(gatewayUrl + '/v1', 'prov_url')}
+            onClick={() => copyToClipboard(endpointUrl, 'prov_url')}
             onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
             onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1.0)'}
             title={t('dashboard.copyBaseUrl')}
           >
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('dashboard.baseUrl')}</div>
-            <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace' }}>{gatewayUrl}/v1</div>
+            <div style={{ fontSize: '15px', fontWeight: '600', marginTop: '6px', fontFamily: 'monospace', wordBreak: 'break-all' }}>{endpointUrl}</div>
             <div
               className="btn btn-secondary"
               style={{ position: 'absolute', right: '6px', top: '6px', padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}

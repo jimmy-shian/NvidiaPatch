@@ -77,6 +77,8 @@
     "cooldown": "Cooldown ({{sec}}s)",
     "inactive": "Revoked",
     "unused": "Never used",
+    "addSuccess": "API Key added successfully!",
+    "deleteSuccess": "API Key deleted successfully!",
     "addFailed": "Add failed: {{error}}",
     "deleteConfirm": "Delete this API Key?",
     "apiKeyColumn": "API Key"

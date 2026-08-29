@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export default function useStatsState(api, showConfirm) {
+export default function useStatsState(api, showConfirm, showToast) {
   const { t } = useTranslation();
   const [stats, setStats] = useState({
     hourly: [],
@@ -47,10 +47,16 @@ export default function useStatsState(api, showConfirm) {
       await api.clearTokenUsage();
       const data = await api.fetchTokenUsage();
       if (data) setTokenUsageData(data);
+      if (showToast) {
+        showToast('success', '已清除 Token 消耗記錄', 1500);
+      }
     } catch (err) {
       console.error('Failed to clear token usage:', err);
+      if (showToast) {
+        showToast('error', '清除 Token 記錄失敗：' + err.message, 1500);
+      }
     }
-  }, [api, showConfirm, t]);
+  }, [api, showConfirm, showToast, t]);
 
   const calculateSuccessRate = useCallback(() => {
     if (!stats.hourly || stats.hourly.length === 0) return '100%';

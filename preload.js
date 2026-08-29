@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hide: () => ipcRenderer.send('window-hide'),
   exit: () => ipcRenderer.send('app-exit'),
   notifyRulesUpdated: () => ipcRenderer.send('rules-updated'),
+  notifySettingsUpdated: () => ipcRenderer.send('settings-updated'),
   getGatewayPort: () => ipcRenderer.sendSync('get-gateway-port'),
 
   // Gateway 生命週期控制

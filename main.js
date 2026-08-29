@@ -57,7 +57,7 @@ function loadPortFromDb() {
   } catch (e) {
     console.error('Failed to read PORT from settings cache:', e);
   }
-  return currentPort;
+  return currentPort || 4000;
 }
 
 // 停用 Node.js 預設 HTTP requestTimeout 限制
@@ -428,15 +428,24 @@ function updateTrayMenu() {
     const isStopping = gatewayState === GatewayState.STOPPING;
     const isError = gatewayState === GatewayState.ERROR;
 
+    const displayPort = loadPortFromDb();
     let statusLabel = '系統狀態: Gateway 已停止';
     if (isRunning) {
-      statusLabel = `系統狀態: Gateway 運行中 (埠號 ${currentPort})`;
+      statusLabel = `系統狀態: Gateway 運行中 (埠號 ${displayPort})`;
     } else if (isStarting) {
       statusLabel = '系統狀態: Gateway 啟動中...';
     } else if (isStopping) {
       statusLabel = '系統狀態: Gateway 停止中...';
     } else if (isError) {
       statusLabel = `系統狀態: Gateway 異常 (${lastGatewayError || '請檢查'})`;
+    }
+
+    if (tray) {
+      if (isRunning) {
+        tray.setToolTip(`NVIDIA NIM LLM Gateway (Port ${displayPort}) - 運行中`);
+      } else {
+        tray.setToolTip('NVIDIA NIM LLM Gateway - 已停止');
+      }
     }
 
     const startLabel = isError ? '▶️ 重新嘗試啟動 Gateway' : '▶️ 啟動 Gateway 服務';
@@ -522,7 +531,8 @@ function scheduleTrayMenuUpdate() {
 
 function createTray() {
   tray = new Tray(appIcon);
-  tray.setToolTip('NVIDIA NIM LLM Gateway');
+  const displayPort = loadPortFromDb();
+  tray.setToolTip(`NVIDIA NIM LLM Gateway (Port ${displayPort})`);
   updateTrayMenu();
 
   tray.on('double-click', () => {
@@ -545,6 +555,11 @@ app.on('second-instance', () => {
 // IPC 監聽
 ipcMain.on('rules-updated', () => {
   console.log('[Tray] Rules database updated. Scheduling Tray context menu rebuild...');
+  scheduleTrayMenuUpdate();
+});
+
+ipcMain.on('settings-updated', () => {
+  console.log('[Tray] Settings updated. Scheduling Tray menu update...');
   scheduleTrayMenuUpdate();
 });
 

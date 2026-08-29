@@ -78,6 +78,8 @@
     "cooldown": "冷却中 ({{sec}}s)",
     "inactive": "無効",
     "unused": "未使用",
+    "addSuccess": "APIキーが正常に追加されました！",
+    "deleteSuccess": "APIキーが正常に削除されました！",
     "addFailed": "追加失敗: {{error}}",
     "deleteConfirm": "このAPIキーを削除しますか？",
     "apiKeyColumn": "API Key"

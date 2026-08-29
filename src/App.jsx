@@ -4,6 +4,7 @@ import useGatewayApi from './hooks/useGatewayApi';
 import useRealtimeEvents from './hooks/useRealtimeEvents';
 import useNotifications from './hooks/useNotifications';
 import usePlaygroundChat from './hooks/usePlaygroundChat';
+import useToast from './hooks/useToast';
 
 import useKeysState from './hooks/useKeysState';
 import useModelsState from './hooks/useModelsState';
@@ -12,6 +13,7 @@ import useSettingsState from './hooks/useSettingsState';
 import useLogsState from './hooks/useLogsState';
 import useStatsState from './hooks/useStatsState';
 
+import ToastContainer from './components/shared/ToastContainer';
 import ConfirmationModal from './components/shared/ConfirmationModal';
 import RulesPanel from './components/Rules/RulesPanel';
 import Sidebar from './components/shared/Sidebar';
@@ -25,17 +27,23 @@ import PlaygroundPanel from './components/Playground/PlaygroundPanel';
 
 export default function App() {
   const { t } = useTranslation();
+  const { toasts, showToast, removeToast } = useToast(1500);
 
-  const getGatewayUrl = () => {
+  const getGatewayPort = () => {
     if (window.electronAPI && window.electronAPI.getGatewayPort) {
       try {
         const port = window.electronAPI.getGatewayPort();
-        return `http://localhost:${port}`;
+        if (port) return Number(port);
       } catch (e) {
         console.error('Failed to get gateway port via IPC:', e);
       }
     }
-    return `http://localhost:4000`;
+    return 4000;
+  };
+
+  const getGatewayUrl = () => {
+    const port = getGatewayPort();
+    return `http://127.0.0.1:${port}`;
   };
   const GATEWAY_URL = getGatewayUrl();
 
@@ -157,12 +165,12 @@ export default function App() {
 
 
   // Dedicated modular state hooks
-  const keysState = useKeysState(api, fetchData, showConfirm);
-  const modelsState = useModelsState(api, fetchData, setSelectedTestModel);
-  const rulesState = useRulesState(api, fetchData);
+  const keysState = useKeysState(api, fetchData, showConfirm, showToast);
+  const modelsState = useModelsState(api, fetchData, setSelectedTestModel, showToast);
+  const rulesState = useRulesState(api, fetchData, showToast);
   const settingsState = useSettingsState(api);
   const logsState = useLogsState(api);
-  const statsState = useStatsState(api, showConfirm);
+  const statsState = useStatsState(api, showConfirm, showToast);
 
   const { notifyAllKeysDown } = useNotifications();
 
@@ -263,7 +271,12 @@ export default function App() {
     onKeys: (data) => { if (data.action !== 'test') fetchData(); },
     onModels: () => { fetchData(); },
     onRules: () => { fetchData(); },
-    onSettings: (data) => { settingsState.setSettingsData(data); },
+    onSettings: (data) => {
+      settingsState.setSettingsData(data);
+      if (window.electronAPI?.notifySettingsUpdated) {
+        window.electronAPI.notifySettingsUpdated();
+      }
+    },
     onTokenUsage: () => { statsState.loadTokenUsage(); },
     onHealth: (data) => { setGatewayHealth(data); },
     onReconnect: () => { fetchData(); }
@@ -289,11 +302,12 @@ export default function App() {
   const showRestartNotice = useCallback((type, message) => {
     if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
     setRestartNotice({ type, message });
+    showToast(type, message, 1500);
     restartNoticeTimerRef.current = setTimeout(() => {
       setRestartNotice(null);
       restartNoticeTimerRef.current = null;
-    }, 10000);
-  }, []);
+    }, 1500);
+  }, [showToast]);
 
   const handleStartGateway = useCallback(async () => {
     if (isOperatingGateway) return;
@@ -394,7 +408,8 @@ export default function App() {
   const copyToClipboard = (text, id) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+    showToast('success', t('rules.copied') || '已複製到剪貼簿！', 1500);
+    setTimeout(() => setCopiedId(null), 1500);
   };
 
   return (
@@ -468,6 +483,8 @@ export default function App() {
                 getTotalRequests={statsState.getTotalRequests}
                 calculateSuccessRate={statsState.calculateSuccessRate}
                 getGatewayUrl={getGatewayUrl}
+                gatewayPort={settingsState.settingsData?.PORT || getGatewayPort()}
+                settingsData={settingsState.settingsData}
                 hoveredHourlyIndex={statsState.hoveredHourlyIndex}
                 setHoveredHourlyIndex={statsState.setHoveredHourlyIndex}
               />
@@ -578,6 +595,7 @@ export default function App() {
         settingsData={settingsState.settingsData}
         setIsSettingsModalOpen={settingsState.setIsSettingsModalOpen}
         saveSettings={settingsState.saveSettings}
+        showToast={showToast}
       />
 
       <ConfirmationModal
@@ -590,6 +608,8 @@ export default function App() {
         cancelText={confirmModal.cancelText}
         type={confirmModal.type}
       />
+
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
     </div>
   );
 }
