@@ -327,6 +327,26 @@ const translationRules = [
     ja: "リクエスト #$1：Gateway スケジュールプロセスで予期しないエラーが発生しました: $2"
   },
   {
+    regex: /請求 #(\d+)：模型「(.*?)」第 (\d+) 輪判定為模型層級失敗（原因：(.*?)），跳過剩餘輪次並切換下一個模型。/,
+    en: "Request #$1: Model \"$2\" round $3 hit model-level failure (Reason: $4); skipping remaining rounds and switching to next model.",
+    ja: "リクエスト #$1：モデル「$2」の第 $3 ラウンドでモデルエラーが検出されました（原因: $4）。残りのラウンドをスキップし、次のモデルに切り替えます。"
+  },
+  {
+    regex: /請求 #(\d+)：模型「(.*?)」\[API 端伺服器錯誤 \(HTTP 200 假成功\)\] (.*)/,
+    en: "Request #$1: Model \"$2\" [Upstream Server Error (HTTP 200 fake success)] $3",
+    ja: "リクエスト #$1：モデル「$2」[APIサーバーエラー (HTTP 200 偽成功)] $3"
+  },
+  {
+    regex: /請求 #(\d+)：模型「(.*?)」\[輸入端內容審查 \/ 安全拒絕\] (.*)/,
+    en: "Request #$1: Model \"$2\" [Input Content Moderation / Safety Refusal] $3",
+    ja: "リクエスト #$1：モデル「$2」[入力コンテンツ審査 / 安全拒否] $3"
+  },
+  {
+    regex: /請求 #(\d+)：模型「(.*?)」\[API 端讀取超時\] (.*)/,
+    en: "Request #$1: Model \"$2\" [Upstream Read Timeout] $3",
+    ja: "リクエスト #$1：モデル「$2」[API読み込みタイムアウト] $3"
+  },
+  {
     regex: /\[模型測試\] 使用 Key (.*?) 測試模型「(.*?)」（第 (\d+)\/(\d+) 把）。/,
     en: "[Key Test] Testing model \"$2\" using key $1 (Key $3/$4).",
     ja: "[モデルテスト] キー $1 を使用してモデル「$2」をテスト中 (キー $3/$4)。"
@@ -337,6 +357,7 @@ const translationRules = [
     ja: "[モデルテスト] キーID $1 は NIM HTTP $2 を受信しました: $3"
   }
 ];
+
 
 export function translateLogMessage(message, lang) {
   if (message === undefined || message === null) return "";

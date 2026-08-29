@@ -14,7 +14,7 @@
  */
 
 const { scanTags } = require('./fastTagScanner');
-const { isUpstreamErrorContent } = require('./upstreamErrorDetector');
+const { isUpstreamErrorContent, extractUpstreamErrorDetail } = require('./upstreamErrorDetector');
 
 /**
  * 驗證文字內容中的標記結構完整性。
@@ -64,5 +64,7 @@ module.exports = {
   smartValidate,
   quickValidate,
   formatValidationIssue,
-  isUpstreamErrorContent
+  isUpstreamErrorContent,
+  extractUpstreamErrorDetail
 };
+

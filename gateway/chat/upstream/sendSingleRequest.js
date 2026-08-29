@@ -160,61 +160,68 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
 
     if (response.status === 429) {
       const errText = await readTextSafely(response);
-      addLog('warning', `請求 #${requestId}：Key ID ${key.id} 遇到 429 速率限制，該 Key 進入 30 秒冷卻，改用下一把 Key 繼續同一模型「${modelId}」。`);
+      addLog('warning', `請求 #${requestId}：[API 端速率限制 (HTTP 429)] Key ID ${key.id} 達到呼叫頻率限制，該 Key 進入 30 秒冷卻，改用下一把 Key 繼續同一模型「${modelId}」。原因：${errText.substring(0, 160) || '429 Rate Limit Exceeded'}`);
       if (isNumericKey) apiKeys.recordCooldown(key.id, 30, errText || '429 Rate Limit Exceeded');
       stats.recordRequest(false);
-      return { success: false, retryScope: 'key', statusCode: 429, errorText: errText || '429 Rate Limit Exceeded' };
+      return { success: false, retryScope: 'key', statusCode: 429, errorText: `[API 端速率限制] ${errText || '429 Rate Limit Exceeded'}` };
     }
 
     if (response.status === 401 || response.status === 403) {
       const errText = await readTextSafely(response);
-      addLog('error', `請求 #${requestId}：Key ID ${key.id} 回傳 HTTP ${response.status}，已設為停用，改用下一把 Key 繼續同一模型「${modelId}」。`);
-      if (isNumericKey) apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
+      addLog('error', `請求 #${requestId}：[API 端金鑰錯誤 (HTTP ${response.status})] Key ID ${key.id} 授權失敗或金鑰已失效，已設為停用，改用下一把 Key 繼續同一模型「${modelId}」。原因：${errText.substring(0, 160)}`);
+      if (isNumericKey) apiKeys.updateStatus(key.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid (${errText.substring(0, 80)})`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'key', statusCode: response.status, errorText: errText };
+      return { success: false, retryScope: 'key', statusCode: response.status, errorText: `[API 端金鑰錯誤] HTTP ${response.status}: ${errText}` };
     }
 
     if (response.status === 404) {
       const errText = await readTextSafely(response);
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 404，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+      addLog('warning', `請求 #${requestId}：[API 端模型/端點不存在 (HTTP 404)] 模型「${modelId}」在端點不存在或不支援，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 404, errorText: errText || 'HTTP 404' };
+      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 404, errorText: `[API 端端點錯誤] HTTP 404: ${errText || 'Model not found'}` };
+    }
+
+    if (response.status === 410) {
+      const errText = await readTextSafely(response);
+      addLog('warning', `請求 #${requestId}：[API 端模型已下架 (HTTP 410)] 模型「${modelId}」已終止服務或已下架（Gone），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 410, errorText: `[API 端模型已下架] HTTP 410: ${errText || 'Model has reached end of life'}` };
     }
 
     if (response.status >= 500) {
       const errText = await readTextSafely(response);
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP ${response.status}，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+      addLog('warning', `請求 #${requestId}：[API 端伺服器錯誤 (HTTP ${response.status})] 模型「${modelId}」上游伺服器異常，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText || `HTTP ${response.status}` };
+      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: `[API 端伺服器錯誤] HTTP ${response.status}: ${errText || `Server Error ${response.status}`}` };
     }
 
     if (response.status === 400) {
       const errText = await readTextSafely(response);
       if (isContextLimitError(errText)) {
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（長度超出限制），判定為本次請求超出上下文，切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+        addLog('warning', `請求 #${requestId}：[輸入端長度超限 (HTTP 400)] 模型「${modelId}」提示詞超出上下文長度限制（Context Length Exceeded），判定為上下文超出，切換下一個模型。錯誤：${errText.substring(0, 160)}`);
         stats.recordRequest(false);
-        return { success: false, retryScope: 'model', shouldFallbackModel: true, isContextLimit: true, statusCode: 400, errorText: errText };
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, isContextLimit: true, statusCode: 400, errorText: `[輸入端長度超限] ${errText}` };
       }
       if (isDegradedError(errText)) {
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（模型已降級），判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+        addLog('warning', `請求 #${requestId}：[API 端模型降級 (HTTP 400)] 模型「${modelId}」上游模型處於降級狀態，判定為模型層級失敗，立即切換下一個模型。錯誤：${errText.substring(0, 160)}`);
         stats.recordRequest(false);
-        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: `[API 端模型降級] ${errText}` };
       }
       if (isServerError(errText)) {
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（NVIDIA 端伺服器錯誤），判定為模型層級失敗，發起切換下一個模型。錯誤：${errText.substring(0, 160)}`);
+        addLog('warning', `請求 #${requestId}：[API 端伺服器錯誤 (HTTP 400)] 模型「${modelId}」上游回傳伺服器錯誤，判定為模型層級失敗，發起切換下一個模型。錯誤：${errText.substring(0, 160)}`);
         stats.recordRequest(false);
-        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
+        return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: `[API 端伺服器錯誤] ${errText}` };
       }
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP 400（${errText.substring(0, 160)}），判定為模型層級失敗，發起切換下一個模型重試。`);
+      addLog('warning', `請求 #${requestId}：[輸入端格式/參數錯誤 (HTTP 400)] 模型「${modelId}」請求參數不相容或格式錯誤（${errText.substring(0, 160)}），判定為模型層級失敗，發起切換下一個模型重試。`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: errText };
+      return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 400, errorText: `[輸入端格式/參數錯誤] ${errText}` };
     }
 
     const errText = await readTextSafely(response);
-    addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳 HTTP ${response.status}（${errText.substring(0, 160)}），發起切換下一個模型重試。`);
+    addLog('warning', `請求 #${requestId}：[API 端異常狀態 (HTTP ${response.status})] 模型「${modelId}」回傳非預期狀態碼（${errText.substring(0, 160)}），發起切換下一個模型重試。`);
     apiKeys.recordFailure(key.id, `HTTP ${response.status}: ${errText.substring(0, 80)}`);
     stats.recordRequest(false);
-    return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: errText };
+    return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: response.status, errorText: `[API 端異常] HTTP ${response.status}: ${errText}` };
 
   } catch (err) {
     clearTimeout(timeoutId);
@@ -226,21 +233,21 @@ async function sendSingleRequest({ context, model, key, keyIndex, availableKeys,
 
     if (err.name === 'AbortError') {
       if (abortReason === 'client_disconnected' || isClientGone()) {
-        addLog('warning', `請求 #${requestId}：客戶端已中斷連線，取消模型「${modelId}」的 NVIDIA 請求。`);
+        addLog('warning', `請求 #${requestId}：[用戶端中斷] 客戶端已中斷連線，取消模型「${modelId}」的 NVIDIA 請求。`);
         stats.recordRequest(false);
-        return { success: false, clientGone: true, retryScope: 'client', errorText: '客戶端已中斷連線' };
+        return { success: false, clientGone: true, retryScope: 'client', errorText: '[用戶端中斷] 客戶端已中斷連線' };
       }
-      const msg = `請求逾時 ${REQUEST_TIMEOUT_MS / 1000} 秒`;
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生逾時，立即切換下一個模型，不再測試此模型的其他 Key。`);
+      const msg = `[API 端連線逾時] 請求逾時 ${REQUEST_TIMEOUT_MS / 1000} 秒（上游端點未在時限內建立回應）`;
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生連線逾時，立即切換下一個模型，不再測試此模型的其他 Key。`);
       apiKeys.recordFailure(key.id, msg);
       stats.recordRequest(false);
       return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: msg };
     }
 
-    addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} 發生網路或連線錯誤，立即切換下一個模型。錯誤：${err.message}`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」使用 Key ID ${key.id} [API 端連線異常] 發生網路或連線錯誤，立即切換下一個模型。錯誤：${err.message}`);
     apiKeys.recordFailure(key.id, `Network Error: ${err.message}`);
     stats.recordRequest(false);
-    return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: err.message };
+    return { success: false, retryScope: 'model', shouldFallbackModel: true, statusCode: 0, errorText: `[API 端連線異常] ${err.message}` };
   }
 }
 
@@ -250,3 +257,4 @@ module.exports = {
   isDegradedError,
   isServerError
 };
+

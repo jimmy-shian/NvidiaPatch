@@ -6,7 +6,8 @@
  *  1. 串流模式：消費 reader，逐行解析 SSE chunk，將多種可能欄位
  *     (delta.content / delta.reasoning_content / message.content / text / content)
  *     合併為 fullContent；最終交給 smartValidate 校驗。
- *     - 空內容 → 重試同一模型（forceRetrySameModelOnEmpty）
+ *     - 上游錯誤 / 審查拒絕 → 切換模型（forceFallbackModel）
+ *     - 空內容 → 依空回傳策略重試同一模型（forceRetrySameModelOnEmpty）
  *     - 校驗失敗 → 切換模型（forceFallbackModel）
  *     - 逾時 / 客戶端中斷 → 對應分支
  *
@@ -17,7 +18,7 @@
 
 const { apiKeys, stats } = require('../../../database');
 const { addLog } = require('../../logs/logger');
-const { smartValidate, formatValidationIssue, isUpstreamErrorContent } = require('../../engine/contentValidator');
+const { smartValidate, formatValidationIssue, isUpstreamErrorContent, extractUpstreamErrorDetail } = require('../../engine/contentValidator');
 const { isFakeStreamContent } = require('../utils/fakeStreamFilter');
 
 function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
@@ -38,7 +39,7 @@ function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
   });
 }
 
-function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef) {
+function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMetaRef = { dataChunkCount: 0, lastError: null, refusal: null }) {
   const cleanLine = String(rawLine || '').endsWith('\r')
     ? String(rawLine || '').slice(0, -1)
     : String(rawLine || '');
@@ -46,21 +47,35 @@ function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasT
   sseLines.push(cleanLine);
 
   const trimmed = cleanLine.trim();
-  if (!trimmed.startsWith('data:') || trimmed.includes('[DONE]')) return;
+  if (!trimmed.startsWith('data:') || trimmed.includes('[DONE]')) return null;
 
   try {
     const dataStr = trimmed.slice(5).trim();
     const chunk = JSON.parse(dataStr);
+    if (streamMetaRef) streamMetaRef.dataChunkCount = (streamMetaRef.dataChunkCount || 0) + 1;
+
+    // 檢查上游是否在 SSE chunk 中夾帶錯誤資訊
+    if (chunk?.error) {
+      const errDetail = extractUpstreamErrorDetail(chunk.error) || JSON.stringify(chunk.error);
+      if (streamMetaRef) streamMetaRef.lastError = errDetail;
+    } else if (chunk?.message && isUpstreamErrorContent(chunk.message)) {
+      if (streamMetaRef) streamMetaRef.lastError = String(chunk.message);
+    }
 
     const delta = chunk?.choices?.[0]?.delta;
     const msg = chunk?.choices?.[0]?.message;
+
+    // 檢查是否有拒絕回覆（Refusal / Moderation）
+    if (delta?.refusal || msg?.refusal) {
+      if (streamMetaRef) streamMetaRef.refusal = delta?.refusal || msg?.refusal;
+    }
 
     // 檢查是否有 tool_calls / function_call
     if (delta?.tool_calls || delta?.function_call || msg?.tool_calls || msg?.function_call) {
       if (hasToolCallsRef) hasToolCallsRef.value = true;
     }
 
-    // 記錄 finish_reason（如 "length" 表示輸出被截斷，"tool_calls" 表示工具調用）
+    // 記錄 finish_reason（如 "length", "content_filter", "tool_calls", "stop"）
     const finishReason = chunk?.choices?.[0]?.finish_reason;
     if (finishReason && finishReasonRef && !finishReasonRef.value) {
       finishReasonRef.value = finishReason;
@@ -141,6 +156,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
   const fullContentRef = { value: '' };
   const finishReasonRef = { value: null };
   const hasToolCallsRef = { value: false };
+  const streamMeta = { dataChunkCount: 0, lastError: null, refusal: null };
   let streamUsage = null;
 
   try {
@@ -156,7 +172,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       streamBuffer = lines.pop() || '';
 
       for (const line of lines) {
-        const usage = consumeSseLine(line, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef);
+        const usage = consumeSseLine(line, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMeta);
         if (usage) streamUsage = usage;
       }
     }
@@ -164,29 +180,46 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
     const fullContent = fullContentRef.value;
     const hasToolCalls = hasToolCallsRef.value || finishReasonRef.value === 'tool_calls' || finishReasonRef.value === 'function_call';
 
-    // 若 NVIDIA 回傳 finish_reason = "length"，表示輸出因 max_tokens 被截斷，
-    // 視為模型層級失敗，立即切換下一個模型（或重試），避免把不完整內容當成功回傳。
+    // 1. 檢查上游 SSE chunk 是否夾帶明確錯誤物件
+    if (streamMeta.lastError || (fullContent && isUpstreamErrorContent(fullContent))) {
+      const errDetail = streamMeta.lastError || extractUpstreamErrorDetail(fullContent);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 上游回傳內容包含錯誤訊息（${errDetail}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${errDetail.substring(0, 80)}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 上游回傳錯誤：${errDetail}` };
+    }
+
+    // 2. 檢查安全過濾 / 拒絕回覆（finish_reason="content_filter" 或 refusal）
+    if (finishReasonRef.value === 'content_filter' || streamMeta.refusal) {
+      const refusalMsg = streamMeta.refusal ? `，拒絕原因：${streamMeta.refusal}` : '';
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸入端內容審查 / 安全拒絕] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: content_filter / refusal${refusalMsg}`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸入端內容審查] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}）` };
+    }
+
+    // 3. 檢查輸出是否因 max_tokens 被截斷
     if (finishReasonRef.value === 'length') {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，立即切換下一個模型。`);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸出長度截斷] 串流輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸出長度截斷] 輸出因達到 max_tokens 上限被截斷（finish_reason="length"）` };
     }
 
-    // 1. 檢查空內容（若有 tool_calls 或 function_call 則為正常的工具調用，不判定為空內容）
+    // 4. 檢查空內容（若有 tool_calls 或 function_call 則為正常的工具調用，不判定為空內容）
     if (!hasToolCalls && (fullContent === null || fullContent === undefined || fullContent === '')) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+      let emptyDetail = '';
+      if (streamMeta.dataChunkCount === 0) {
+        emptyDetail = `[API 端異常] 上游建立 HTTP 200 連線但未發送任何 Chunk（接收 0 個 Chunk）即結束連線`;
+      } else if (finishReasonRef.value === 'stop') {
+        emptyDetail = `[模型回傳為空] 上游完成推論（finish_reason="stop"，接收 ${streamMeta.dataChunkCount} 個 Chunk）但未輸出任何內容 Token（可能是輸入格式或 Prompt 導致模型無輸出）`;
+      } else {
+        emptyDetail = `[模型回傳為空] 上游串流內容為空（接收 ${streamMeta.dataChunkCount} 個 Chunk，finish_reason="${finishReasonRef.value || 'none'}"）`;
+      }
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${emptyDetail}，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content (${streamMeta.dataChunkCount} chunks, reason: ${finishReasonRef.value || 'none'})`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
-    }
-
-    // 2. 檢查 HTTP 200 假成功（內容為伺服器錯誤）
-    if (fullContent && isUpstreamErrorContent(fullContent)) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流回傳 HTTP 200 但內容為上游錯誤訊息（${fullContent.substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${fullContent.substring(0, 80)}`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${fullContent.substring(0, 120)}` };
+      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：${emptyDetail}` };
     }
 
     if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
@@ -207,10 +240,10 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       const validation = smartValidate(fullContent, { maxLength: 10000 });
       if (!validation.valid) {
         const validationIssue = formatValidationIssue(validation);
-        addLog('warning', `請求 #${requestId}：模型「${modelId}」串流內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] 串流內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
         apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
         stats.recordRequest(false);
-        return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+        return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[模型生成標記校驗失敗] ${validationIssue}` };
       }
     }
 
@@ -241,13 +274,14 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: false, clientGone: true, errorText: err.message };
     }
     if (isTimeout) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取發生逾時（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `串流讀取逾時：${err.message}`);
+      const timeoutDesc = `[API 端讀取超時] 上游串流讀取逾時（已等待 ${STREAM_READ_TIMEOUT_MS / 1000} 秒，累計接收 ${streamMeta.dataChunkCount} 個 Chunk，上游節點排隊過載無響應）`;
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}，判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `串流讀取逾時（${streamMeta.dataChunkCount} chunks）：${err.message}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: err.message };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: timeoutDesc };
     }
 
-    addLog('warning', `請求 #${requestId}：模型「${modelId}」串流讀取或校驗失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端串流錯誤] 串流讀取或校驗失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
     apiKeys.recordFailure(selectedKey.id, `串流讀取錯誤：${err.message}`);
     stats.recordRequest(false);
     return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
@@ -261,13 +295,6 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
   try {
     const json = await result.response.json();
     const finishReason = json?.choices?.[0]?.finish_reason;
-    if (finishReason === 'length') {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，切換下一個模型重試。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：輸出被截斷（finish_reason="length"）` };
-    }
-
     const targetMsg = json?.choices?.[0]?.message;
     const hasToolCalls = Boolean(
       targetMsg?.function_call ||
@@ -279,19 +306,42 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
 
     // 1. 檢查上游 JSON 或內容是否為伺服器錯誤結構
     if (isUpstreamErrorContent(json) || (contentToCheck && isUpstreamErrorContent(contentToCheck))) {
-      const errDetail = typeof json === 'object' && json.message ? json.message : (contentToCheck || '上游伺服器內部錯誤');
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${String(errDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${String(errDetail).substring(0, 80)}`);
+      const errDetail = extractUpstreamErrorDetail(json) || extractUpstreamErrorDetail(contentToCheck) || '上游伺服器內部錯誤';
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${errDetail}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${errDetail.substring(0, 80)}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `HTTP 200 但內容為上游錯誤：${String(errDetail).substring(0, 120)}` };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] HTTP 200 但內容為上游錯誤：${errDetail}` };
     }
 
-    // 2. 檢查空內容（若有 tool_calls 或 function_call 則為正常工具調用，不判定為空內容）
-    if (!hasToolCalls && contentToCheck === '') {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容為空，判定為空回傳，將依空回傳重試策略重試同一模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content`);
+    // 2. 檢查安全過濾 / 拒絕回覆
+    if (finishReason === 'content_filter' || targetMsg?.refusal) {
+      const refusalMsg = targetMsg?.refusal ? `，拒絕原因：${targetMsg.refusal}` : '';
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸入端內容審查 / 安全拒絕] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}），判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: content_filter / refusal${refusalMsg}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：回傳內容為空` };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸入端內容審查] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}）` };
+    }
+
+    // 3. 檢查輸出截斷
+    if (finishReason === 'length') {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸出長度截斷] JSON 輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，切換下一個模型重試。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸出長度截斷] 輸出因達到 max_tokens 上限被截斷（finish_reason="length"）` };
+    }
+
+    // 4. 檢查空內容（若有 tool_calls 或 function_call 則為正常工具調用，不判定為空內容）
+    if (!hasToolCalls && contentToCheck === '') {
+      let emptyDetail = '';
+      if (finishReason === 'stop') {
+        emptyDetail = `[模型回傳為空] 上游模型完成推論（finish_reason="stop"）但 JSON 內容為空（可能是輸入格式或 Prompt 導致模型無輸出）`;
+      } else {
+        emptyDetail = `[模型回傳為空] 上游 JSON 內容為空（finish_reason="${finishReason || 'none'}"）`;
+      }
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${emptyDetail}，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty JSON content (reason: ${finishReason || 'none'})`);
+      stats.recordRequest(false);
+      return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：${emptyDetail}` };
     }
 
     if (!activeConfig.ENABLE_CONTENT_VALIDATION) {
@@ -312,10 +362,10 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
     const validation = smartValidate(contentToCheck, { maxLength: 10000 });
     if (!validation.valid) {
       const validationIssue = formatValidationIssue(validation);
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 內容校驗失敗（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] JSON 內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `內容校驗失敗：${validationIssue}` };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[模型生成標記校驗失敗] ${validationIssue}` };
     }
 
     let usage = json?.usage;
@@ -332,7 +382,7 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
 
     return { success: true, response: result.response, jsonData: json, usage };
   } catch (err) {
-    addLog('warning', `請求 #${requestId}：模型「${modelId}」JSON 解析失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端格式錯誤] JSON 解析失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
     apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
     stats.recordRequest(false);
     return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: err.message };
@@ -381,6 +431,7 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
   let rawLines = [];
   let hasUpstreamError = false;
   let upstreamErrorDetail = '';
+  let chunkCount = 0;
 
   try {
     while (true) {
@@ -390,6 +441,7 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
       const { done, value } = await readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS);
       if (done) break;
 
+      chunkCount += 1;
       lastChunkBytes = value;
       rawLines.push(value);
 
@@ -420,12 +472,12 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
             contentLength += c.length;
             if (contentLength <= 500 && isUpstreamErrorContent(c)) {
               hasUpstreamError = true;
-              upstreamErrorDetail = c;
+              upstreamErrorDetail = extractUpstreamErrorDetail(c) || c;
             }
           }
           if (chunk?.error || (chunk?.message && isUpstreamErrorContent(chunk.message))) {
             hasUpstreamError = true;
-            upstreamErrorDetail = chunk.error?.message || chunk.message;
+            upstreamErrorDetail = extractUpstreamErrorDetail(chunk.error || chunk.message);
           }
         } catch (e) {
           // 解析失敗不影響透傳
@@ -434,10 +486,10 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
     }
 
     if (hasUpstreamError) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」透傳串流中檢測到上游錯誤訊息（${String(upstreamErrorDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 透傳串流中檢測到上游錯誤訊息（${String(upstreamErrorDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in passthrough stream: ${String(upstreamErrorDetail).substring(0, 80)}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
     }
 
     let usage = upstreamUsage;
@@ -476,13 +528,14 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
       return { success: false, clientGone: true, errorText: err.message };
     }
     if (isTimeout) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」透傳串流讀取發生逾時（${err.message}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `透傳串流讀取逾時：${err.message}`);
+      const timeoutDesc = `[API 端讀取超時] 透傳串流讀取逾時（已等待 ${STREAM_READ_TIMEOUT_MS / 1000} 秒，累計接收 ${chunkCount} 個 Chunk，上游節點排隊過載無響應）`;
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}，判定為模型層級失敗，立即切換下一個模型。`);
+      apiKeys.recordFailure(selectedKey.id, `透傳串流讀取逾時（${chunkCount} chunks）：${err.message}`);
       stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: err.message };
+      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: timeoutDesc };
     }
 
-    addLog('warning', `請求 #${requestId}：模型「${modelId}」透傳串流讀取失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端串流錯誤] 透傳串流讀取失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
     apiKeys.recordFailure(selectedKey.id, `透傳串流讀取錯誤：${err.message}`);
     stats.recordRequest(false);
     return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
@@ -495,4 +548,4 @@ module.exports = {
   readStreamChunkWithTimeout,
   consumeSseLine,
   isUpstreamErrorContent
-};
+};

@@ -151,7 +151,7 @@ function handleRoundFailure({ context, result, currentModel, round }) {
     } else {
       addLog('info', `請求 #${requestId}：模型「${modelId}」因本次請求超出上下文長度限制切換下一個模型，不對該模型設定暫時跳過。`);
     }
-    addLog('warning', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪判定為模型層級失敗，跳過剩餘輪次並切換下一個模型。`);
+    addLog('warning', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪判定為模型層級失敗（原因：${result.errorText || '模型層級失敗'}），跳過剩餘輪次並切換下一個模型。`);
     return { abortModel: true };
   }
 

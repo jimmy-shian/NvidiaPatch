@@ -11,9 +11,10 @@
 const { apiKeys, settings } = require('../../database');
 const { addLog } = require('../logs/logger');
 const { sanitizeChatCompletionBody } = require('../utils/sanitize');
-const { smartValidate, formatValidationIssue } = require('../engine/contentValidator');
+const { smartValidate, formatValidationIssue, isUpstreamErrorContent, extractUpstreamErrorDetail } = require('../engine/contentValidator');
 const ContentValidationError = require('../errors/ContentValidationError');
 const { resolveChatCompletionsUrl, isCustomUpstreamUrl } = require('../utils/urlHelper');
+const { isContextLimitError } = require('./upstream/sendSingleRequest');
 
 async function handleTestChat(req, res) {
   const { model, messages, stream, response_format } = req.body;
@@ -56,6 +57,7 @@ async function handleTestChat(req, res) {
     }
 
     const selectedKey = activeKeys[keyIndex];
+    const isNumericKey = typeof selectedKey.id === 'number';
     addLog('info', `[模型測試] 使用 Key ...${selectedKey.key_value.substring(selectedKey.key_value.length - 8)} 測試模型「${model}」（第 ${keyIndex + 1}/${activeKeys.length} 把）。`);
 
     const abortController = new AbortController();
@@ -108,12 +110,44 @@ async function handleTestChat(req, res) {
         const errText = await response.text();
 
         if (response.status === 404) {
-          addLog('error', `[模型測試] 模型「${model}」在端點回傳 404（模型不存在或端點不支援）：${errText.substring(0, 160)}`);
+          addLog('error', `[模型測試] [API 端端點錯誤 (HTTP 404)] 模型「${model}」在端點不存在或不支援：${errText.substring(0, 160)}`);
           return res.status(404).json({
             error: {
-              message: `模型「${model}」不存在或端點不支援（HTTP 404）：${errText}`,
+              message: `[API 端錯誤] 模型「${model}」不存在或端點不支援（HTTP 404）：${errText}`,
               type: 'invalid_request_error',
               code: 'model_not_found'
+            }
+          });
+        }
+
+        if (response.status === 410) {
+          addLog('error', `[模型測試] [API 端模型已下架 (HTTP 410)] 模型「${model}」已終止服務或下架：${errText.substring(0, 160)}`);
+          return res.status(410).json({
+            error: {
+              message: `[API 端錯誤] 模型「${model}」已終止服務或下架（HTTP 410 Gone）：${errText}`,
+              type: 'invalid_request_error',
+              code: 'model_gone'
+            }
+          });
+        }
+
+        if (response.status === 400) {
+          if (isContextLimitError(errText)) {
+            addLog('warning', `[模型測試] [輸入端長度超限 (HTTP 400)] 模型「${model}」提示詞長度超出上限：${errText.substring(0, 160)}`);
+            return res.status(400).json({
+              error: {
+                message: `[輸入端長度超限] 提示詞長度超出模型上下文上限（HTTP 400）：${errText}`,
+                type: 'invalid_request_error',
+                code: 'context_length_exceeded'
+              }
+            });
+          }
+          addLog('warning', `[模型測試] [輸入端格式/參數錯誤 (HTTP 400)] 模型「${model}」收到 HTTP 400：${errText.substring(0, 160)}`);
+          return res.status(400).json({
+            error: {
+              message: `[輸入端格式錯誤] 請求格式或參數不相容（HTTP 400）：${errText}`,
+              type: 'invalid_request_error',
+              code: 'invalid_request_error'
             }
           });
         }
@@ -121,18 +155,21 @@ async function handleTestChat(req, res) {
         addLog('warning', `[模型測試] Key ID ${selectedKey.id} 收到 HTTP ${response.status}：${errText}`);
 
         if (response.status === 401 || response.status === 403) {
+          addLog('error', `[模型測試] [API 端金鑰錯誤 (HTTP ${response.status})] Key ID ${selectedKey.id} 授權失敗，已標記為停用。`);
           if (isNumericKey) apiKeys.updateStatus(selectedKey.id, 'inactive', `HTTP ${response.status}: Key revoked/invalid`);
           return attemptTestChat(keyIndex + 1);
         } else if (response.status === 429) {
+          addLog('warning', `[模型測試] [API 端速率限制 (HTTP 429)] Key ID ${selectedKey.id} 遇到速率限制，進入 30 秒冷卻。`);
           if (isNumericKey) apiKeys.recordCooldown(selectedKey.id, 30, '429 Rate Limit Exceeded');
           return attemptTestChat(keyIndex + 1);
         } else if (response.status >= 500) {
+          addLog('warning', `[模型測試] [API 端伺服器錯誤 (HTTP ${response.status})] 上游伺服器異常，嘗試下一把 Key。`);
           return attemptTestChat(keyIndex + 1);
         }
 
         return res.status(response.status).json({
           error: {
-            message: errText,
+            message: `[API 端異常狀態] HTTP ${response.status}: ${errText}`,
             type: 'invalid_request_error',
             code: 'test_chat_error'
           }
@@ -143,6 +180,10 @@ async function handleTestChat(req, res) {
         const reader = response.body.getReader();
         let fullContent = '';
         const noValidation = !enableContentValidation;
+        let dataChunkCount = 0;
+        let finishReason = null;
+        let streamError = null;
+        let refusalText = null;
 
         function writeStreamError(message, detail) {
           try {
@@ -179,19 +220,50 @@ async function handleTestChat(req, res) {
             const { done, value } = await reader.read();
             if (done) {
               if (!noValidation) {
-                if (!hasToolCalls && (!fullContent || !fullContent.trim())) {
-                  addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：模型回傳了空內容。`);
+                // 1. 檢查上游錯誤
+                if (streamError || isUpstreamErrorContent(fullContent)) {
+                  const errDetail = streamError || extractUpstreamErrorDetail(fullContent);
+                  addLog('error', `[模型測試｜內容校驗] [API 端伺服器錯誤 (HTTP 200 假成功)] 串流內容為伺服器錯誤訊息：${errDetail}`);
                   if (!res.headersSent) {
-                    throw new ContentValidationError('模型回傳空內容 (Empty Content)');
+                    throw new ContentValidationError(`[API 端伺服器錯誤] ${errDetail}`);
                   }
-                  writeStreamError('模型回傳空內容');
+                  writeStreamError('[API 端伺服器錯誤]', errDetail);
                   return;
                 }
+
+                // 2. 檢查審查 / 拒絕
+                if (finishReason === 'content_filter' || refusalText) {
+                  const refusalMsg = refusalText ? `，原因：${refusalText}` : '';
+                  addLog('error', `[模型測試｜內容校驗] [輸入端內容審查 / 安全拒絕] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}）`);
+                  if (!res.headersSent) {
+                    throw new ContentValidationError(`[輸入端內容審查] 觸發安全審查機制${refusalMsg}`);
+                  }
+                  writeStreamError('[輸入端內容審查]', `觸發安全審查機制${refusalMsg}`);
+                  return;
+                }
+
+                // 3. 檢查空內容
+                if (!hasToolCalls && (!fullContent || !fullContent.trim())) {
+                  let emptyDetail = '';
+                  if (dataChunkCount === 0) {
+                    emptyDetail = '[API 端異常] 上游建立連線但未發送任何 Chunk（0 chunks）即結束';
+                  } else {
+                    emptyDetail = `[模型回傳為空] 上游完成推論（接收 ${dataChunkCount} 個 Chunk，finish_reason="${finishReason || 'none'}"）但未產生文字內容`;
+                  }
+                  addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：${emptyDetail}`);
+                  if (!res.headersSent) {
+                    throw new ContentValidationError(emptyDetail);
+                  }
+                  writeStreamError('模型回傳空內容', emptyDetail);
+                  return;
+                }
+
+                // 4. 標記結構校驗
                 if (fullContent && fullContent.trim()) {
                   const validation = smartValidate(fullContent, { maxLength: 10000 });
                   if (!validation.valid) {
                     const issue = formatValidationIssue(validation);
-                    addLog('error', `[模型測試｜內容校驗] 串流回應被拒收：偵測到不合法或未閉合標籤：${issue}。`);
+                    addLog('error', `[模型測試｜內容校驗] [模型生成標記校驗失敗] 偵測到不合法或未閉合標籤：${issue}。`);
                     if (!res.headersSent) {
                       throw new ContentValidationError(fullContent);
                     }
@@ -235,13 +307,24 @@ async function handleTestChat(req, res) {
                 try {
                   const dataStr = trimmed.slice(5).trim();
                   const parsed = JSON.parse(dataStr);
+                  dataChunkCount += 1;
+
+                  if (parsed?.error) {
+                    streamError = extractUpstreamErrorDetail(parsed.error);
+                  } else if (parsed?.message && isUpstreamErrorContent(parsed.message)) {
+                    streamError = String(parsed.message);
+                  }
+
                   if (parsed.choices && parsed.choices[0]) {
                     const delta = parsed.choices[0].delta;
                     const msg = parsed.choices[0].message;
                     const txt = parsed.choices[0].text;
                     const content = parsed.choices[0].content;
-                    const finishReason = parsed.choices[0].finish_reason;
-                    if (delta?.tool_calls || delta?.function_call || msg?.tool_calls || msg?.function_call || finishReason === 'tool_calls' || finishReason === 'function_call') {
+                    const fReason = parsed.choices[0].finish_reason;
+                    if (fReason && !finishReason) finishReason = fReason;
+                    if (delta?.refusal || msg?.refusal) refusalText = delta?.refusal || msg?.refusal;
+
+                    if (delta?.tool_calls || delta?.function_call || msg?.tool_calls || msg?.function_call || fReason === 'tool_calls' || fReason === 'function_call') {
                       hasToolCalls = true;
                     }
                     const add = (s) => { if (typeof s === 'string') fullContent += s; };
@@ -271,14 +354,14 @@ async function handleTestChat(req, res) {
           await readTestStream();
         } catch (err) {
           if (err.name === 'ContentValidationError') {
-            addLog('error', `[模型測試] 內容在送到前端前校驗失敗，改用下一把 Key 重新生成。`);
+            addLog('error', `[模型測試] 內容在送到前端前校驗失敗（${err.message}），改用下一把 Key 重新生成。`);
             return attemptTestChat(keyIndex + 1);
           }
-          addLog('error', `[模型測試] 串流讀取錯誤：${err.message}`);
+          addLog('error', `[模型測試] [API 端串流錯誤] 串流讀取錯誤：${err.message}`);
           if (!res.headersSent) {
             return res.status(502).json({
               error: {
-                message: `串流讀取錯誤：${err.message}`,
+                message: `[API 端串流錯誤] 串流讀取錯誤：${err.message}`,
                 type: 'api_error',
                 code: 'stream_error'
               }
@@ -294,6 +377,7 @@ async function handleTestChat(req, res) {
           return c;
         };
         const target = json?.choices?.[0]?.message;
+        const finishReason = json?.choices?.[0]?.finish_reason;
         if (target) {
           if (typeof target.content === 'string') target.content = stripFake(target.content);
           if (typeof target.reasoning_content === 'string') target.reasoning_content = stripFake(target.reasoning_content);
@@ -301,10 +385,24 @@ async function handleTestChat(req, res) {
         let contentToCheck = target?.content || target?.reasoning_content || '';
 
         if (enableContentValidation) {
+          // 1. 檢查上游錯誤
+          if (isUpstreamErrorContent(json) || (contentToCheck && isUpstreamErrorContent(contentToCheck))) {
+            const errDetail = extractUpstreamErrorDetail(json) || extractUpstreamErrorDetail(contentToCheck);
+            addLog('error', `[模型測試｜內容校驗] [API 端伺服器錯誤 (HTTP 200 假成功)] 上游回傳伺服器錯誤：${errDetail}`);
+            return attemptTestChat(keyIndex + 1);
+          }
+
+          // 2. 檢查審查拒絕
+          if (finishReason === 'content_filter' || target?.refusal) {
+            const refusalMsg = target?.refusal ? `，原因：${target.refusal}` : '';
+            addLog('error', `[模型測試｜內容校驗] [輸入端內容審查 / 安全拒絕] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}）`);
+            return attemptTestChat(keyIndex + 1);
+          }
+
           const validation = smartValidate(contentToCheck, { maxLength: 10000 });
           if (!validation.valid) {
             const validationIssue = formatValidationIssue(validation);
-            addLog('error', `[模型測試｜內容校驗] 非串流回應被拒收：偵測到不合法或未閉合標籤：${validationIssue}，改用下一把 Key 重新生成。`);
+            addLog('error', `[模型測試｜內容校驗] [模型生成標記校驗失敗] 偵測到不合法或未閉合標籤：${validationIssue}，改用下一把 Key 重新生成。`);
             return attemptTestChat(keyIndex + 1);
           }
         }
@@ -320,16 +418,16 @@ async function handleTestChat(req, res) {
       }
 
       if (isClientDisconnected || res.destroyed || res.writableEnded) {
-        addLog('warning', `[模型測試] 客戶端已中斷連線，停止模型「${model}」測試。`);
+        addLog('warning', `[模型測試] [用戶端中斷] 客戶端已中斷連線，停止模型「${model}」測試。`);
         return;
       }
 
       if (isTimedOut || err.name === 'AbortError') {
-        addLog('error', `[模型測試] 模型「${model}」測試逾時（已達 ${testTimeoutMs / 1000} 秒），NVIDIA 上游端點無回應。`);
+        addLog('error', `[模型測試] [API 端逾時] 模型「${model}」測試逾時（已達 ${testTimeoutMs / 1000} 秒），NVIDIA 上游端點無回應。`);
         if (!res.headersSent && !res.writableEnded) {
           return res.status(504).json({
             error: {
-              message: `模型「${model}」測試逾時（已達 ${testTimeoutMs / 1000} 秒），NVIDIA 上游端點無回應。`,
+              message: `[API 端逾時] 模型「${model}」測試逾時（已達 ${testTimeoutMs / 1000} 秒），NVIDIA 上游端點無回應。`,
               type: 'timeout_error',
               code: 'model_timeout'
             }
@@ -338,13 +436,14 @@ async function handleTestChat(req, res) {
         return;
       }
 
-      addLog('warning', `[模型測試] Key ID ${selectedKey.id} 請求失敗：${err.message}`);
+      addLog('warning', `[模型測試] [API 端連線異常] Key ID ${selectedKey.id} 請求失敗：${err.message}`);
       return attemptTestChat(keyIndex + 1);
     }
   }
 
   await attemptTestChat(0);
 }
+
 
 module.exports = {
   handleTestChat
