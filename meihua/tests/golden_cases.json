@@ -1,0 +1,67 @@
+[
+  {
+    "description": "經典案例一：數字 6, 8 (坎上坤下，水地比，二爻動)",
+    "input": { "method": "number", "a": 6, "b": 8 },
+    "expected": {
+      "primary": { "upper": "坎", "lower": "坤", "name": "比", "fullName": "水地比" },
+      "movingLine": 2,
+      "mutual": { "upper": "艮", "lower": "坤", "fullName": "山地剝" },
+      "changed": { "upper": "坎", "lower": "坎", "fullName": "坎為水" },
+      "ti": { "name": "坎", "element": "水", "position": "upper" },
+      "yong": { "name": "坤", "element": "土", "position": "lower" },
+      "relation": "用剋體"
+    }
+  },
+  {
+    "description": "經典案例二：數字 1, 4 (乾上震下，天雷無妄，動爻 5)",
+    "input": { "method": "number", "a": 1, "b": 4, "moving": 5 },
+    "expected": {
+      "primary": { "upper": "乾", "lower": "震", "name": "無妄", "fullName": "天雷無妄" },
+      "movingLine": 5,
+      "mutual": { "upper": "巽", "lower": "艮", "fullName": "風山漸" },
+      "changed": { "upper": "離", "lower": "震", "fullName": "火雷噬嗑" },
+      "ti": { "name": "震", "element": "木", "position": "lower" },
+      "yong": { "name": "乾", "element": "金", "position": "upper" },
+      "relation": "用剋體"
+    }
+  },
+  {
+    "description": "經典案例三：數字 8, 8 (坤為地，動爻 6)",
+    "input": { "method": "number", "a": 8, "b": 8, "moving": 6 },
+    "expected": {
+      "primary": { "upper": "坤", "lower": "坤", "name": "坤", "fullName": "坤為地" },
+      "movingLine": 6,
+      "mutual": { "upper": "坤", "lower": "坤", "fullName": "坤為地" },
+      "changed": { "upper": "艮", "lower": "坤", "fullName": "山地剝" },
+      "ti": { "name": "坤", "element": "土", "position": "lower" },
+      "yong": { "name": "坤", "element": "土", "position": "upper" },
+      "relation": "比和"
+    }
+  },
+  {
+    "description": "經典案例四：數字 3, 2 (離上兌下，火澤睽，動爻 1)",
+    "input": { "method": "number", "a": 3, "b": 2, "moving": 1 },
+    "expected": {
+      "primary": { "upper": "離", "lower": "兌", "name": "睽", "fullName": "火澤睽" },
+      "movingLine": 1,
+      "mutual": { "upper": "坎", "lower": "離", "fullName": "水火既濟" },
+      "changed": { "upper": "離", "lower": "坎", "fullName": "火水未濟" },
+      "ti": { "name": "離", "element": "火", "position": "upper" },
+      "yong": { "name": "兌", "element": "金", "position": "lower" },
+      "relation": "體剋用"
+    }
+  },
+  {
+    "description": "經典案例五：數字 6, 4 (坎上震下，水雷屯，動爻 4)",
+    "input": { "method": "number", "a": 6, "b": 4, "moving": 4 },
+    "expected": {
+      "primary": { "upper": "坎", "lower": "震", "name": "屯", "fullName": "水雷屯" },
+      "movingLine": 4,
+      "mutual": { "upper": "艮", "lower": "坤", "fullName": "山地剝" },
+      "changed": { "upper": "兌", "lower": "震", "fullName": "澤雷隨" },
+      "ti": { "name": "震", "element": "木", "position": "lower" },
+      "yong": { "name": "坎", "element": "水", "position": "upper" },
+      "relation": "用生體"
+    }
+  }
+]

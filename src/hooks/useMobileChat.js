@@ -216,6 +216,27 @@ export function useMobileChat({
     setInput('');
   }, [currentProviderId, currentModelId, selectedSkillIds]);
 
+  const newMeihuaChat = useCallback(async () => {
+    setIsStreaming(false);
+    setIsReasoningActive(false);
+    setLiveStatus(null);
+    setActiveSummary(null);
+
+    const newConv = await LocalDB.saveConversation({
+      id: `conv_${Date.now()}`,
+      title: '梅花易數占卜',
+      providerId: currentProviderId,
+      modelId: currentModelId,
+      skillIds: ['meihua'],
+      type: 'meihua'
+    });
+
+    setConversations(prev => [newConv, ...prev]);
+    setCurrentConversationId(newConv.id);
+    setMessages([]);
+    setInput('');
+  }, [currentProviderId, currentModelId]);
+
   // Select conversation WITHOUT aborting ongoing background streams
   const selectConversation = useCallback((convId) => {
     if (convId === currentConversationId) return;
@@ -728,6 +749,7 @@ export function useMobileChat({
     compressionToast,
     compressContext,
     newChat,
+    newMeihuaChat,
     selectConversation,
     renameConversation,
     deleteConversation,

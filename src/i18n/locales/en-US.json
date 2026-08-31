@@ -93,5 +93,11 @@
       "desc": "Local-first, No-login, BYOK AI Chat & Agent mobile client.",
       "license": "License: MIT"
     }
-  }
+  },
+  "app.newMeihuaChat": "New Meihua Chat",
+  "meihua.welcome": "🌸 Meihua Divination",
+  "meihua.welcomeDesc": "Describe what you want to divine and choose a casting method",
+  "meihua.randomCast": "🎲 Random Number Cast",
+  "meihua.timeCast": "⏰ Current Time Cast",
+  "meihua.help": "❓ Divination Help"
 }

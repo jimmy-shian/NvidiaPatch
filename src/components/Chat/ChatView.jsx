@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Menu, Settings, ChevronDown, Bot, Sparkles, Minimize2, Loader2, Zap, AlertCircle, ArrowDown } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import ChatInput from './ChatInput';
+import MeihuaActionBar from './MeihuaActionBar';
 import { formatTokenNumber } from '../../core/context/modelLimits';
 
 export default function ChatView({
@@ -29,7 +30,11 @@ export default function ChatView({
   onOpenSettings,
   availableSkills = [],
   selectedSkillIds = [],
-  onToggleSkill
+  onToggleSkill,
+  conversationType,
+  onRandomCast,
+  onTimeCast,
+  onShowHelp
 }) {
   const { t } = useTranslation();
   const messagesEndRef = useRef(null);
@@ -305,6 +310,14 @@ export default function ChatView({
       )}
 
       {/* Bottom Sticky Chat Input */}
+      {conversationType === 'meihua' && (
+        <MeihuaActionBar
+          hasMessages={messages.length > 0}
+          onRandomCast={onRandomCast}
+          onTimeCast={onTimeCast}
+          onShowHelp={onShowHelp}
+        />
+      )}
       <ChatInput
         input={input}
         setInput={setInput}

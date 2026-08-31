@@ -9,6 +9,7 @@ export default function HistoryDrawer({
   currentConversationId,
   onSelectConversation,
   onNewChat,
+  onNewMeihuaChat,
   onRenameConversation,
   onDeleteConversation,
   onOpenSettings
@@ -99,6 +100,17 @@ export default function HistoryDrawer({
           >
             <Plus size={15} />
             <span>{t('app.newChat')}</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              onNewMeihuaChat();
+              onClose();
+            }}
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-semibold text-xs shadow-md shadow-rose-950/40 transition-transform active:scale-95 mt-2"
+          >
+            <span>🌸</span>
+            <span>{t('app.newMeihuaChat')}</span>
           </button>
         </div>
 

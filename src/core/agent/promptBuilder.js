@@ -5,6 +5,7 @@
  */
 import { ContextManager } from '../context/contextManager';
 import { SkillManager } from '../skills/skillManager';
+import { runMeihuaPipeline } from '../meihua';
 
 export function getTemporalSystemContext() {
   const now = new Date();
@@ -70,6 +71,19 @@ export async function buildCompleteMessages({
   const skillMessage = await SkillManager.buildSkillSystemMessage(selectedSkillIds);
   if (skillMessage) {
     systemBlocks.push(skillMessage);
+  }
+
+  // 4.5 確定性梅花易數演算法排盤注入 (Deterministic Calculation Engine)
+  if (selectedSkillIds && selectedSkillIds.includes('meihua')) {
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (lastUserMsg && lastUserMsg.content) {
+      try {
+        const meihuaPipeline = runMeihuaPipeline(lastUserMsg.content);
+        systemBlocks.push(meihuaPipeline.contextPayload);
+      } catch (err) {
+        console.warn('[Meihua Engine] 確定性排盤計算略過或發生異常:', err);
+      }
+    }
   }
 
   // 5. Final Behavioral Anchor

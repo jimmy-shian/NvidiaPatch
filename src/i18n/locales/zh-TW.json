@@ -93,5 +93,11 @@
       "desc": "Local-first、免登入、BYOK 的 Android AI Chat & Agent 行動客戶端。",
       "license": "開源授權: MIT"
     }
-  }
+  },
+  "app.newMeihuaChat": "新增梅花易數對話",
+  "meihua.welcome": "🌸 梅花易數占卜",
+  "meihua.welcomeDesc": "請描述您欲占問之事，並選擇起卦方式",
+  "meihua.randomCast": "🎲 隨機數字起卦",
+  "meihua.timeCast": "⏰ 當前時間起卦",
+  "meihua.help": "❓ 起卦說明"
 }
