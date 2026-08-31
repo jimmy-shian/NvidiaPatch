@@ -99,5 +99,22 @@
   "meihua.welcomeDesc": "Describe what you want to divine and choose a casting method",
   "meihua.randomCast": "🎲 Random Number Cast",
   "meihua.timeCast": "⏰ Current Time Cast",
-  "meihua.help": "❓ Divination Help"
+  "meihua.help": "❓ Divination Help",
+  "meihua.seedBadge": "🎲 Seed Numbers",
+  "meihua.removeSeed": "Remove seeds (switch to time casting)",
+  "meihua.helpModal": {
+    "title": "🌸 Meihua Divination Guide & Rules",
+    "subtitle": "Deterministic I-Ching Casting and Ti-Yong Decision Framework",
+    "methodsTitle": "1. Supported Casting Methods",
+    "timeCastingTitle": "1. Current Time Casting (Built-in Default)",
+    "timeCastingDesc": "The system automatically performs deterministic calculations using the current timestamp and earthly branches (year, month, day, hour). Built-in temporal anchor, no manual time input needed.",
+    "randomCastingTitle": "2. Random Seed Numbers",
+    "randomCastingDesc": "Clicking '🎲 Random Number Cast' generates 3 random seed numbers (1~999) corresponding to upper, lower trigrams, and moving line, capturing spontaneous insights.",
+    "customNumbersTitle": "3. Custom Numbers",
+    "customNumbersDesc": "You can also include 2 custom numbers (e.g. '6, 8') or 3 custom numbers in your prompt to cast.",
+    "structureTitle": "2. Hexagram Architecture",
+    "tiYongTitle": "3. Ti-Yong Dynamics & Interpretation",
+    "tiYongConcept": "Ti (immobile trigram) represents the querent/subject; Yong (trigram with moving line) represents the external situation/environment.",
+    "understood": "Understood"
+  }
 }

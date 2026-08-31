@@ -30,6 +30,7 @@ export default function ChatInput({
   availableSkills = [],
   selectedSkillIds = [],
   onToggleSkill,
+  hideSkillsSelector = false,
   disabled
 }) {
   const { t } = useTranslation();
@@ -84,10 +85,56 @@ export default function ChatInput({
 
   const selectedCount = selectedSkillIds.length;
 
+  // Meihua numbers tag handling
+  const meihuaMatch = input.match(/<meihua-numbers\s+n1="(\d+)"\s+n2="(\d+)"\s+n3="(\d+)"[^>]*>/i);
+  const hasMeihuaNumbers = Boolean(meihuaMatch);
+  const meihuaNumbers = meihuaMatch ? [meihuaMatch[1], meihuaMatch[2], meihuaMatch[3]] : null;
+
+  const handleRemoveMeihuaNumbers = () => {
+    setInput(prev => prev.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>|<meihua-numbers[^>]*\/>/gi, '').trim());
+  };
+
+  const cleanQuestionText = hasMeihuaNumbers
+    ? input.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>|<meihua-numbers[^>]*\/>/gi, '').trimStart()
+    : input;
+
+  const handleTextareaChange = (e) => {
+    const val = e.target.value;
+    if (hasMeihuaNumbers) {
+      setInput(`<meihua-numbers n1="${meihuaNumbers[0]}" n2="${meihuaNumbers[1]}" n3="${meihuaNumbers[2]}"></meihua-numbers> ${val}`);
+    } else {
+      setInput(val);
+    }
+  };
+
   return (
     <div className="w-full bg-[#0b0f17]/95 border-t border-slate-800/80 px-3 pt-2 pb-2 safe-area-bottom backdrop-blur-md relative">
+      {/* Active Meihua numbers badge */}
+      {hasMeihuaNumbers && (
+        <div className="flex items-center gap-1.5 px-3 py-1 mb-2 rounded-xl bg-gradient-to-r from-rose-950/80 to-purple-950/80 border border-rose-500/40 text-rose-200 text-xs w-fit shadow-sm animate-fade-in">
+          <span className="font-semibold text-rose-300 flex items-center gap-1">🎲 {t('meihua.seedBadge', '靈動數')}:</span>
+          <span className="px-1.5 py-0.5 rounded bg-rose-900/60 border border-rose-700/50 font-mono font-bold text-rose-100 text-[11px]">
+            {meihuaNumbers[0]}
+          </span>
+          <span className="px-1.5 py-0.5 rounded bg-rose-900/60 border border-rose-700/50 font-mono font-bold text-rose-100 text-[11px]">
+            {meihuaNumbers[1]}
+          </span>
+          <span className="px-1.5 py-0.5 rounded bg-rose-900/60 border border-rose-700/50 font-mono font-bold text-rose-100 text-[11px]">
+            {meihuaNumbers[2]}
+          </span>
+          <button
+            type="button"
+            onClick={handleRemoveMeihuaNumbers}
+            className="ml-1 p-0.5 rounded-lg hover:bg-rose-800/60 text-rose-400 hover:text-white transition-colors"
+            title={t('meihua.removeSeed', '移除靈動數（改用時間起卦）')}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
       {/* Expandable Skills Selector Menu with Click-Outside Ref */}
-      {availableSkills.length > 0 && (
+      {!hideSkillsSelector && availableSkills.length > 0 && (
         <div ref={skillsContainerRef} className="mb-2 relative">
           {/* Toggle Button */}
           <div className="flex items-center justify-between">
@@ -181,8 +228,8 @@ export default function ChatInput({
       <div className="flex items-end gap-2 bg-slate-900/90 border border-slate-800 focus-within:border-emerald-500/60 rounded-2xl p-1.5 transition-colors shadow-inner">
         <textarea
           ref={textareaRef}
-          value={input}
-          onChange={e => setInput(e.target.value)}
+          value={cleanQuestionText}
+          onChange={handleTextareaChange}
           onKeyDown={handleKeyDown}
           placeholder={disabled ? t('chat.noModelSelected') : t('chat.inputPlaceholder')}
           disabled={disabled}

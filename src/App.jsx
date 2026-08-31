@@ -9,6 +9,7 @@ import ModelSelectorModal from './components/Chat/ModelSelectorModal';
 import SettingsModal from './components/Settings/SettingsModal';
 import MCPApprovalModal from './components/Chat/MCPApprovalModal';
 import MRTRInputModal from './components/Chat/MRTRInputModal';
+import MeihuaHelpModal from './components/Chat/MeihuaHelpModal';
 import { LocalDB } from './core/storage/localDatabase';
 import { PROVIDER_TYPES } from './core/providers';
 
@@ -16,6 +17,7 @@ export default function App() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isMeihuaHelpModalOpen, setIsMeihuaHelpModalOpen] = useState(false);
   const [selectedSkillIds, setSelectedSkillIds] = useState([]);
 
   const settings = useMobileSettings();
@@ -105,14 +107,13 @@ export default function App() {
           const n1 = Math.floor(Math.random() * 999) + 1;
           const n2 = Math.floor(Math.random() * 999) + 1;
           const n3 = Math.floor(Math.random() * 999) + 1;
-          chat.setInput(prev => prev.trim() ? `${prev.trim()} （靈動數：${n1}, ${n2}, ${n3}）` : `請以靈動數起卦（${n1}, ${n2}, ${n3}）：`);
+          // 移除前次數值自傳並使用特殊包裹元素
+          chat.setInput(prev => {
+            const clean = prev.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>|<meihua-numbers[^>]*\/>|（靈動數[^）]*）|\[靈動數[^\]]*\]/gi, '').trim();
+            return `<meihua-numbers n1="${n1}" n2="${n2}" n3="${n3}"></meihua-numbers> ${clean}`.trimEnd();
+          });
         }}
-        onTimeCast={() => {
-          const now = new Date();
-          const timeStr = `${now.getFullYear()}-${now.getMonth()+1}-${now.getDate()} ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
-          chat.setInput(prev => prev.trim() ? `${prev.trim()} （當前時間起卦：${timeStr}）` : `請以當前時間起卦（${timeStr}）：`);
-        }}
-        onShowHelp={() => chat.setInput('請說明梅花易數的起卦規則（包含數字起卦、時間起卦與體用生剋判定方法）')}
+        onShowHelp={() => setIsMeihuaHelpModalOpen(true)}
       />
 
       {/* History Slide-out Drawer */}
@@ -171,6 +172,12 @@ export default function App() {
 
       {/* Interactive MRTR Parameter Elicitation Modal */}
       <MRTRInputModal />
+
+      {/* Interactive Meihua Divination Guide Modal */}
+      <MeihuaHelpModal
+        isOpen={isMeihuaHelpModalOpen}
+        onClose={() => setIsMeihuaHelpModalOpen(false)}
+      />
     </div>
   );
 }

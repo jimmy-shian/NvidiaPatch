@@ -99,5 +99,22 @@
   "meihua.welcomeDesc": "請描述您欲占問之事，並選擇起卦方式",
   "meihua.randomCast": "🎲 隨機數字起卦",
   "meihua.timeCast": "⏰ 當前時間起卦",
-  "meihua.help": "❓ 起卦說明"
+  "meihua.help": "❓ 起卦說明",
+  "meihua.seedBadge": "🎲 靈動數",
+  "meihua.removeSeed": "移除靈動數（改用時間起卦）",
+  "meihua.helpModal": {
+    "title": "🌸 梅花易數·起卦指南與解讀規則",
+    "subtitle": "確定性周易排盤與體用生剋決策架構",
+    "methodsTitle": "一、起卦方式支援",
+    "timeCastingTitle": "1. 當前時間起卦 (內建預設)",
+    "timeCastingDesc": "系統自動以提問當下的公曆與農曆時辰干支（年月日時數值）進行確定性排盤，內建時空背景與精確時間刻度，毋須手動輸入時間，最適合即時事態占問。",
+    "randomCastingTitle": "2. 隨機靈動數起卦",
+    "randomCastingDesc": "點擊「🎲 隨機數字起卦」將生成三組 1~999 靈動數（分別代表上卦、下卦與動爻），捕捉當下心念靈機契機，數值獨立包裹不影響後續對話。",
+    "customNumbersTitle": "3. 自訂數字起卦",
+    "customNumbersDesc": "亦可於問題中直接附帶 2 組數字（如「6, 8」以兩數之和求動爻）或 3 組數字（第三數為動爻），系統自動解析為先天八卦排盤。",
+    "structureTitle": "二、卦象結構與排盤層次",
+    "tiYongTitle": "三、體用生剋與吉凶判讀",
+    "tiYongConcept": "體卦（不動卦）代表占者主體或事物本質；用卦（動爻所在卦）代表外在環境與事態變數。",
+    "understood": "我知道了"
+  }
 }

@@ -33,7 +33,6 @@ export default function ChatView({
   onToggleSkill,
   conversationType,
   onRandomCast,
-  onTimeCast,
   onShowHelp
 }) {
   const { t } = useTranslation();
@@ -253,15 +252,31 @@ export default function ChatView({
         <div key={conversation?.id || 'empty_conv'} className="animate-chat-switch space-y-2">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-4 py-16 text-slate-500 gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-950/30">
-                <Bot size={28} />
-              </div>
-              <div>
-                <h3 className="font-bold text-white text-base">NvidiaPatch Chat</h3>
-                <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
-                  支援本機技能與即時網路搜尋。請輸入訊息開始對話。
-                </p>
-              </div>
+              {conversationType === 'meihua' ? (
+                <>
+                  <div className="w-14 h-14 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 text-2xl shadow-lg shadow-rose-950/30">
+                    🌸
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">{t('meihua.welcome', '🌸 梅花易數占卜')}</h3>
+                    <p className="text-xs text-slate-400 mt-1.5 max-w-xs leading-relaxed">
+                      {t('meihua.welcomeDesc', '請描述您欲占問之事，並選擇起卦方式')}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-950/30">
+                    <Bot size={28} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">NvidiaPatch Chat</h3>
+                    <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
+                      支援本機技能與即時網路搜尋。請輸入訊息開始對話。
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             messages
@@ -312,9 +327,7 @@ export default function ChatView({
       {/* Bottom Sticky Chat Input */}
       {conversationType === 'meihua' && (
         <MeihuaActionBar
-          hasMessages={messages.length > 0}
           onRandomCast={onRandomCast}
-          onTimeCast={onTimeCast}
           onShowHelp={onShowHelp}
         />
       )}
@@ -327,6 +340,7 @@ export default function ChatView({
         availableSkills={availableSkills}
         selectedSkillIds={selectedSkillIds}
         onToggleSkill={onToggleSkill}
+        hideSkillsSelector={conversationType === 'meihua'}
         disabled={!currentModelId}
       />
     </div>
