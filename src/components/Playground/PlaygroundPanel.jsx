@@ -287,6 +287,41 @@ export default function PlaygroundPanel({
             <div ref={chatEndRef} />
           </div>
 
+          {selectedSkillIds.includes('meihua') && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', padding: '4px 0' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>🌸 梅花起卦輔助：</span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ fontSize: '12px', padding: '4px 10px' }}
+                onClick={() => {
+                  const num1 = Math.floor(Math.random() * 999) + 1;
+                  const num2 = Math.floor(Math.random() * 999) + 1;
+                  const num3 = Math.floor(Math.random() * 999) + 1;
+                  const prefix = chatInput.trim() ? `${chatInput.trim()} ` : '';
+                  setChatInput(`${prefix}（靈動數：${num1}, ${num2}, ${num3}）`);
+                }}
+                disabled={isChatting}
+              >
+                🎲 注入隨機靈動數
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ fontSize: '12px', padding: '4px 10px' }}
+                onClick={() => {
+                  const now = new Date();
+                  const timeStr = `${now.getFullYear()}-${now.getMonth()+1}-${now.getDate()} ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+                  const prefix = chatInput.trim() ? `${chatInput.trim()} ` : '';
+                  setChatInput(`${prefix}（當前時間起卦：${timeStr}）`);
+                }}
+                disabled={isChatting}
+              >
+                ⏰ 注入當前時間
+              </button>
+            </div>
+          )}
+
           <form onSubmit={handleSendTestMessage} style={{ display: 'flex', gap: '10px' }}>
             <textarea
               ref={textareaRef}

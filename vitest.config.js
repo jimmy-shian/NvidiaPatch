@@ -6,6 +6,6 @@ export default defineConfig({
     environment: 'node',
     pool: 'forks',
     testTimeout: 15000,
-    include: ['tests/**/*.test.js']
+    include: ['tests/**/*.test.js', 'meihua/tests/**/*.test.js']
   }
 });

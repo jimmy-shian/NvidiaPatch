@@ -2,6 +2,7 @@ import baziSkillRaw from './divinationSkills/baziSkill.md?raw';
 import ziweiSkillRaw from './divinationSkills/ziweiSkill.md?raw';
 import tarotSkillRaw from './divinationSkills/tarotSkill.md?raw';
 import qimenSkillRaw from './divinationSkills/qimenSkill.md?raw';
+import meihuaSkillRaw from './divinationSkills/meihuaSkill.md?raw';
 
 export const DIVINATION_SKILLS = [
   {
@@ -35,6 +36,14 @@ export const DIVINATION_SKILLS = [
     icon: '🧭',
     shortDesc: '時家奇門 · 十大子系統',
     content: qimenSkillRaw,
+  },
+  {
+    id: 'meihua',
+    label: '梅花易數 Grandmaster',
+    labelEn: 'Meihua Yishu',
+    icon: '🌸',
+    shortDesc: '象數起卦 · 體用生剋',
+    content: meihuaSkillRaw,
   },
 ];
 
