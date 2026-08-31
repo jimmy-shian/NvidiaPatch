@@ -68,12 +68,23 @@ export function resolveKnowledge(calculatorResult) {
 export function buildLLMContext(resolvedResult, question) {
   const { calculation, knowledge } = resolvedResult;
   const q = question || calculation.question || '一般運勢與事態分析';
+  const date = calculation.date || new Date();
+  const dateObj = date instanceof Date ? date : new Date(date);
+  const timeStr = `${dateObj.getFullYear()}年${dateObj.getMonth()+1}月${dateObj.getDate()}日 ${dateObj.getHours()}:${String(dateObj.getMinutes()).padStart(2, '0')}`;
+
+  let methodDesc = '時間起卦（依當前年月日時干支數值推算）';
+  if (calculation.method === 'random' || calculation.randomNumbers) {
+    methodDesc = `隨機靈動數起卦（靈動數：${calculation.randomNumbers.join(', ')}）`;
+  } else if (calculation.method === 'number') {
+    methodDesc = '自訂數字起卦';
+  }
 
   return `
 === 【梅花易數 卦象事實與知識上下文 (不可竄改)】 ===
 
 【占問問題】：${q}
-【起卦方式】：${calculation.method === 'time' ? '時間起卦' : calculation.method === 'random' ? '隨機數字起卦' : '數字起卦'}
+【起卦時間】：${timeStr}（台北標準時間 UTC+8，內建即時時空背景）
+【起卦方式】：${methodDesc}
 ${calculation.randomNumbers ? `【隨機靈動數】：${calculation.randomNumbers.join(', ')}` : ''}
 
 【本卦（主卦）】：

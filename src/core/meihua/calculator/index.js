@@ -33,6 +33,7 @@ export function calculateMeihua(params = {}) {
 
   return {
     method,
+    date: date || new Date(),
     question: question || null,
     randomNumbers: randomNumbers || null,
     primary: {
