@@ -73,10 +73,21 @@ export default function MessageBubble({
     setIsEditing(false);
   };
 
+  const handleNumberChange = (index, value) => {
+    const cleaned = value.replace(/\D/g, '').slice(0, 4);
+    setEditMeihuaNumbers(prev => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next[index] = cleaned;
+      return next;
+    });
+  };
+
   const handleSaveEdit = () => {
     let finalContent = draftText.trim();
     if (editMeihuaNumbers && editMeihuaNumbers.length === 3) {
-      finalContent = `<meihua-numbers n1="${editMeihuaNumbers[0]}" n2="${editMeihuaNumbers[1]}" n3="${editMeihuaNumbers[2]}"></meihua-numbers> ${draftText.trim()}`.trimEnd();
+      const [n1, n2, n3] = editMeihuaNumbers.map(n => String(n).trim() || '1');
+      finalContent = `<meihua-numbers n1="${n1}" n2="${n2}" n3="${n3}"></meihua-numbers> ${draftText.trim()}`.trimEnd();
     }
     if (finalContent) {
       onEdit?.(message.id, finalContent);
@@ -264,7 +275,7 @@ export default function MessageBubble({
 
         {/* Live Tool Executions within this assistant turn */}
         {!isUser && message.toolExecutions && message.toolExecutions.length > 0 && (
-          <div className="my-2 space-y-1.5">
+          <div className="my-1.5 space-y-1.5">
             {message.toolExecutions.map((te, idx) => {
               const isExec = te.status === 'executing' || te.status === 'calling';
               const isExpanded = Boolean(expandedToolResults[te.toolCallId || idx]);
@@ -281,42 +292,38 @@ export default function MessageBubble({
                 const know = parsedResult?.knowledge;
 
                 return (
-                  <div key={te.toolCallId || idx} className="rounded-2xl bg-gradient-to-r from-rose-950/40 via-slate-900/90 to-purple-950/40 border border-rose-500/30 p-2.5 text-xs shadow-md">
+                  <div key={te.toolCallId || idx} className="rounded-xl bg-gradient-to-r from-rose-950/40 via-[#0e1420] to-purple-950/40 border border-rose-500/30 px-2.5 py-1.5 text-xs shadow-sm">
                     <div
                       onClick={() => toggleToolResult(te.toolCallId || idx)}
-                      className="flex items-center justify-between gap-2 cursor-pointer select-none"
+                      className="flex items-center justify-between gap-1.5 cursor-pointer select-none"
                     >
-                      <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-                        <div className="w-5 h-5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center justify-center text-xs shrink-0">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <div className="w-5 h-5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center justify-center text-[11px] shrink-0">
                           🌸
                         </div>
-                        <div className="flex flex-col min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold text-rose-200 whitespace-nowrap">
-                              梅花易數確定性排盤計算
-                            </span>
-                            {calc?.primary?.hexagram && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-rose-950/80 text-rose-300 border border-rose-800/80 font-medium">
-                                本卦：{calc.primary.hexagram.fullName}（動{calc.primary.movingLine}爻）· 變卦：{calc.changed?.hexagram?.fullName} · 【{calc.tiYong?.relation}】
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                        <span className="font-bold text-rose-200 text-xs shrink-0">
+                          梅花排盤
+                        </span>
+                        {calc?.primary?.hexagram && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] bg-rose-950/90 text-rose-300 border border-rose-800/80 font-medium truncate">
+                            {calc.primary.hexagram.fullName} (動{calc.primary.movingLine}) · 【{calc.tiYong?.relation}】
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center gap-1 text-[11px] text-rose-300/80 shrink-0">
-                        <span className="text-[10px] font-mono bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-800/40 text-rose-300">
-                          {calc?.method === 'time' ? '⏰ 時間起卦' : calc?.randomNumbers ? `🎲 靈動數 (${calc.randomNumbers.join(', ')})` : '🔢 數字起卦'}
+                      <div className="flex items-center gap-1 text-[10px] text-rose-300/80 shrink-0">
+                        <span className="font-mono bg-rose-950/70 px-1.5 py-0.5 rounded border border-rose-800/50 text-rose-300">
+                          {calc?.method === 'time' ? '⏰ 時間' : calc?.randomNumbers ? `🎲 ${calc.randomNumbers.join(',')}` : '🔢 數字'}
                         </span>
-                        {isExpanded ? <ChevronDown size={14} className="text-rose-400" /> : <ChevronRight size={14} className="text-rose-400" />}
+                        {isExpanded ? <ChevronDown size={13} className="text-rose-400" /> : <ChevronRight size={13} className="text-rose-400" />}
                       </div>
                     </div>
 
                     {isExpanded && calc && (
-                      <div className="mt-2.5 pt-2.5 border-t border-rose-800/40 space-y-2.5 text-[11px] animate-fade-in text-slate-300">
+                      <div className="mt-2 pt-2 border-t border-rose-800/40 space-y-2 text-[11px] animate-fade-in text-slate-300">
                         {/* 3 Hexagram cards */}
                         <div className="grid grid-cols-3 gap-1.5 text-center">
-                          <div className="p-2 rounded-xl bg-slate-900/90 border border-rose-800/40 space-y-0.5">
+                          <div className="p-1.5 rounded-xl bg-slate-900/90 border border-rose-800/40 space-y-0.5">
                             <div className="text-[10px] text-rose-400 font-semibold">本卦（現狀）</div>
                             <div className="font-bold text-white text-xs">{calc.primary?.hexagram?.fullName}</div>
                             <div className="text-[10px] text-slate-400 font-mono">{calc.primary?.upper?.name}({calc.primary?.upper?.element}) / {calc.primary?.lower?.name}({calc.primary?.lower?.element})</div>
@@ -330,7 +337,7 @@ export default function MessageBubble({
                             <div className="text-[10px] text-slate-500">中段內應</div>
                           </div>
 
-                          <div className="p-2 rounded-xl bg-slate-900/90 border border-sky-800/40 space-y-0.5">
+                          <div className="p-1.5 rounded-xl bg-slate-900/90 border border-sky-800/40 space-y-0.5">
                             <div className="text-[10px] text-sky-400 font-semibold">變卦（趨勢）</div>
                             <div className="font-bold text-white text-xs">{calc.changed?.hexagram?.fullName}</div>
                             <div className="text-[10px] text-slate-400 font-mono">{calc.changed?.upper?.name}({calc.changed?.upper?.element}) / {calc.changed?.lower?.name}({calc.changed?.lower?.element})</div>
@@ -471,21 +478,33 @@ export default function MessageBubble({
         {/* Message body / Edit Box */}
         {isEditing ? (
           <div className="flex flex-col gap-2 mt-1 min-w-[240px] max-w-full">
-            {/* If message has Meihua random numbers, display them in a styled badge block rather than raw code in textarea */}
+            {/* If message has Meihua random numbers, display editable numeric input fields */}
             {editMeihuaNumbers && (
               <div className="flex items-center justify-between p-2 rounded-xl bg-gradient-to-r from-rose-950/80 to-purple-950/80 border border-rose-500/40 text-rose-200 text-xs shadow-sm">
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-rose-300 flex items-center gap-1">🎲 靈動數 (數值區塊)</span>
-                  <div className="flex items-center gap-1 font-mono font-bold">
-                    <span className="px-2 py-0.5 rounded bg-rose-900/80 border border-rose-700/60 text-rose-100 text-xs">{editMeihuaNumbers[0]}</span>
-                    <span className="px-2 py-0.5 rounded bg-rose-900/80 border border-rose-700/60 text-rose-100 text-xs">{editMeihuaNumbers[1]}</span>
-                    <span className="px-2 py-0.5 rounded bg-rose-900/80 border border-rose-700/60 text-rose-100 text-xs">{editMeihuaNumbers[2]}</span>
+                  <span className="font-semibold text-rose-300 flex items-center gap-1 text-xs whitespace-nowrap">
+                    🎲 靈動數
+                  </span>
+                  <div className="flex items-center gap-1 font-mono">
+                    {editMeihuaNumbers.map((num, i) => (
+                      <input
+                        key={i}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={4}
+                        value={num}
+                        onChange={(e) => handleNumberChange(i, e.target.value)}
+                        className="w-12 sm:w-14 text-center py-1 px-1 rounded-lg bg-rose-900/80 border border-rose-500/60 text-white font-mono font-bold text-xs focus:border-rose-300 focus:bg-rose-900 focus:outline-none shadow-inner"
+                        placeholder="0"
+                      />
+                    ))}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setEditMeihuaNumbers(null)}
-                  className="text-[11px] text-rose-400 hover:text-rose-200 px-1.5 py-0.5 rounded hover:bg-rose-900/40 transition-colors flex items-center gap-0.5"
+                  className="text-[11px] text-rose-400 hover:text-rose-200 px-1.5 py-0.5 rounded hover:bg-rose-900/40 transition-colors flex items-center gap-0.5 shrink-0"
                   title="移除靈動數（改為時間起卦）"
                 >
                   <X size={12} />

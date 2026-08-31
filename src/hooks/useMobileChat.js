@@ -38,20 +38,31 @@ export function useMobileChat({
   // Load conversations on mount
   useEffect(() => {
     async function loadConversations() {
-      const list = await LocalDB.getConversations();
-      setConversations(list);
-      if (list.length > 0) {
-        setCurrentConversationId(list[0].id);
+      const rawList = await LocalDB.getConversations();
+      const validList = [];
+      for (const conv of rawList) {
+        const msgs = await LocalDB.getMessages(conv.id);
+        if (msgs && msgs.length > 0) {
+          validList.push(conv);
+        } else {
+          await LocalDB.deleteConversation(conv.id);
+          await LocalDB.deleteConversationSummary(conv.id);
+        }
+      }
+
+      if (validList.length > 0) {
+        setConversations(validList);
+        setCurrentConversationId(validList[0].id);
       } else {
-        const newConv = await LocalDB.saveConversation({
+        const draftConv = {
           id: `conv_${Date.now()}`,
           title: '新對話',
           providerId: currentProviderId,
           modelId: currentModelId,
-          skillIds: []
-        });
-        setConversations([newConv]);
-        setCurrentConversationId(newConv.id);
+          skillIds: selectedSkillIds || []
+        };
+        setConversations([draftConv]);
+        setCurrentConversationId(draftConv.id);
       }
     }
     loadConversations();
@@ -196,26 +207,38 @@ export function useMobileChat({
     };
   }, [currentModelId, messages, input, activeSummary]);
 
-  // Create new conversation
+  // Create new conversation (In-memory draft until first message is sent)
   const newChat = useCallback(async () => {
     setIsStreaming(false);
     setIsReasoningActive(false);
     setLiveStatus(null);
     setActiveSummary(null);
 
-    const newConv = await LocalDB.saveConversation({
+    const currId = currentConversationIdRef.current;
+    if (currId) {
+      const currMsgs = await LocalDB.getMessages(currId);
+      if (currMsgs.length === 0) {
+        await LocalDB.deleteConversation(currId);
+        await LocalDB.deleteConversationSummary(currId);
+      }
+    }
+
+    const newConv = {
       id: `conv_${Date.now()}`,
       title: '新對話',
       providerId: currentProviderId,
       modelId: currentModelId,
       skillIds: selectedSkillIds || []
-    });
+    };
 
-    setConversations(prev => [newConv, ...prev]);
+    setConversations(prev => {
+      const filtered = prev.filter(c => c.id !== currId || messages.length > 0);
+      return [newConv, ...filtered];
+    });
     setCurrentConversationId(newConv.id);
     setMessages([]);
     setInput('');
-  }, [currentProviderId, currentModelId, selectedSkillIds]);
+  }, [currentProviderId, currentModelId, selectedSkillIds, messages.length]);
 
   const newMeihuaChat = useCallback(async () => {
     setIsStreaming(false);
@@ -223,24 +246,48 @@ export function useMobileChat({
     setLiveStatus(null);
     setActiveSummary(null);
 
-    const newConv = await LocalDB.saveConversation({
+    const currId = currentConversationIdRef.current;
+    if (currId) {
+      const currMsgs = await LocalDB.getMessages(currId);
+      if (currMsgs.length === 0) {
+        await LocalDB.deleteConversation(currId);
+        await LocalDB.deleteConversationSummary(currId);
+      }
+    }
+
+    const newConv = {
       id: `conv_${Date.now()}`,
       title: '梅花易數占卜',
       providerId: currentProviderId,
       modelId: currentModelId,
       skillIds: ['meihua'],
       type: 'meihua'
-    });
+    };
 
-    setConversations(prev => [newConv, ...prev]);
+    setConversations(prev => {
+      const filtered = prev.filter(c => c.id !== currId || messages.length > 0);
+      return [newConv, ...filtered];
+    });
     setCurrentConversationId(newConv.id);
+    setSelectedSkillIds(['meihua']);
     setMessages([]);
     setInput('');
-  }, [currentProviderId, currentModelId]);
+  }, [currentProviderId, currentModelId, messages.length, setSelectedSkillIds]);
 
   // Select conversation WITHOUT aborting ongoing background streams
-  const selectConversation = useCallback((convId) => {
+  const selectConversation = useCallback(async (convId) => {
     if (convId === currentConversationId) return;
+
+    const currId = currentConversationIdRef.current;
+    // Clean up current conversation if it is completely empty and not streaming
+    if (currId && messages.length === 0 && !isStreaming) {
+      const currMsgs = await LocalDB.getMessages(currId);
+      if (currMsgs.length === 0) {
+        await LocalDB.deleteConversation(currId);
+        await LocalDB.deleteConversationSummary(currId);
+        setConversations(prev => prev.filter(c => c.id !== currId));
+      }
+    }
 
     // Reset ephemeral active UI view state
     setIsReasoningActive(false);
@@ -249,7 +296,7 @@ export function useMobileChat({
 
     // Switch active conversation ID (background generation continues untouched)
     setCurrentConversationId(convId);
-  }, [currentConversationId]);
+  }, [currentConversationId, messages.length, isStreaming]);
 
   // Rename conversation
   const renameConversation = useCallback(async (convId, newTitle) => {
@@ -282,12 +329,20 @@ export function useMobileChat({
         if (updated.length > 0) {
           setCurrentConversationId(updated[0].id);
         } else {
-          newChat();
+          const draftConv = {
+            id: `conv_${Date.now()}`,
+            title: '新對話',
+            providerId: currentProviderId,
+            modelId: currentModelId,
+            skillIds: selectedSkillIds || []
+          };
+          setCurrentConversationId(draftConv.id);
+          return [draftConv];
         }
       }
       return updated;
     });
-  }, [currentConversationId, newChat]);
+  }, [currentConversationId, currentProviderId, currentModelId, selectedSkillIds]);
 
   // Manual Context Compression action
   const compressContext = useCallback(async () => {
@@ -670,30 +725,39 @@ export function useMobileChat({
     const textToSend = input.trim();
     if (!textToSend || !currentModelId || isStreaming) return;
 
+    const currId = currentConversationId;
+    const currConv = conversations.find(c => c.id === currId);
+
     const userMsg = {
       id: `msg_${Date.now()}_u`,
-      conversationId: currentConversationId,
+      conversationId: currId,
       role: 'user',
       content: textToSend,
       createdAt: Date.now(),
       ordinal: messages.length
     };
 
+    // If this is the first message in this conversation, persist conversation record to LocalDB
+    if (messages.length === 0) {
+      const initialTitle = currConv?.type === 'meihua' ? '梅花易數占卜' : cleanFallbackTitle(textToSend);
+      const convToSave = {
+        id: currId,
+        title: currConv?.title || initialTitle,
+        providerId: currentProviderId,
+        modelId: currentModelId,
+        skillIds: selectedSkillIds || [],
+        ...(currConv?.type ? { type: currConv.type } : {}),
+        updatedAt: Date.now()
+      };
+      await LocalDB.saveConversation(convToSave);
+      setConversations(prev => prev.map(c => c.id === currId ? { ...c, ...convToSave, title: initialTitle } : c));
+    }
+
     await LocalDB.saveMessage(userMsg);
     setInput('');
 
-    if (messages.length === 0) {
-      const initialTitle = cleanFallbackTitle(textToSend);
-      await LocalDB.saveConversation({
-        id: currentConversationId,
-        title: initialTitle,
-        updatedAt: Date.now()
-      });
-      setConversations(prev => prev.map(c => c.id === currentConversationId ? { ...c, title: initialTitle } : c));
-    }
-
     await executeChatStream([...messages, userMsg]);
-  }, [input, currentModelId, isStreaming, currentConversationId, messages, executeChatStream]);
+  }, [input, currentModelId, isStreaming, currentConversationId, messages, conversations, currentProviderId, selectedSkillIds, executeChatStream]);
 
   // Stop Generation for current active conversation
   const stopGeneration = useCallback(() => {
