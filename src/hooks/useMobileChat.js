@@ -6,6 +6,7 @@ import { ContextCompressor } from '../core/context/contextCompressor';
 import { estimateFullContextTokens, normalizeApiUsage, projectNextTurnContext } from '../core/context/tokenManager';
 import { getModelContextLimit, getCompressionThreshold, getModelContextInfo } from '../core/context/modelLimits';
 import { generateTitleFromPrompt, cleanFallbackTitle } from '../core/agent/titleGenerator';
+import { runMeihuaPipeline } from '../core/meihua';
 
 export function useMobileChat({
   currentProviderId,
@@ -376,6 +377,34 @@ export function useMobileChat({
       messages: historyMessages
     });
 
+    // 2.5 Pre-calculate deterministic skill calculations (e.g. Meihua Divination Engine)
+    const initialToolExecutions = [];
+    if (selectedSkillIds && selectedSkillIds.includes('meihua')) {
+      const lastUserMsg = [...historyMessages].reverse().find(m => m.role === 'user');
+      if (lastUserMsg && lastUserMsg.content) {
+        try {
+          const meihuaPipeline = runMeihuaPipeline(lastUserMsg.content);
+          initialToolExecutions.push({
+            toolCallId: `meihua_calc_${startedAt}`,
+            toolName: 'meihua_calculation',
+            status: 'completed',
+            args: {
+              method: meihuaPipeline.calculation.method,
+              question: meihuaPipeline.parsedQuestion,
+              randomNumbers: meihuaPipeline.calculation.randomNumbers,
+              date: meihuaPipeline.calculation.date
+            },
+            result: {
+              calculation: meihuaPipeline.calculation,
+              knowledge: meihuaPipeline.knowledge
+            }
+          });
+        } catch (err) {
+          console.warn('[Meihua Calculation Hook Error]:', err);
+        }
+      }
+    }
+
     const assistantMsgId = `msg_${Date.now()}_a`;
     const assistantMsg = {
       id: assistantMsgId,
@@ -385,7 +414,7 @@ export function useMobileChat({
       content: '',
       thinkingContent: '',
       tool_calls: null,
-      toolExecutions: [], // Live UI state: [{ toolCallId, toolName, status, args, result }]
+      toolExecutions: [...initialToolExecutions], // Live UI state: [{ toolCallId, toolName, status, args, result }]
       startedAt,
       createdAt: startedAt,
       ordinal: historyMessages.length
@@ -413,7 +442,7 @@ export function useMobileChat({
 
     let accumulatedContent = '';
     let accumulatedThinking = '';
-    let liveToolExecutions = [];
+    let liveToolExecutions = [...initialToolExecutions];
     let latestReportedUsage = null;
 
     await agent.runChat({
@@ -460,12 +489,13 @@ export function useMobileChat({
       },
       onToolStart: (toolCalls) => {
         accumulatedContent = ''; // Clear draft tool JSON arguments
-        liveToolExecutions = toolCalls.map(tc => ({
+        const newToolCalls = toolCalls.map(tc => ({
           toolCallId: tc.id,
           toolName: tc.function.name,
           status: 'calling',
           args: tc.function.arguments
         }));
+        liveToolExecutions = [...initialToolExecutions, ...newToolCalls];
         if (currentConversationIdRef.current === streamConvId) {
           setIsReasoningActive(false);
           setMessages(prev => {
