@@ -78,6 +78,15 @@ router.get('/api/events', requireSseAuth, async (req, res) => {
   eventManager.subscribe(res, req);
 });
 
+// 日誌查詢 API
+router.get('/api/logs', requireAdminAuth, (req, res, next) => {
+  try {
+    res.json(activeLogs);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // 設定參數 APIs
 router.get('/api/settings', requireAdminAuth, (req, res, next) => {
   try {

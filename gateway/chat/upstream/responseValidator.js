@@ -177,6 +177,20 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       }
     }
 
+    // SSE does not guarantee a final newline. Flush TextDecoder at EOF and
+    // consume the remaining event so a valid last data frame is not silently
+    // mistaken for an empty response.
+    const decoderTail = decoder.decode();
+    if (decoderTail) streamBuffer += decoderTail;
+    if (streamBuffer) {
+      const trailingLines = streamBuffer.split('\n');
+      streamBuffer = '';
+      for (const line of trailingLines) {
+        const usage = consumeSseLine(line, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMeta);
+        if (usage) streamUsage = usage;
+      }
+    }
+
     const fullContent = fullContentRef.value;
     const hasToolCalls = hasToolCallsRef.value || finishReasonRef.value === 'tool_calls' || finishReasonRef.value === 'function_call';
 
@@ -207,7 +221,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
     }
 
     // 4. 檢查空內容（若有 tool_calls 或 function_call 則為正常的工具調用，不判定為空內容）
-    if (!hasToolCalls && (fullContent === null || fullContent === undefined || fullContent === '')) {
+    if (!hasToolCalls && !String(fullContent || '').trim()) {
       let emptyDetail = '';
       if (streamMeta.dataChunkCount === 0) {
         emptyDetail = `[API 端異常] 上游建立 HTTP 200 連線但未發送任何 Chunk（接收 0 個 Chunk）即結束連線`;

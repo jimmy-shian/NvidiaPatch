@@ -96,4 +96,38 @@ describe('SSE Line Consumption & Stream Diagnostics', () => {
     expect(fullContentRef.value).toBe('Thinking... Final Answer');
     expect(streamMetaRef.dataChunkCount).toBe(2);
   });
+
+  it('should preserve a final SSE data event when EOF has no trailing newline', () => {
+    const sseLines = [];
+    const fullContentRef = { value: '' };
+    const finishReasonRef = { value: null };
+    const hasToolCallsRef = { value: false };
+    const streamMetaRef = { dataChunkCount: 0, lastError: null, refusal: null };
+
+    const finalLine = 'data: {"choices":[{"index":0,"delta":{"content":"Final answer"},"finish_reason":"stop"}]}';
+    consumeSseLine(finalLine, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMetaRef);
+
+    expect(fullContentRef.value).toBe('Final answer');
+    expect(finishReasonRef.value).toBe('stop');
+    expect(streamMetaRef.dataChunkCount).toBe(1);
+  });
+
+  it('should recognize reasoning_content when ordinary content is absent', () => {
+    const sseLines = [];
+    const fullContentRef = { value: '' };
+    const finishReasonRef = { value: null };
+    const hasToolCallsRef = { value: false };
+    const streamMetaRef = { dataChunkCount: 0, lastError: null, refusal: null };
+
+    consumeSseLine(
+      'data: {"choices":[{"delta":{"reasoning_content":"reasoning survives EOF"}}]}',
+      sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMetaRef
+    );
+
+    expect(fullContentRef.value).toBe('reasoning survives EOF');
+  });
+
+  it('should classify whitespace-only output as empty', () => {
+    expect(!String(' \n\t ').trim()).toBe(true);
+  });
 });
