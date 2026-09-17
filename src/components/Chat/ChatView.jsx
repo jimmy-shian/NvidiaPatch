@@ -40,6 +40,7 @@ export default function ChatView({
   const scrollContainerRef = useRef(null);
   const autoFollowRef = useRef(true);
   const touchStartYRef = useRef(null);
+  const touchStartXRef = useRef(null);
   const isProgrammaticScrollRef = useRef(false);
   const rafPendingRef = useRef(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -72,19 +73,22 @@ export default function ChatView({
   const handleTouchStart = useCallback((e) => {
     if (e.touches && e.touches[0]) {
       touchStartYRef.current = e.touches[0].clientY;
+      touchStartXRef.current = e.touches[0].clientX;
     }
   }, []);
 
-  // Gesture handling: Touch move (detect upward scroll gesture)
+  // Gesture handling: Touch move (detect upward scroll gesture or horizontal table swipe)
   const handleTouchMove = useCallback((e) => {
     if (!e.touches || !e.touches[0] || touchStartYRef.current === null) return;
     const currentY = e.touches[0].clientY;
+    const currentX = e.touches[0].clientX;
     const deltaY = currentY - touchStartYRef.current; // Positive = pulling down to view older messages
+    const deltaX = currentX - (touchStartXRef.current ?? currentX);
 
     const el = scrollContainerRef.current;
     if (el) {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (deltaY > 8 && distanceFromBottom > 40) {
+      if ((deltaY > 8 && distanceFromBottom > 40) || (Math.abs(deltaX) > 10 && distanceFromBottom > 20)) {
         autoFollowRef.current = false;
         setIsNearBottom(false);
       }

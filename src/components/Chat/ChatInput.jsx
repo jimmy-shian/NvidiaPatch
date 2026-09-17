@@ -83,7 +83,10 @@ export default function ChatInput({
     }
   };
 
-  const selectedCount = selectedSkillIds.length;
+  // In general chat, filter out 'meihua' since it is an independent dedicated chat mode
+  const selectableSkills = (availableSkills || []).filter(s => s.id !== 'meihua');
+  const validSelectedIds = selectedSkillIds.filter(id => id !== 'meihua');
+  const selectedCount = validSelectedIds.length;
 
   // Meihua numbers tag handling
   const meihuaMatch = input.match(/<meihua-numbers\s+n1="(\d+)"\s+n2="(\d+)"\s+n3="(\d+)"[^>]*>/i);
@@ -134,7 +137,7 @@ export default function ChatInput({
       )}
 
       {/* Expandable Skills Selector Menu with Click-Outside Ref */}
-      {!hideSkillsSelector && availableSkills.length > 0 && (
+      {!hideSkillsSelector && selectableSkills.length > 0 && (
         <div ref={skillsContainerRef} className="mb-2 relative">
           {/* Toggle Button */}
           <div className="flex items-center justify-between">
@@ -158,7 +161,7 @@ export default function ChatInput({
               <button
                 type="button"
                 onClick={() => {
-                  selectedSkillIds.forEach(id => onToggleSkill(id));
+                  validSelectedIds.forEach(id => onToggleSkill(id));
                 }}
                 className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors px-1"
               >
@@ -182,7 +185,7 @@ export default function ChatInput({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
-                {availableSkills.map(skill => {
+                {selectableSkills.map(skill => {
                   const isChecked = selectedSkillIds.includes(skill.id);
                   const displayName = getSkillDisplayName(skill);
                   return (

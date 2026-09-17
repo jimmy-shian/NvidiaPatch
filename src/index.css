@@ -102,6 +102,7 @@
     max-width: 100%;
     overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
   }
 
   .table-scroll-container table {

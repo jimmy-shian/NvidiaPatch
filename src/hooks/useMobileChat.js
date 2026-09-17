@@ -228,7 +228,7 @@ export function useMobileChat({
       title: '新對話',
       providerId: currentProviderId,
       modelId: currentModelId,
-      skillIds: selectedSkillIds || []
+      skillIds: (selectedSkillIds || []).filter(id => id !== 'meihua')
     };
 
     setConversations(prev => {
@@ -236,9 +236,10 @@ export function useMobileChat({
       return [newConv, ...filtered];
     });
     setCurrentConversationId(newConv.id);
+    setSelectedSkillIds(prev => (Array.isArray(prev) ? prev.filter(id => id !== 'meihua') : []));
     setMessages([]);
     setInput('');
-  }, [currentProviderId, currentModelId, selectedSkillIds, messages.length]);
+  }, [currentProviderId, currentModelId, selectedSkillIds, messages.length, setSelectedSkillIds]);
 
   const newMeihuaChat = useCallback(async () => {
     setIsStreaming(false);

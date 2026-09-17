@@ -25,4 +25,24 @@ describe('Markdown Table & Line Break Transformer', () => {
     const result = renderContentWithLineBreaks(nested);
     expect(result).toHaveLength(3);
   });
+
+  it('renders TableScrollContainer with proper touch-action and class structure', async () => {
+    const { renderToString } = await import('react-dom/server');
+    const { TableScrollContainer } = await import('../MarkdownRenderer');
+    expect(TableScrollContainer).toBeDefined();
+    const html = renderToString(
+      React.createElement(TableScrollContainer, null,
+        React.createElement('tbody', null,
+          React.createElement('tr', null,
+            React.createElement('td', null, '測試內容')
+          )
+        )
+      )
+    );
+    expect(html).toContain('table-scroll-container');
+    expect(html).toContain('overflow-x-auto');
+    expect(html).toContain('touch-action:pan-x pan-y');
+    expect(html).toContain('overscroll-behavior-x:contain');
+    expect(html).toContain('測試內容');
+  });
 });
