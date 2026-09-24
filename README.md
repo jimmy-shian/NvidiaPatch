@@ -72,7 +72,10 @@ NVIDIA NIM Models (integrate.api.nvidia.com)
       },
       "models": {
         "patcher-main": {
-          "name": "Patcher Main"
+          "name": "Patcher Main",
+          "attachment": true,
+          "tool_call": true,
+          "reasoning": true
         }
       }
     }
@@ -138,6 +141,26 @@ npm run dist:mac
 <summary><b>🚀 Tab 2: Git tag vXXX release steps (自動化發布與建置指南)</b></summary>
 
 詳細內容請參閱：[docs/release_guide.md](docs/release_guide.md)
+
+### 🌐 Cloudflare Worker 搜尋代理 (Search Proxy)
+
+為了徹底解決行動裝置處於 CGNAT 髒 IP 與非標準 TLS 指紋環境下搜尋引擎反爬挑戰（Cloudflare / CAPTCHA）問題，專案內建專屬 Cloudflare Worker 搜尋代理 (`cloudflare-search-worker`)：
+
+#### 架構與功能
+- **端點**：
+  - `GET /health`：端點健康檢查
+  - `GET /search?q=...&lang=zh-TW&max=8`：多引擎瀑布流搜尋（Bing → DuckDuckGo → Mojeek）
+  - `GET /fetch?url=...&maxChars=4500`：HTMLRewriter 串流正文抽取與 SSRF 防禦
+- **快取**：Cache API 兩級快取（搜尋結果 30 分鐘，網頁內文 1 小時）
+- **自部署步驟**：
+  ```bash
+  cd cloudflare-search-worker
+  npx wrangler deploy
+  # 可選：設置 API 金鑰保護
+  npx wrangler secret put API_KEY
+  ```
+- **App 設定**：
+  在 App「設定」&rarr;「搜尋代理」分頁輸入 Worker 網址與 API Key，並點擊「測試 Worker 連線」即刻啟用；代理故障或未設定時全自動靜默降級至本機直連鏈。
 
 ### 🛠️ 發布新版本步驟 (Release Steps)
 

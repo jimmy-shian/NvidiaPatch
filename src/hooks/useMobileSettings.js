@@ -6,6 +6,7 @@ import { SkillManager } from '../core/skills/skillManager';
 import { MCPManager } from '../core/mcp/MCPManager';
 import { createProvider, PROVIDER_TYPES } from '../core/providers';
 import { CURATED_NVIDIA_MODELS, DEFAULT_NVIDIA_MODEL } from '../core/providers/NvidiaNimProvider';
+import { WorkerSearchProvider } from '../core/tools/search/WorkerSearchProvider';
 
 const ACTIVE_PROVIDER_KEY = 'active_provider_id';
 const ACTIVE_MODEL_KEY = 'active_model_id';
@@ -18,8 +19,14 @@ export function useMobileSettings() {
   const [contextSettings, setContextSettings] = useState({});
   const [skills, setSkills] = useState([]);
   const [mcpServers, setMcpServers] = useState([]);
+  const [workerSearchConfig, setWorkerSearchConfig] = useState({
+    enabled: false,
+    url: '',
+    apiKey: ''
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+
 
   // Load all configurations on initial launch
   const loadAll = useCallback(async () => {
@@ -72,7 +79,12 @@ export function useMobileSettings() {
       // 6. MCP Servers
       const loadedMcp = await MCPManager.getServers();
       setMcpServers(loadedMcp);
+
+      // 7. Cloudflare Worker Search Proxy Config
+      const workerCfg = await WorkerSearchProvider.getConfig();
+      setWorkerSearchConfig(workerCfg);
     } catch (err) {
+
       console.error('[useMobileSettings loadAll error]:', err);
     } finally {
       setIsLoading(false);
@@ -208,7 +220,14 @@ export function useMobileSettings() {
     setSkills(updatedList);
   }, []);
 
+  const reorderSkills = useCallback(async (orderedIds) => {
+    await SkillManager.saveSkillsOrder(orderedIds);
+    const updatedList = await SkillManager.getAllSkills();
+    setSkills(updatedList);
+  }, []);
+
   // MCP Server management
+
   const addMcpServer = useCallback(async (serverParams) => {
     const res = await MCPManager.connectServer({
       ...serverParams,
@@ -242,6 +261,16 @@ export function useMobileSettings() {
     return MCPManager.testConnection(params);
   }, []);
 
+  // Cloudflare Worker Search Proxy management
+  const updateWorkerSearchConfig = useCallback(async (updates) => {
+    setWorkerSearchConfig(prev => ({ ...prev, ...updates }));
+    await WorkerSearchProvider.setConfig(updates);
+  }, []);
+
+  const testWorkerSearchConnection = useCallback(async (url, apiKey) => {
+    return WorkerSearchProvider.testConnection(url, apiKey);
+  }, []);
+
   return {
     isLoading,
     isSyncing,
@@ -252,6 +281,7 @@ export function useMobileSettings() {
     contextSettings,
     skills,
     mcpServers,
+    workerSearchConfig,
     changeProvider,
     selectModel,
     updateProviderConfig,
@@ -261,10 +291,14 @@ export function useMobileSettings() {
     importSkill,
     saveSkill,
     deleteSkill,
+    reorderSkills,
     addMcpServer,
     toggleMcpServer,
     deleteMcpServer,
     syncMcpServer,
-    testMcpConnection
+    testMcpConnection,
+    updateWorkerSearchConfig,
+    testWorkerSearchConnection
   };
 }
+

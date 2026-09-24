@@ -74,16 +74,33 @@ export class BingHtmlProvider extends SearchProvider {
 
       // Extract Title & Href: <h2><a href="...">Title</a></h2> or <h3><a href="...">Title</a></h3>
       const titleMatch = block.match(/<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/i);
-      const linkMatch = (titleMatch ? titleMatch[1].match(/href=["']([^"']+)["']/i) : null) || block.match(/<a\b[^>]*href=["']([^"']+)["']/i);
-      if (!linkMatch) continue;
+      let rawHref = null;
+      let rawTitle = null;
 
-      const rawHref = linkMatch[1].replace(/&amp;/g, '&');
-      const realUrl = this.decodeBingUrl(rawHref);
+      if (titleMatch) {
+        const headingLink = titleMatch[1].match(/href=["']([^"']+)["']/i);
+        if (headingLink) {
+          rawHref = headingLink[1];
+          rawTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+        }
+      }
+
+      if (!rawHref) {
+        const linkMatch = block.match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+        if (linkMatch) {
+          rawHref = linkMatch[1];
+          rawTitle = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+        }
+      }
+
+      if (!rawHref) continue;
+
+      const cleanHref = rawHref.replace(/&amp;/g, '&');
+      const realUrl = this.decodeBingUrl(cleanHref);
 
       if (!realUrl || seenUrls.has(realUrl)) continue;
       seenUrls.add(realUrl);
 
-      const rawTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : (realUrl);
 
       // Extract Snippet: <div class="b_caption"><p>...</p></div> or <p>...</p> or <div class="b_snippet">
       const snippetMatch = block.match(/<div\b[^>]*class=["'][^"']*(?:b_caption|b_snippet|b_lineclamp)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) ||

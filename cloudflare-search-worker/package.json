@@ -1,0 +1,15 @@
+{
+  "name": "nvidiapatch-search-proxy",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker proxy for search engines and web content extraction",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "wrangler": "^4.137.0"
+  }
+}

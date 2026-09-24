@@ -7,6 +7,7 @@ import { HttpClient } from '../../network/httpClient';
 import { validateExternalUrl } from './urlValidator';
 import { extractReadableContent } from './ContentExtractor';
 import { sanitizeWebContent } from './ContentSanitizer';
+import { WorkerSearchProvider } from '../search/WorkerSearchProvider';
 
 export class WebPageFetcher {
   /**
@@ -16,7 +17,7 @@ export class WebPageFetcher {
    * @returns {Promise<{ ok: boolean, title?: string, url: string, snippet?: string, content?: string, error?: string }>}
    */
   static async fetch(url, options = {}) {
-    const { timeout = 8000, maxChars = 5000 } = options;
+    const { timeout = 12000, maxChars = 5000 } = options;
 
     // 1. URL Safety & SSRF Validation
     const validation = validateExternalUrl(url);
@@ -30,8 +31,39 @@ export class WebPageFetcher {
 
     const targetUrl = validation.cleanUrl;
 
+    // 2. Check if Cloudflare Worker proxy is configured & enabled
     try {
-      // 2. Fetch HTML via Native/Browser HttpClient
+      const workerConfig = await WorkerSearchProvider.getConfig();
+      if (workerConfig.enabled && workerConfig.url) {
+        const workerTimeout = Math.max(timeout, 15000);
+        const fetchEndpoint = `${workerConfig.url}/fetch?url=${encodeURIComponent(targetUrl)}&maxChars=${maxChars}`;
+        const headers = { 'Accept': 'application/json' };
+        if (workerConfig.apiKey) {
+          headers['X-Api-Key'] = workerConfig.apiKey;
+        }
+
+        const workerRes = await HttpClient.request({
+          url: fetchEndpoint,
+          method: 'GET',
+          headers,
+          timeout: workerTimeout
+        });
+
+        if (workerRes.ok && workerRes.data) {
+          const parsed = typeof workerRes.data === 'string' ? JSON.parse(workerRes.data) : workerRes.data;
+          if (parsed && typeof parsed.ok === 'boolean') {
+            return parsed;
+          }
+        }
+        // If worker responded with error status, fall through to direct fetch fallback
+        console.warn(`[WebPageFetcher Worker route failed (HTTP ${workerRes?.status})], falling back to direct fetch:`, targetUrl);
+      }
+    } catch (workerErr) {
+      console.warn('[WebPageFetcher Worker route error], falling back to direct fetch:', workerErr?.message || workerErr);
+    }
+
+    try {
+      // 3. Direct Fetch HTML via Native/Browser HttpClient (Fallback)
       const res = await HttpClient.request({
         url: targetUrl,
         method: 'GET',

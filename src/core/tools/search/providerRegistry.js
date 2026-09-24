@@ -2,6 +2,7 @@
  * Search Provider Registry & Health Monitor
  * Manages active search providers (Bing, DuckDuckGo, Mojeek), failure counters, and fallback orchestration.
  */
+import { WorkerSearchProvider } from './WorkerSearchProvider';
 import { BingHtmlProvider } from './BingHtmlProvider';
 import { DuckDuckGoHtmlProvider } from './DuckDuckGoHtmlProvider';
 import { MojeekHtmlProvider } from './MojeekHtmlProvider';
@@ -11,6 +12,7 @@ import { normalizeSearchResults } from './searchNormalizer';
 export class SearchProviderRegistry {
   constructor() {
     this.providers = [
+      new WorkerSearchProvider(),
       new BingHtmlProvider(),
       new DuckDuckGoHtmlProvider(),
       new MojeekHtmlProvider(),
@@ -18,6 +20,7 @@ export class SearchProviderRegistry {
     ];
 
     this.healthStats = {
+      worker: { failures: 0, lastSuccess: null, lastFailure: null },
       bing: { failures: 0, lastSuccess: null, lastFailure: null },
       duckduckgo: { failures: 0, lastSuccess: null, lastFailure: null },
       mojeek: { failures: 0, lastSuccess: null, lastFailure: null },
@@ -57,6 +60,11 @@ export class SearchProviderRegistry {
   }
 
   recordFailure(providerName, error) {
+    // If worker is simply not configured or disabled, do not count as a health failure
+    if (providerName === 'worker' && error?.code === 'NOT_CONFIGURED') {
+      return;
+    }
+
     if (!this.healthStats[providerName]) {
       this.healthStats[providerName] = { failures: 0, lastSuccess: null, lastFailure: null };
     }
@@ -74,6 +82,7 @@ export class SearchProviderRegistry {
   async search(query, options = {}) {
     const prioritized = this.getPrioritizedProviders();
     let lastError = null;
+    const providerErrors = options.providerErrors || [];
 
     for (const provider of prioritized) {
       try {
@@ -83,12 +92,21 @@ export class SearchProviderRegistry {
           return normalizeSearchResults(rawResults, query, options);
         }
       } catch (err) {
-        this.recordFailure(provider.name, err);
+        if (provider.name !== 'worker' || err?.code !== 'NOT_CONFIGURED') {
+          this.recordFailure(provider.name, err);
+          providerErrors.push({
+            provider: provider.name,
+            errorKind: err.errorKind || (err.message?.includes('bot challenge') || err.message?.includes('captcha') ? 'challenge' : 'error'),
+            message: err.message
+          });
+        }
         lastError = err;
       }
     }
 
-    throw lastError || new Error('All search providers failed to return results');
+    const failureErr = lastError || new Error('All search providers failed to return results');
+    failureErr.providerErrors = providerErrors;
+    throw failureErr;
   }
 }
 

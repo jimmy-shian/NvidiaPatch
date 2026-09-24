@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Server, User, Sparkles, Plug, Info, ShieldCheck } from 'lucide-react';
+import { X, Server, User, Sparkles, Plug, Info, ShieldCheck, Cloud } from 'lucide-react';
 import { APP_VERSION } from '../../version';
 import ProviderConfigTab from './ProviderConfigTab';
 import PersonalContextTab from './PersonalContextTab';
 import SkillsManagerTab from './SkillsManagerTab';
 import MCPManagerTab from './MCPManagerTab';
+import SearchProxyTab from './SearchProxyTab';
 
 export default function SettingsModal({
   isOpen,
@@ -23,15 +24,20 @@ export default function SettingsModal({
   onImportSkill,
   onSaveSkill,
   onDeleteSkill,
+  onReorderSkills,
   mcpServers = [],
   onAddMcpServer,
   onToggleMcpServer,
   onDeleteMcpServer,
   onSyncMcpServer,
-  onTestMcpConnection
+  onTestMcpConnection,
+  workerSearchConfig,
+  onUpdateWorkerSearchConfig,
+  onTestWorkerSearchConnection
 }) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('providers');
+
 
   if (!isOpen) return null;
 
@@ -103,7 +109,20 @@ export default function SettingsModal({
           </button>
 
           <button
+            onClick={() => setActiveTab('searchProxy')}
+            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+              activeTab === 'searchProxy'
+                ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Cloud size={14} />
+            <span>搜尋代理</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('about')}
+
             className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
               activeTab === 'about'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
@@ -142,8 +161,10 @@ export default function SettingsModal({
               onImportSkill={onImportSkill}
               onSaveSkill={onSaveSkill}
               onDeleteSkill={onDeleteSkill}
+              onReorderSkills={onReorderSkills}
             />
           )}
+
 
           {activeTab === 'mcp' && (
             <MCPManagerTab
@@ -156,7 +177,16 @@ export default function SettingsModal({
             />
           )}
 
+          {activeTab === 'searchProxy' && (
+            <SearchProxyTab
+              config={workerSearchConfig}
+              onUpdateConfig={onUpdateWorkerSearchConfig}
+              onTestConnection={onTestWorkerSearchConnection}
+            />
+          )}
+
           {activeTab === 'about' && (
+
             <div className="space-y-4 text-xs text-slate-300">
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl flex flex-col items-center text-center gap-2">
                 <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-white font-extrabold text-xl shadow-lg shadow-emerald-950/50">
