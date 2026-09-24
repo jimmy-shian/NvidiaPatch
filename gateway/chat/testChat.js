@@ -14,10 +14,15 @@ const { sanitizeChatCompletionBody } = require('../utils/sanitize');
 const { smartValidate, formatValidationIssue, isUpstreamErrorContent, extractUpstreamErrorDetail } = require('../engine/contentValidator');
 const ContentValidationError = require('../errors/ContentValidationError');
 const { resolveChatCompletionsUrl, isCustomUpstreamUrl } = require('../utils/urlHelper');
+const { resolveUpstreamModelId } = require('../utils/modelResolver');
 const { isContextLimitError } = require('./upstream/sendSingleRequest');
 
 async function handleTestChat(req, res) {
   const { model, messages, stream, response_format } = req.body;
+  const upstreamModel = resolveUpstreamModelId(model);
+  if (upstreamModel !== model) {
+    addLog('info', `[模型測試] 模型 ID「${model}」已自動進行符號容錯對齊，上游替換為標準 ID「${upstreamModel}」。`);
+  }
   const currentSettings = settings.get();
   const enableContentValidation = currentSettings.ENABLE_CONTENT_VALIDATION;
   const rawBaseUrl = currentSettings.NVIDIA_API_URL || process.env.NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1';
@@ -91,7 +96,7 @@ async function handleTestChat(req, res) {
         },
         body: JSON.stringify({
           ...sanitized,
-          model: model,
+          model: upstreamModel,
           messages: cleanMessages,
           stream: !!stream,
           temperature: sanitized.temperature !== undefined ? sanitized.temperature : 1

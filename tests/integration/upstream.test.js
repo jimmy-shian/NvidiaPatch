@@ -347,4 +347,45 @@ describe('Upstream Request & Dispatch Mock Tests', () => {
     // Should have succeeded and called res.json with success, rather than returning 503 deadlock
     expect(mockRes.json).toHaveBeenCalled();
   });
+
+  it('should automatically normalize hyphenated model IDs like z-ai/glm-5-3-flash to official dot version in upstream payload', async () => {
+    let capturedBody = null;
+    global.fetch = vi.fn().mockImplementation((url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        text: async () => JSON.stringify({
+          id: 'chatcmpl-mock-glm',
+          choices: [{ message: { role: 'assistant', content: 'GLM response' } }],
+          usage: { prompt_tokens: 5, completion_tokens: 10, total_tokens: 15 }
+        })
+      });
+    });
+
+    const mockReq = { body: { model: 'z-ai/glm-5-3-flash', messages: [{ role: 'user', content: 'test' }] } };
+    const mockRes = createMockRes();
+    const context = createChatContext({
+      req: mockReq,
+      res: mockRes,
+      originalBody: mockReq.body,
+      activeConfig: { REQUEST_TIMEOUT_MS: 5000, KEY_CONCURRENCY_DELAY_MS: 0 }
+    });
+
+    const keys = apiKeys.getActiveKeys();
+    const result = await sendSingleRequest({
+      context,
+      model: { model_id: 'z-ai/glm-5-3-flash', priority: 1 },
+      key: keys[0],
+      keyIndex: 0,
+      availableKeys: keys,
+      sanitizedBody: mockReq.body
+    });
+
+    expect(result.success).toBe(true);
+    expect(capturedBody).not.toBeNull();
+    // Verify that the model ID was transformed from hyphen to dot format before sending to upstream
+    expect(capturedBody.model).toBe('z-ai/glm-5.3-flash');
+  });
 });

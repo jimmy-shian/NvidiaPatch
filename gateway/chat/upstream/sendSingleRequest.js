@@ -22,6 +22,7 @@ const { apiKeys, stats } = require('../../../database');
 const { addLog } = require('../../logs/logger');
 const { reserveSlot, waitForSlot } = require('../keyQueue');
 const { resolveChatCompletionsUrl } = require('../../utils/urlHelper');
+const { resolveUpstreamModelId } = require('../../utils/modelResolver');
 
 async function readTextSafely(response) {
   try {
@@ -79,11 +80,15 @@ function isServerError(errText) {
 async function sendSingleRequest({ context, model, key, keyIndex, availableKeys, sanitizedBody }) {
   const { requestId, isClientGone, activeConfig, res } = context;
   const modelId = model.model_id;
+  const upstreamModelId = resolveUpstreamModelId(modelId);
+  if (upstreamModelId !== modelId) {
+    addLog('info', `請求 #${requestId}：模型 ID「${modelId}」已自動進行符號容錯對齊，上游替換為標準 ID「${upstreamModelId}」。`);
+  }
   const REQUEST_TIMEOUT_MS = activeConfig.REQUEST_TIMEOUT_MS;
 
   const forwardBody = {
     ...sanitizedBody,
-    model: modelId,
+    model: upstreamModelId,
     temperature: sanitizedBody.temperature !== undefined ? sanitizedBody.temperature : 1
   };
 
