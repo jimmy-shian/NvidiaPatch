@@ -33,7 +33,11 @@ export default function ChatView({
   onToggleSkill,
   conversationType,
   onRandomCast,
-  onShowHelp
+  onShowHelp,
+  attachedImages = [],
+  onAddImages,
+  onRemoveImage,
+  onClearImages
 }) {
   const { t } = useTranslation();
   const messagesEndRef = useRef(null);
@@ -345,6 +349,10 @@ export default function ChatView({
         selectedSkillIds={selectedSkillIds}
         onToggleSkill={onToggleSkill}
         hideSkillsSelector={conversationType === 'meihua'}
+        attachedImages={attachedImages}
+        onAddImages={onAddImages}
+        onRemoveImage={onRemoveImage}
+        onClearImages={onClearImages}
         disabled={!currentModelId}
       />
     </div>

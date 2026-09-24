@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight, Sparkles, Plug } from 'lucide-react';
+import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight, Sparkles, Plug, Share2 } from 'lucide-react';
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
+import { shareCardAsImage } from '../../core/utils/cardShare';
 
 export default function MessageBubble({
   message,
@@ -22,6 +23,9 @@ export default function MessageBubble({
   const [editMeihuaNumbers, setEditMeihuaNumbers] = useState(null);
   const [expandedToolResults, setExpandedToolResults] = useState({});
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
+  const [sharingMeihuaKey, setSharingMeihuaKey] = useState(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState(null);
+  const meihuaCardRefs = useRef({});
 
   if (message.role === 'system') return null; // Never render hidden system messages
 
@@ -291,10 +295,42 @@ export default function MessageBubble({
                 const calc = parsedResult?.calculation;
                 const know = parsedResult?.knowledge;
 
+                const cardKey = te.toolCallId || `meihua_${idx}`;
+                const isSharingThis = sharingMeihuaKey === cardKey;
+
+                const handleShareCard = async (e) => {
+                  e.stopPropagation();
+                  if (isSharingThis) return;
+                  setSharingMeihuaKey(cardKey);
+
+                  if (!isExpanded) {
+                    setExpandedToolResults(prev => ({ ...prev, [cardKey]: true }));
+                    await new Promise(r => setTimeout(r, 150));
+                  }
+
+                  const domNode = meihuaCardRefs.current[cardKey];
+                  if (domNode) {
+                    try {
+                      const hexName = calc?.primary?.hexagram?.fullName || '梅花易數';
+                      await shareCardAsImage(domNode, {
+                        title: `${hexName} · 梅花排盤`,
+                        fileName: `meihua-${Date.now()}.png`
+                      });
+                    } catch (err) {
+                      console.warn('Share meihua card error:', err);
+                    }
+                  }
+                  setSharingMeihuaKey(null);
+                };
+
                 return (
-                  <div key={te.toolCallId || idx} className="rounded-xl bg-gradient-to-r from-rose-950/40 via-[#0e1420] to-purple-950/40 border border-rose-500/30 px-2.5 py-1.5 text-xs shadow-sm">
+                  <div
+                    key={cardKey}
+                    ref={el => { meihuaCardRefs.current[cardKey] = el; }}
+                    className="rounded-xl bg-gradient-to-r from-rose-950/40 via-[#0e1420] to-purple-950/40 border border-rose-500/30 px-2.5 py-1.5 text-xs shadow-sm"
+                  >
                     <div
-                      onClick={() => toggleToolResult(te.toolCallId || idx)}
+                      onClick={() => toggleToolResult(cardKey)}
                       className="flex items-center justify-between gap-1.5 cursor-pointer select-none"
                     >
                       <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -315,6 +351,15 @@ export default function MessageBubble({
                         <span className="font-mono bg-rose-950/70 px-1.5 py-0.5 rounded border border-rose-800/50 text-rose-300">
                           {calc?.method === 'time' ? '⏰ 時間' : calc?.randomNumbers ? `🎲 ${calc.randomNumbers.join(',')}` : '🔢 數字'}
                         </span>
+                        <button
+                          type="button"
+                          onClick={handleShareCard}
+                          disabled={isSharingThis}
+                          className="p-1 rounded-lg text-rose-300/80 hover:text-white hover:bg-rose-900/50 transition-colors"
+                          title="匯出為圖片並分享"
+                        >
+                          {isSharingThis ? <Loader2 size={13} className="animate-spin text-rose-300" /> : <Share2 size={13} />}
+                        </button>
                         {isExpanded ? <ChevronDown size={13} className="text-rose-400" /> : <ChevronRight size={13} className="text-rose-400" />}
                       </div>
                     </div>
@@ -379,6 +424,12 @@ export default function MessageBubble({
                         <div className="text-[10px] text-emerald-400/90 flex items-center gap-1 font-mono">
                           <Check size={12} />
                           <span>已完成確定性數理排盤與體用生剋判定，結果已引導大模型生成。</span>
+                        </div>
+
+                        {/* Watermark branding footer for shared card */}
+                        <div className="pt-1.5 flex items-center justify-between text-[9px] text-slate-500 border-t border-rose-900/30 font-mono">
+                          <span>🌸 梅花易數排盤</span>
+                          <span>NvidiaPatch Chat</span>
                         </div>
                       </div>
                     )}
@@ -445,6 +496,22 @@ export default function MessageBubble({
 
                   {isExpanded && (
                     <div className="mt-2 pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] animate-fade-in">
+                      {Array.isArray(parsedResult?.providerErrors) && parsedResult.providerErrors.length > 0 && (
+                        <div className="p-2 rounded bg-amber-950/40 border border-amber-800/50 text-[10px] text-amber-300 space-y-1">
+                          <div className="font-semibold flex items-center gap-1">
+                            <AlertTriangle size={11} className="shrink-0 text-amber-400" />
+                            <span>搜尋引擎診斷與狀態：</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 pt-0.5">
+                            {parsedResult.providerErrors.map((pe, peIdx) => (
+                              <span key={peIdx} className="px-1.5 py-0.5 rounded bg-slate-900/80 border border-amber-800/40 font-mono text-[9px]">
+                                {pe.provider}: {pe.errorKind === 'challenge' ? '🛡️ 被反爬挑戰(已降級)' : pe.errorKind}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {parsedResult?.formattedText ? (
                         <div className="p-2 rounded bg-black/50 border border-slate-800/80 whitespace-pre-wrap font-mono text-slate-300 text-[11px]">
                           {parsedResult.formattedText}
@@ -469,6 +536,7 @@ export default function MessageBubble({
                       )}
                     </div>
                   )}
+
                 </div>
               );
             })}
@@ -545,6 +613,42 @@ export default function MessageBubble({
             const match = rawContent.match(/<meihua-numbers\s+n1="(\d+)"\s+n2="(\d+)"\s+n3="(\d+)"[^>]*>/i) ||
                           rawContent.match(/<meihua-numbers>(\d+)[,\s]+(\d+)[,\s]+(\d+)<\/meihua-numbers>/i);
 
+            const hasImages = Array.isArray(message.images) && message.images.length > 0;
+
+            const renderImages = () => {
+              if (!hasImages) return null;
+              return (
+                <div
+                  className={`grid gap-1.5 mb-2 ${
+                    message.images.length === 1
+                      ? 'grid-cols-1'
+                      : message.images.length === 2
+                        ? 'grid-cols-2'
+                        : 'grid-cols-2 sm:grid-cols-3'
+                  }`}
+                >
+                  {message.images.map((img, idx) => {
+                    const src = typeof img === 'string' ? img : img.url;
+                    return (
+                      <div
+                        key={idx}
+                        className="relative group rounded-xl overflow-hidden border border-white/10 bg-black/40 cursor-pointer shadow-sm hover:opacity-90 active:scale-[0.98] transition-all max-w-[280px]"
+                        onClick={() => setPreviewImageUrl(src)}
+                        title="點擊放大檢視圖片"
+                      >
+                        <img
+                          src={src}
+                          alt={img.name || `Image ${idx + 1}`}
+                          className="w-full h-auto max-h-56 object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            };
+
             if (match) {
               const n1 = match[1];
               const n2 = match[2];
@@ -553,6 +657,7 @@ export default function MessageBubble({
 
               return (
                 <div className="space-y-1.5 max-w-full overflow-hidden select-text selectable-text">
+                  {renderImages()}
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gradient-to-r from-rose-950/80 to-purple-950/80 border border-rose-500/40 text-rose-200 text-xs shadow-sm">
                     <span className="font-semibold text-rose-300 flex items-center gap-1">🎲 靈動數</span>
                     <span className="px-1.5 py-0.5 rounded bg-rose-900/70 border border-rose-700/50 font-mono text-rose-100 font-bold text-[11px]">{n1}</span>
@@ -569,8 +674,13 @@ export default function MessageBubble({
             }
 
             return (
-              <div className="whitespace-pre-wrap break-words break-all leading-relaxed max-w-full overflow-hidden select-text selectable-text">
-                {rawContent}
+              <div className="max-w-full overflow-hidden select-text selectable-text">
+                {renderImages()}
+                {rawContent && (
+                  <div className="whitespace-pre-wrap break-words break-all leading-relaxed">
+                    {rawContent}
+                  </div>
+                )}
               </div>
             );
           })()
@@ -679,6 +789,31 @@ export default function MessageBubble({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* Fullscreen Image Preview Lightbox Modal */}
+      {previewImageUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 animate-fade-in"
+          onClick={() => setPreviewImageUrl(null)}
+        >
+          <div className="relative max-w-full max-h-full flex flex-col items-center">
+            <button
+              type="button"
+              onClick={() => setPreviewImageUrl(null)}
+              className="absolute -top-10 right-0 p-2 text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors cursor-pointer"
+              title="關閉預覽"
+            >
+              <X size={20} />
+            </button>
+            <img
+              src={previewImageUrl}
+              alt="Preview full"
+              className="max-w-[95vw] max-h-[85vh] object-contain rounded-xl shadow-2xl border border-slate-700/50"
+              onClick={e => e.stopPropagation()}
+            />
+          </div>
         </div>
       )}
     </div>

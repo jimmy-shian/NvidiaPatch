@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="#0B0F17">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="6dp">
+
+        <TextView
+            android:id="@+id/widget_app_icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🌸 "
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/widget_task_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="每日排程運勢"
+            android:textColor="#34D399"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/widget_task_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="剛剛"
+            android:textColor="#94A3B8"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- Summary Content -->
+    <TextView
+        android:id="@+id/widget_task_summary"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:text="點擊開啟 NvidiaPatch 查看最新排程分析與今日運勢簡報。"
+        android:textColor="#E2E8F0"
+        android:textSize="11sp"
+        android:lineSpacingExtra="2dp"
+        android:maxLines="4"
+        android:ellipsize="end" />
+
+    <!-- Footer -->
+    <TextView
+        android:id="@+id/widget_footer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="NvidiaPatch · 點擊直達對話"
+        android:textColor="#64748B"
+        android:textSize="9sp" />
+
+</LinearLayout>

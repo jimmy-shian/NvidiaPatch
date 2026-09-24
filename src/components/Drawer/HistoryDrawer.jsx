@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, MessageSquare, Trash2, Edit2, Check, X, Search, Settings, AlertTriangle } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Edit2, Check, X, Search, Settings, AlertTriangle, Clock } from 'lucide-react';
+import ScheduleTasksPanel from './ScheduleTasksPanel';
 
 export default function HistoryDrawer({
   isOpen,
@@ -12,9 +13,14 @@ export default function HistoryDrawer({
   onNewMeihuaChat,
   onRenameConversation,
   onDeleteConversation,
-  onOpenSettings
+  onOpenSettings,
+  providerConfigs,
+  skills,
+  currentProviderId,
+  currentModelId
 }) {
   const { t } = useTranslation();
+  const [drawerTab, setDrawerTab] = useState('chats');
   const [searchQuery, setSearchQuery] = useState('');
   const [editingConvId, setEditingConvId] = useState(null);
   const [editTitleText, setEditTitleText] = useState('');
@@ -89,47 +95,84 @@ export default function HistoryDrawer({
           </button>
         </div>
 
-        {/* New Chat Button */}
-        <div className="p-3">
+        {/* Navigation Tabs: Chats vs Scheduled Tasks */}
+        <div className="flex border-b border-slate-800 bg-slate-950/60 p-1 mx-3 mt-2 rounded-xl">
           <button
-            onClick={() => {
-              onNewChat();
-              onClose();
-            }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs shadow-md shadow-emerald-950/40 transition-transform active:scale-95"
+            type="button"
+            onClick={() => setDrawerTab('chats')}
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
+              drawerTab === 'chats'
+                ? 'bg-slate-800 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
           >
-            <Plus size={15} />
-            <span>{t('app.newChat')}</span>
+            <MessageSquare size={13} />
+            <span>對話歷史</span>
           </button>
-          
           <button
-            onClick={() => {
-              onNewMeihuaChat();
-              onClose();
-            }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-semibold text-xs shadow-md shadow-rose-950/40 transition-transform active:scale-95 mt-2"
+            type="button"
+            onClick={() => setDrawerTab('schedule')}
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
+              drawerTab === 'schedule'
+                ? 'bg-slate-800 text-amber-300 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
           >
-            <span>🌸</span>
-            <span>{t('app.newMeihuaChat')}</span>
+            <Clock size={13} className={drawerTab === 'schedule' ? "text-amber-400" : ""} />
+            <span>任務排程</span>
           </button>
         </div>
 
-        {/* Search */}
-        <div className="px-3 pb-2">
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/90 border border-slate-800 rounded-xl text-xs text-slate-300">
-            <Search size={13} className="text-slate-500 shrink-0" />
-            <input
-              type="text"
-              placeholder={t('app.search')}
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="bg-transparent outline-none flex-1 text-white placeholder-slate-500 text-xs"
-            />
-          </div>
-        </div>
+        {drawerTab === 'schedule' ? (
+          <ScheduleTasksPanel
+            providerConfigs={providerConfigs}
+            skills={skills}
+            currentProviderId={currentProviderId}
+            currentModelId={currentModelId}
+          />
+        ) : (
+          <>
+            {/* New Chat Button */}
+            <div className="p-3">
+              <button
+                onClick={() => {
+                  onNewChat();
+                  onClose();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs shadow-md shadow-emerald-950/40 transition-transform active:scale-95"
+              >
+                <Plus size={15} />
+                <span>{t('app.newChat')}</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  onNewMeihuaChat();
+                  onClose();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-semibold text-xs shadow-md shadow-rose-950/40 transition-transform active:scale-95 mt-2"
+              >
+                <span>🌸</span>
+                <span>{t('app.newMeihuaChat')}</span>
+              </button>
+            </div>
 
-        {/* Conversation List */}
-        <div className="flex-1 overflow-y-auto px-3 py-1 space-y-1">
+            {/* Search */}
+            <div className="px-3 pb-2">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/90 border border-slate-800 rounded-xl text-xs text-slate-300">
+                <Search size={13} className="text-slate-500 shrink-0" />
+                <input
+                  type="text"
+                  placeholder={t('app.search')}
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="bg-transparent outline-none flex-1 text-white placeholder-slate-500 text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Conversation List */}
+            <div className="flex-1 overflow-y-auto px-3 py-1 space-y-1">
           {filtered.length === 0 ? (
             <div className="text-center py-8 text-slate-500 text-xs">
               {t('app.noHistory')}
@@ -245,6 +288,8 @@ export default function HistoryDrawer({
             })
           )}
         </div>
+      </>
+    )}
 
         {/* Footer with Settings */}
         <div className="p-3 border-t border-slate-800/80 bg-slate-900/40">

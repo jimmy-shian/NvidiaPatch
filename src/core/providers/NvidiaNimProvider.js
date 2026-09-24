@@ -8,6 +8,7 @@ import { HttpClient } from '../network/httpClient';
 import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { fetchNvidiaCatalog, sortNvidiaModels } from './nvidiaModelCatalog';
+import { resolveUpstreamModelId } from './modelResolver';
 
 export const DEFAULT_NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_NVIDIA_MODEL = 'nvidia/llama-3.1-nemotron-120b-instruct';
@@ -114,7 +115,7 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
       return;
     }
 
-    const targetModel = model || DEFAULT_NVIDIA_MODEL;
+    const targetModel = resolveUpstreamModelId(model || DEFAULT_NVIDIA_MODEL);
     let activeTools = (tools && tools.length > 0 && this.supportsToolCalling(targetModel)) ? tools : null;
 
     const buildPayload = (includeTools, includeUsage) => ({

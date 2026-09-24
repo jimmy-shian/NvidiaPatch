@@ -30,6 +30,7 @@ public class MainActivity extends BridgeActivity {
     private static final String TAG = "NvidiaPatch";
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, HttpURLConnection> activeConnections = new ConcurrentHashMap<>();
+    private volatile String pendingSharedText = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,6 +66,28 @@ public class MainActivity extends BridgeActivity {
                 v.setPadding(left, top, right, bottom);
                 return WindowInsetsCompat.CONSUMED;
             });
+        }
+
+        handleSendIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleSendIntent(intent);
+    }
+
+    private void handleSendIntent(android.content.Intent intent) {
+        if (intent != null && android.content.Intent.ACTION_SEND.equals(intent.getAction())) {
+            String type = intent.getType();
+            if (type != null && type.startsWith("text/")) {
+                String sharedText = intent.getStringExtra(android.content.Intent.EXTRA_TEXT);
+                if (sharedText != null && !sharedText.trim().isEmpty()) {
+                    this.pendingSharedText = sharedText.trim();
+                    Log.d(TAG, "Received shared text: " + this.pendingSharedText);
+                }
+            }
         }
     }
 
@@ -182,6 +205,13 @@ public class MainActivity extends BridgeActivity {
                 } catch (Exception ignored) {}
             }
             emitDone(streamId);
+        }
+
+        @JavascriptInterface
+        public String getPendingSharedText() {
+            String text = pendingSharedText;
+            pendingSharedText = null;
+            return text != null ? text : "";
         }
 
         private void emitChunk(String streamId, String line) {

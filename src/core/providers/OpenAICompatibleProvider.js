@@ -12,6 +12,7 @@ import { ProviderAdapter } from './ProviderAdapter';
 import { HttpClient } from '../network/httpClient';
 import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
+import { resolveUpstreamModelId } from './modelResolver';
 
 export class OpenAICompatibleProvider extends ProviderAdapter {
   constructor(config = {}) {
@@ -189,10 +190,11 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
   }
 
   async *chatStream({ model, messages, temperature = 0.7, max_tokens = 8192, signal, tools = null }) {
-    let activeTools = (tools && tools.length > 0 && this.supportsToolCalling(model)) ? tools : null;
+    const targetModel = resolveUpstreamModelId(model);
+    let activeTools = (tools && tools.length > 0 && this.supportsToolCalling(targetModel)) ? tools : null;
 
     const buildPayload = (includeTools, includeUsage) => ({
-      model,
+      model: targetModel,
       messages,
       temperature,
       max_tokens,

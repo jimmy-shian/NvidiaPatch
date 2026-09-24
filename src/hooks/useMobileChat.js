@@ -7,6 +7,7 @@ import { estimateFullContextTokens, normalizeApiUsage, projectNextTurnContext } 
 import { getModelContextLimit, getCompressionThreshold, getModelContextInfo } from '../core/context/modelLimits';
 import { generateTitleFromPrompt, cleanFallbackTitle } from '../core/agent/titleGenerator';
 import { runMeihuaPipeline } from '../core/meihua';
+import { NotificationService } from '../core/notifications/notificationService';
 
 export function useMobileChat({
   currentProviderId,
@@ -26,6 +27,21 @@ export function useMobileChat({
   const [isCompressing, setIsCompressing] = useState(false);
   const [compressionToast, setCompressionToast] = useState(null);
   const [liveStatus, setLiveStatus] = useState(null); // Ephemeral progress UI state: { phase, meta }
+  const [attachedImages, setAttachedImages] = useState([]);
+
+  const addImages = useCallback((newImages) => {
+    if (!newImages) return;
+    const list = Array.isArray(newImages) ? newImages : [newImages];
+    setAttachedImages(prev => [...prev, ...list]);
+  }, []);
+
+  const removeImage = useCallback((id) => {
+    setAttachedImages(prev => prev.filter(img => img.id !== id));
+  }, []);
+
+  const clearImages = useCallback(() => {
+    setAttachedImages([]);
+  }, []);
 
   const currentConversationIdRef = useRef(null);
   currentConversationIdRef.current = currentConversationId;
@@ -658,6 +674,7 @@ export function useMobileChat({
         }
 
         // Smart Title generation for first turn via LLM
+        let resolvedTitle = null;
         if (historyMessages.length === 1 && historyMessages[0].role === 'user') {
           try {
             const titleProvider = createProvider(currentProviderId, activeConfig);
@@ -667,6 +684,7 @@ export function useMobileChat({
               model: currentModelId
             });
             if (generatedTitle && generatedTitle.length >= 2) {
+              resolvedTitle = generatedTitle;
               await LocalDB.saveConversation({
                 id: streamConvId,
                 title: generatedTitle,
@@ -675,6 +693,19 @@ export function useMobileChat({
               setConversations(prev => prev.map(c => c.id === streamConvId ? { ...c, title: generatedTitle } : c));
             }
           } catch (_) {}
+        }
+
+        // Background stream completion notification (Plan §2.2)
+        const isBackground = typeof document !== 'undefined' && (document.hidden || currentConversationIdRef.current !== streamConvId);
+        if (isBackground) {
+          const currentConv = conversations.find(c => c.id === streamConvId);
+          const convTitle = resolvedTitle || currentConv?.title || 'AI 解卦/對話已完成';
+          NotificationService.sendCompletionNotification({
+            conversationId: streamConvId,
+            title: convTitle,
+            body: finalContentToDisplay,
+            isError: false
+          });
         }
       },
       onError: async (err) => {
@@ -717,6 +748,19 @@ export function useMobileChat({
             ];
           });
         }
+
+        // Background error notification (Plan §2.2)
+        const isBackground = typeof document !== 'undefined' && (document.hidden || currentConversationIdRef.current !== streamConvId);
+        if (isBackground) {
+          const currentConv = conversations.find(c => c.id === streamConvId);
+          const convTitle = currentConv?.title || 'AI 回答失敗';
+          NotificationService.sendCompletionNotification({
+            conversationId: streamConvId,
+            title: convTitle,
+            body: `錯誤: ${err.message}`,
+            isError: true
+          });
+        }
       }
     });
   }, [currentModelId, currentProviderId, providerConfigs, selectedSkillIds]);
@@ -724,7 +768,8 @@ export function useMobileChat({
   // Send new user message
   const sendMessage = useCallback(async () => {
     const textToSend = input.trim();
-    if (!textToSend || !currentModelId || isStreaming) return;
+    const hasImages = attachedImages.length > 0;
+    if ((!textToSend && !hasImages) || !currentModelId || isStreaming) return;
 
     const currId = currentConversationId;
     const currConv = conversations.find(c => c.id === currId);
@@ -734,13 +779,16 @@ export function useMobileChat({
       conversationId: currId,
       role: 'user',
       content: textToSend,
+      ...(hasImages ? { images: attachedImages.map(img => img.url) } : {}),
       createdAt: Date.now(),
       ordinal: messages.length
     };
 
     // If this is the first message in this conversation, persist conversation record to LocalDB
     if (messages.length === 0) {
-      const initialTitle = currConv?.type === 'meihua' ? '梅花易數占卜' : cleanFallbackTitle(textToSend);
+      const initialTitle = currConv?.type === 'meihua'
+        ? '梅花易數占卜'
+        : (textToSend ? cleanFallbackTitle(textToSend) : '圖片分析');
       const convToSave = {
         id: currId,
         title: currConv?.title || initialTitle,
@@ -756,9 +804,10 @@ export function useMobileChat({
 
     await LocalDB.saveMessage(userMsg);
     setInput('');
+    setAttachedImages([]);
 
     await executeChatStream([...messages, userMsg]);
-  }, [input, currentModelId, isStreaming, currentConversationId, messages, conversations, currentProviderId, selectedSkillIds, executeChatStream]);
+  }, [input, attachedImages, currentModelId, isStreaming, currentConversationId, messages, conversations, currentProviderId, selectedSkillIds, executeChatStream]);
 
   // Stop Generation for current active conversation
   const stopGeneration = useCallback(() => {
@@ -852,6 +901,11 @@ export function useMobileChat({
     stopGeneration,
     regenerate,
     deleteMessage,
-    editMessage
+    editMessage,
+    attachedImages,
+    setAttachedImages,
+    addImages,
+    removeImage,
+    clearImages
   };
 }

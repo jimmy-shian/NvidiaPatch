@@ -94,8 +94,35 @@ export async function buildCompleteMessages({
 
   const combinedSystemPrompt = systemBlocks.join('\n\n');
 
+  // Transform messages to OpenAI multimodal format if images are attached
+  const formattedMessages = messages.map(m => {
+    if (m.images && Array.isArray(m.images) && m.images.length > 0) {
+      const textContent = typeof m.content === 'string' ? m.content : '';
+      const parts = [];
+      if (textContent && textContent.trim()) {
+        parts.push({ type: 'text', text: textContent });
+      } else {
+        parts.push({ type: 'text', text: '請分析這張圖片內容。' });
+      }
+      for (const img of m.images) {
+        const url = typeof img === 'string' ? img : img?.url;
+        if (url) {
+          parts.push({
+            type: 'image_url',
+            image_url: { url }
+          });
+        }
+      }
+      return {
+        ...m,
+        content: parts
+      };
+    }
+    return m;
+  });
+
   return [
     { role: 'system', content: combinedSystemPrompt },
-    ...messages
+    ...formattedMessages
   ];
 }

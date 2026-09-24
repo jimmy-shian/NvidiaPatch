@@ -70,6 +70,14 @@ function parseSimpleYaml(yamlStr) {
     const colonIdx = trimmed.indexOf(':');
     if (colonIdx > 0) {
       const key = trimmed.slice(0, colonIdx).trim();
+
+      // A folded-block (>/< /|) continuation line may itself contain ':' (e.g. "Foo: bar baz").
+      // YAML keys are single tokens without spaces — treat spaced "keys" as continuation text.
+      if (key.includes(' ') && currentKey && typeof result[currentKey] === 'string') {
+        result[currentKey] += (result[currentKey] ? ' ' : '') + trimmed;
+        continue;
+      }
+
       let value = trimmed.slice(colonIdx + 1).trim();
 
       // Remove enclosing quotes

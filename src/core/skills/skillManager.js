@@ -8,7 +8,7 @@ import { LocalDB } from '../storage/localDatabase';
 
 export const SkillManager = {
   /**
-   * Get all skills (built-in merged with user skills, user skills take precedence)
+   * Get all skills (built-in merged with user skills, user skills take precedence, ordered by custom user display order)
    */
   async getAllSkills() {
     const userSkills = await LocalDB.getUserSkills();
@@ -41,8 +41,47 @@ export const SkillManager = {
       });
     }
 
+    // Apply custom order if stored
+    const orderList = await this.getSkillsOrder();
+    if (Array.isArray(orderList) && orderList.length > 0) {
+      const orderMap = new Map();
+      orderList.forEach((id, index) => {
+        orderMap.set(id, index);
+      });
+
+      merged.sort((a, b) => {
+        const orderA = orderMap.has(a.id) ? orderMap.get(a.id) : 9999;
+        const orderB = orderMap.has(b.id) ? orderMap.get(b.id) : 9999;
+        return orderA - orderB;
+      });
+    }
+
     return merged;
   },
+
+  /**
+   * Get custom skill order array [id1, id2, ...]
+   */
+  async getSkillsOrder() {
+    try {
+      const raw = await LocalDB.getContextSetting('skills_display_order', null);
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === 'string' && raw.trim()) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (_) {}
+    return [];
+  },
+
+  /**
+   * Save custom skill order array [id1, id2, ...]
+   */
+  async saveSkillsOrder(orderIds) {
+    if (!Array.isArray(orderIds)) return;
+    await LocalDB.saveContextSetting('skills_display_order', orderIds);
+  },
+
 
   /**
    * Get a single skill by ID

@@ -38,10 +38,17 @@ export function estimateMessageTokens(msg) {
   if (!msg) return 0;
   // Per-message wrapper overhead ~3 tokens
   const overhead = 3;
-  const contentTokens = estimateTextTokens(msg.content || '');
+  let text = '';
+  if (typeof msg.content === 'string') {
+    text = msg.content;
+  } else if (Array.isArray(msg.content)) {
+    text = msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ');
+  }
+  const contentTokens = estimateTextTokens(text);
+  const imageTokens = (msg.images?.length || 0) * 150;
   const thinkingTokens = msg.thinkingContent ? estimateTextTokens(msg.thinkingContent) : 0;
   const toolTokens = msg.tool_calls ? estimateTextTokens(JSON.stringify(msg.tool_calls)) : 0;
-  return overhead + contentTokens + thinkingTokens + toolTokens;
+  return overhead + contentTokens + imageTokens + thinkingTokens + toolTokens;
 }
 
 /**

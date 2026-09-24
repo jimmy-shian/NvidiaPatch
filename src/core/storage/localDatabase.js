@@ -5,7 +5,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'NvidiaPatchMobileDB';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise = null;
 
@@ -17,7 +17,8 @@ const memStores = {
   personal_context: new Map(),
   provider_configs: new Map(),
   conversation_summaries: new Map(),
-  mcp_servers: new Map()
+  mcp_servers: new Map(),
+  scheduled_tasks: new Map()
 };
 
 const isIndexedDBAvailable = typeof indexedDB !== 'undefined';
@@ -52,6 +53,9 @@ export function getDatabase() {
         }
         if (!db.objectStoreNames.contains('mcp_servers')) {
           db.createObjectStore('mcp_servers', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('scheduled_tasks')) {
+          db.createObjectStore('scheduled_tasks', { keyPath: 'id' });
         }
       }
     });
@@ -424,5 +428,53 @@ export const LocalDB = {
     if (!server) return null;
     server.enabled = Boolean(enabled);
     return this.saveMcpServer(server);
+  },
+
+  // --- Scheduled Tasks ---
+  async getScheduledTasks() {
+    const db = await getDatabase();
+    if (!db) {
+      const list = Array.from(memStores.scheduled_tasks.values());
+      return list.sort((a, b) => (a.nextRunAt || 0) - (b.nextRunAt || 0));
+    }
+    const list = await db.getAll('scheduled_tasks');
+    return list.sort((a, b) => (a.nextRunAt || 0) - (b.nextRunAt || 0));
+  },
+
+  async getScheduledTask(id) {
+    const db = await getDatabase();
+    if (!db) return memStores.scheduled_tasks.get(id) || null;
+    return db.get('scheduled_tasks', id);
+  },
+
+  async saveScheduledTask(task) {
+    const toSave = {
+      ...task,
+      updatedAt: Date.now(),
+      createdAt: task.createdAt || Date.now()
+    };
+    const db = await getDatabase();
+    if (!db) {
+      memStores.scheduled_tasks.set(toSave.id, toSave);
+      return toSave;
+    }
+    await db.put('scheduled_tasks', toSave);
+    return toSave;
+  },
+
+  async deleteScheduledTask(id) {
+    const db = await getDatabase();
+    if (!db) {
+      memStores.scheduled_tasks.delete(id);
+      return;
+    }
+    await db.delete('scheduled_tasks', id);
+  },
+
+  async toggleScheduledTask(id, enabled) {
+    const task = await this.getScheduledTask(id);
+    if (!task) return null;
+    task.enabled = Boolean(enabled);
+    return this.saveScheduledTask(task);
   }
 };

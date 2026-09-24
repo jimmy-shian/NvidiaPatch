@@ -30,4 +30,23 @@ Operate as a Grandmaster.`;
     expect(parsed.id).toBe('pirate-mode');
     expect(parsed.instructions).toBe(raw);
   });
+
+  it('keeps folded-block lines containing colons as continuation text', () => {
+    const raw = `---
+name: dream-interpreter
+description: >-
+  Dream Interpretation Dual-Track System: Traditional folklore plus psychology.
+  Second line: still part of the description, not a new key.
+---
+
+# Dream Instructions
+Interpret dreams.`;
+
+    const parsed = parseSkillMarkdown(raw, 'dream');
+    expect(parsed).not.toBeNull();
+    expect(parsed.id).toBe('dream-interpreter');
+    expect(parsed.description).toContain('Dual-Track System: Traditional folklore');
+    expect(parsed.description).toContain('Second line: still part of the description');
+    expect(parsed.instructions).toContain('# Dream Instructions');
+  });
 });

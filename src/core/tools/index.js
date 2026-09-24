@@ -5,6 +5,11 @@
  */
 import { WEB_SEARCH_TOOL_DEFINITION, executeWebSearch } from './webSearch';
 import { MCPManager } from '../mcp/MCPManager';
+import { CALCULATOR_TOOL_DEFINITION, executeCalculator } from './local/calculator';
+import { DATE_CALC_TOOL_DEFINITION, executeDateCalculator } from './local/dateCalc';
+import { UNIT_CONVERTER_TOOL_DEFINITION, executeUnitConverter } from './local/unitConvert';
+import { DATETIME_NOW_TOOL_DEFINITION, executeDateTimeNow } from './local/dateTime';
+import { RANDOM_DRAW_TOOL_DEFINITION, executeRandomDraw } from './local/randomDraw';
 
 export const REQUEST_MCP_CONNECTION_TOOL_DEFINITION = {
   type: 'function',
@@ -48,6 +53,11 @@ export const SEARCH_MCP_TOOLS_TOOL_DEFINITION = {
 
 export const SYSTEM_TOOLS = [
   WEB_SEARCH_TOOL_DEFINITION,
+  CALCULATOR_TOOL_DEFINITION,
+  DATE_CALC_TOOL_DEFINITION,
+  UNIT_CONVERTER_TOOL_DEFINITION,
+  DATETIME_NOW_TOOL_DEFINITION,
+  RANDOM_DRAW_TOOL_DEFINITION,
   REQUEST_MCP_CONNECTION_TOOL_DEFINITION,
   SEARCH_MCP_TOOLS_TOOL_DEFINITION
 ];
@@ -62,6 +72,21 @@ export async function executeTool(name, args, options = {}) {
   switch (name) {
     case 'web_search':
       return executeWebSearch(args, options);
+
+    case 'calculator':
+      return executeCalculator(args);
+
+    case 'date_calculator':
+      return executeDateCalculator(args);
+
+    case 'unit_converter':
+      return executeUnitConverter(args);
+
+    case 'datetime_now':
+      return executeDateTimeNow(args);
+
+    case 'random_draw':
+      return executeRandomDraw(args);
 
     case 'request_mcp_connection': {
       const { url, reason = '' } = args || {};

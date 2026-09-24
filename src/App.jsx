@@ -12,6 +12,8 @@ import MRTRInputModal from './components/Chat/MRTRInputModal';
 import MeihuaHelpModal from './components/Chat/MeihuaHelpModal';
 import { LocalDB } from './core/storage/localDatabase';
 import { PROVIDER_TYPES } from './core/providers';
+import { NotificationService } from './core/notifications/notificationService';
+import { checkPendingSharedText } from './core/utils/shareTarget';
 
 export default function App() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -32,6 +34,9 @@ export default function App() {
         console.warn('StatusBar initialization:', e);
       }
     }
+
+    // Request notification permission and initialize listener
+    NotificationService.requestPermission();
   }, []);
 
   const chat = useMobileChat({
@@ -41,6 +46,45 @@ export default function App() {
     selectedSkillIds,
     setSelectedSkillIds
   });
+
+  useEffect(() => {
+    NotificationService.initActionListener((conversationId) => {
+      if (conversationId && chat.selectConversation) {
+        chat.selectConversation(conversationId);
+      }
+    });
+  }, [chat.selectConversation]);
+
+  // Handle external text shared into NvidiaPatch (Share Target)
+  useEffect(() => {
+    const handleCheckShared = () => {
+      const shared = checkPendingSharedText();
+      if (shared) {
+        if (typeof chat.newChat === 'function') {
+          chat.newChat();
+        }
+        if (typeof chat.setInput === 'function') {
+          chat.setInput(shared);
+        }
+      }
+    };
+
+    handleCheckShared();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleCheckShared();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleCheckShared);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleCheckShared);
+    };
+  }, [chat.newChat, chat.setInput]);
 
   const toggleSkill = (skillId) => {
     setSelectedSkillIds(prev => {
@@ -114,6 +158,10 @@ export default function App() {
           });
         }}
         onShowHelp={() => setIsMeihuaHelpModalOpen(true)}
+        attachedImages={chat.attachedImages}
+        onAddImages={chat.addImages}
+        onRemoveImage={chat.removeImage}
+        onClearImages={chat.clearImages}
       />
 
       {/* History Slide-out Drawer */}
@@ -128,6 +176,10 @@ export default function App() {
         onRenameConversation={chat.renameConversation}
         onDeleteConversation={chat.deleteConversation}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
+        providerConfigs={settings.providerConfigs}
+        skills={settings.skills}
+        currentProviderId={settings.currentProviderId}
+        currentModelId={settings.currentModelId}
       />
 
       {/* Quick Model Selector Bottom Sheet */}
@@ -159,13 +211,19 @@ export default function App() {
         onImportSkill={settings.importSkill}
         onSaveSkill={settings.saveSkill}
         onDeleteSkill={settings.deleteSkill}
+        onReorderSkills={settings.reorderSkills}
         mcpServers={settings.mcpServers}
+
         onAddMcpServer={settings.addMcpServer}
         onToggleMcpServer={settings.toggleMcpServer}
         onDeleteMcpServer={settings.deleteMcpServer}
         onSyncMcpServer={settings.syncMcpServer}
         onTestMcpConnection={settings.testMcpConnection}
+        workerSearchConfig={settings.workerSearchConfig}
+        onUpdateWorkerSearchConfig={settings.updateWorkerSearchConfig}
+        onTestWorkerSearchConnection={settings.testWorkerSearchConnection}
       />
+
 
       {/* Interactive MCP Security Approval Modal */}
       <MCPApprovalModal />
