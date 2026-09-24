@@ -15,16 +15,16 @@ import namingContent from '../../../skills/naming/SKILL.md?raw';
 import { parseSkillMarkdown } from './skillParser';
 
 const rawSkills = [
-  { id: 'bazi', raw: baziContent, icon: '🏮' },
-  { id: 'ziwei', raw: ziweiContent, icon: '🔮' },
-  { id: 'tarot', raw: tarotContent, icon: '🃏' },
-  { id: 'qimen', raw: qimenContent, icon: '🧭' },
-  { id: 'meihua', raw: meihuaContent, icon: '🌸' },
-  { id: 'liuyao', raw: liuyaoContent, icon: '🪙' },
-  { id: 'jingqian', raw: jingqianContent, icon: '📜' },
-  { id: 'daily-fortune', raw: dailyFortuneContent, icon: '☀️' },
-  { id: 'dream', raw: dreamContent, icon: '💭' },
-  { id: 'naming', raw: namingContent, icon: '📝' }
+  { id: 'bazi', raw: baziContent, icon: '🏮', nameZh: '八字命理', nameEn: 'bazi-grandmaster' },
+  { id: 'ziwei', raw: ziweiContent, icon: '🔮', nameZh: '紫微斗數', nameEn: 'ziwei-master' },
+  { id: 'tarot', raw: tarotContent, icon: '🃏', nameZh: '經典塔羅', nameEn: 'tarot-master' },
+  { id: 'qimen', raw: qimenContent, icon: '🧭', nameZh: '奇門遁甲', nameEn: 'qimen-grandmaster' },
+  { id: 'meihua', raw: meihuaContent, icon: '🌸', nameZh: '梅花易數', nameEn: 'meihua-divination' },
+  { id: 'liuyao', raw: liuyaoContent, icon: '🪙', nameZh: '六爻納甲', nameEn: 'liuyao-master' },
+  { id: 'jingqian', raw: jingqianContent, icon: '📜', nameZh: '文王金錢卦', nameEn: 'jingqian-master' },
+  { id: 'daily-fortune', raw: dailyFortuneContent, icon: '☀️', nameZh: '每日運勢', nameEn: 'daily-fortune' },
+  { id: 'dream', raw: dreamContent, icon: '💭', nameZh: '周公解夢', nameEn: 'dream-interpreter' },
+  { id: 'naming', raw: namingContent, icon: '📝', nameZh: '生辰八字取名', nameEn: 'naming-master' }
 ];
 
 export const BUILTIN_SKILLS = rawSkills.map(s => {
@@ -32,6 +32,9 @@ export const BUILTIN_SKILLS = rawSkills.map(s => {
   return {
     ...parsed,
     id: s.id,
+    nameZh: s.nameZh || parsed.nameZh,
+    nameEn: s.nameEn || parsed.nameEn || parsed.name,
+    name: s.nameZh || parsed.name,
     icon: s.icon,
     isBuiltin: true
   };

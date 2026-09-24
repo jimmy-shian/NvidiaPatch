@@ -508,6 +508,7 @@ export function useMobileChat({
     const payloadForAgent = modelRequestMessages.map(m => ({
       role: m.role,
       content: m.content,
+      ...(m.images ? { images: m.images } : {}),
       ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
       ...(m.tool_call_id ? { tool_call_id: m.tool_call_id, name: m.name } : {})
     }));

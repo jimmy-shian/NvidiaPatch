@@ -13,6 +13,7 @@ import { HttpClient } from '../network/httpClient';
 import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { resolveUpstreamModelId } from './modelResolver';
+import { hasImagesInMessages, isImageRejectionError, repackageMessagesWithoutImages } from './visionCapabilities';
 
 export class OpenAICompatibleProvider extends ProviderAdapter {
   constructor(config = {}) {
@@ -283,7 +284,26 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
         return;
       }
 
-      // Check if error was caused by stream_options or tools rejecting in unknown model
+      // 1. Reactive Image Rejection Fallback (收到錯誤，自己重發包裝)
+      if (hasImagesInMessages(messages) && isImageRejectionError(err)) {
+        console.warn(`[OpenAICompatibleProvider] 模型「${targetModel}」拒絕圖片輸入或報錯，自動重發純文字包裝訊息...`);
+        const repackagedMessages = repackageMessagesWithoutImages(messages, targetModel);
+        const imageFallbackPayload = {
+          ...buildPayload(Boolean(activeTools), false),
+          messages: repackagedMessages
+        };
+
+        try {
+          for await (const chunk of executeStream(imageFallbackPayload)) {
+            yield chunk;
+          }
+          return;
+        } catch (imageRetryErr) {
+          console.warn('[OpenAICompatibleProvider] 圖片重發失敗，繼續常規重試:', imageRetryErr);
+        }
+      }
+
+      // 2. Check if error was caused by stream_options or tools rejecting in unknown model
       const errMsg = (err.message || '').toLowerCase();
       const isToolError = activeTools && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || err.status === 400);
       const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || err.status === 400);
@@ -297,9 +317,15 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
           this.supportsStreamOptions = false;
         }
 
-        // Retry without unsupported options
+        // Retry without unsupported options (if messages had images, use repackaged messages)
         try {
-          const fallbackPayload = buildPayload(false, false);
+          const finalMessages = hasImagesInMessages(messages)
+            ? repackageMessagesWithoutImages(messages, targetModel)
+            : messages;
+          const fallbackPayload = {
+            ...buildPayload(false, false),
+            messages: finalMessages
+          };
           for await (const chunk of executeStream(fallbackPayload)) {
             yield chunk;
           }

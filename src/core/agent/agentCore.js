@@ -13,6 +13,7 @@ import { StreamReasoningParser } from './reasoningParser';
 import { SYSTEM_TOOLS, executeTool } from '../tools';
 import { MCPManager } from '../mcp/MCPManager';
 import { parseInBandToolCalls } from './inBandToolParser';
+import { hasImagesInMessages, repackageMessagesWithoutImages } from '../providers/visionCapabilities';
 
 export const AGENT_SAFETY_LIMITS = {
   MAX_TOOL_ROUNDS: 8,
@@ -86,7 +87,8 @@ export class AgentCore {
       // Assemble full payload with system prompts, temporal anchor, context, and skills
       let currentMessages = await buildCompleteMessages({
         messages,
-        selectedSkillIds
+        selectedSkillIds,
+        model
       });
 
       if (signal.aborted) {
@@ -204,8 +206,15 @@ export class AgentCore {
         }
 
         if (validToolCalls.length === 0 || !hasBudget) {
-          // Clean up if finalContent is merely raw tool call JSON arguments (e.g. { "query": ... })
+          // If model returned empty content on round 1 with image input, automatically repackage without images and retry
           const trimmed = finalContent.trim();
+          if (!trimmed && round === 1 && allExecutedToolMessages.length === 0 && hasImagesInMessages(currentMessages)) {
+            console.warn(`[AgentCore] 模型「${model}」接收圖片後未產生任何回覆，自動重發純文字包裝請求...`);
+            currentMessages = repackageMessagesWithoutImages(currentMessages, model);
+            continue;
+          }
+
+          // Clean up if finalContent is merely raw tool call JSON arguments (e.g. { "query": ... })
           const isRawJsonArguments = (trimmed.startsWith('{') && trimmed.endsWith('}') && trimmed.includes('"query"')) ||
                                      (trimmed.startsWith('```json') && trimmed.includes('"query"'));
 
@@ -230,6 +239,10 @@ export class AgentCore {
                   }
                 } catch (_) {}
               }
+            } else if (hasImagesInMessages(currentMessages)) {
+              // If still empty after image retry, show clear failure prompt
+              finalContent = `⚠️ 當前模型「${(model || '').split('/').pop()}」不支援圖片解析，且未產生回覆。建議切換至視覺辨識模型（如 Llama 3.2 Vision、GPT-4o、Gemini 等）後再試。`;
+              onContent?.(finalContent, { runId });
             }
           }
 

@@ -26,8 +26,10 @@ export function parseSkillMarkdown(rawText, fallbackId = '') {
   const [, frontmatterRaw, instructions] = frontmatterMatch;
   const metadata = parseSimpleYaml(frontmatterRaw);
 
-  const id = metadata.name || fallbackId || `skill_${Date.now()}`;
-  const name = metadata.name || fallbackId || 'Unnamed Skill';
+  const id = metadata.id || metadata.name || fallbackId || `skill_${Date.now()}`;
+  const nameZh = metadata.name_zh || metadata.nameZh || '';
+  const nameEn = metadata.name_en || metadata.nameEn || '';
+  const name = nameZh || metadata.name || fallbackId || 'Unnamed Skill';
   const description = metadata.description || '';
   const icon = metadata.icon || '🛠️';
   const toolsRequired = Array.isArray(metadata.tools_required) 
@@ -37,6 +39,8 @@ export function parseSkillMarkdown(rawText, fallbackId = '') {
   return {
     id: id.toLowerCase().replace(/\s+/g, '-'),
     name,
+    nameZh,
+    nameEn: nameEn || (metadata.name && /^[a-zA-Z0-9_\-\s]+$/.test(metadata.name) ? metadata.name : ''),
     description,
     icon,
     toolsRequired,

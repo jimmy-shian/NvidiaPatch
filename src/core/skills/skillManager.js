@@ -60,26 +60,29 @@ export const SkillManager = {
   },
 
   /**
-   * Get custom skill order array [id1, id2, ...]
+   * Get custom skill order array [id1, id2, ...] (excludes meihua)
    */
   async getSkillsOrder() {
     try {
       const raw = await LocalDB.getContextSetting('skills_display_order', null);
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === 'string' && raw.trim()) {
+      let list = [];
+      if (Array.isArray(raw)) list = raw;
+      else if (typeof raw === 'string' && raw.trim()) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) list = parsed;
       }
+      return list.filter(id => id !== 'meihua');
     } catch (_) {}
     return [];
   },
 
   /**
-   * Save custom skill order array [id1, id2, ...]
+   * Save custom skill order array [id1, id2, ...] (excludes meihua)
    */
   async saveSkillsOrder(orderIds) {
     if (!Array.isArray(orderIds)) return;
-    await LocalDB.saveContextSetting('skills_display_order', orderIds);
+    const cleanIds = orderIds.filter(id => id !== 'meihua');
+    await LocalDB.saveContextSetting('skills_display_order', cleanIds);
   },
 
 

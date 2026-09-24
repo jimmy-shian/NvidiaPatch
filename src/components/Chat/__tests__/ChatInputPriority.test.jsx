@@ -10,7 +10,7 @@ vi.mock('react-i18next', () => ({
   })
 }));
 
-describe('ChatInput Priority Skills and Expand Functionality', () => {
+describe('ChatInput Compact Skills Selector and Filter Functionality', () => {
   const mockSkills = [
     { id: 'bazi', name: '八字命理', icon: '🏮', description: '八字分析' },
     { id: 'ziwei', name: '紫微斗數', icon: '🌌', description: '紫微命盤' },
@@ -20,7 +20,7 @@ describe('ChatInput Priority Skills and Expand Functionality', () => {
     { id: 'meihua', name: '梅花易數', icon: '🌸', description: '專屬占卜' }
   ];
 
-  it('renders top 4 skills as priority quick chips and shows expand button for remaining skills', () => {
+  it('renders compact collapsed skill selector button without cluttering input area', () => {
     const html = renderToString(
       React.createElement(ChatInput, {
         input: '',
@@ -35,21 +35,15 @@ describe('ChatInput Priority Skills and Expand Functionality', () => {
       })
     );
 
-    // Top 4 skills should be directly rendered
-    expect(html).toContain('八字命理');
-    expect(html).toContain('紫微斗數');
-    expect(html).toContain('經典塔羅');
-    expect(html).toContain('奇門遁甲');
+    // Collapsed toggle button should be rendered
+    expect(html).toContain('技能（已選擇 0）');
 
     // 'meihua' is filtered out from general chat skills
     expect(html).not.toContain('🌸');
-
-    // 5th skill 'liuyao' should NOT be in the default unexpanded chips
-    // It should have an expand button with count "(+1)" (since liuyao is the 1 remaining skill)
-    expect(html).toContain('更多 (+1)');
+    expect(html).not.toContain('梅花易數');
   });
 
-  it('displays non-priority skill in chips when it is selected', () => {
+  it('updates selection count badge and shows clear button when skills are selected', () => {
     const html = renderToString(
       React.createElement(ChatInput, {
         input: '',
@@ -58,15 +52,15 @@ describe('ChatInput Priority Skills and Expand Functionality', () => {
         onSend: () => {},
         onStop: () => {},
         availableSkills: mockSkills,
-        selectedSkillIds: ['liuyao'], // 5th skill is selected
+        selectedSkillIds: ['bazi', 'ziwei'],
         onToggleSkill: () => {},
         disabled: false
       })
     );
 
-    // Should include liuyao in chips because it's actively selected
-    expect(html).toContain('六爻納甲');
-    expect(html).toContain('清除勾選');
-    expect(html).toMatch(/清除勾選\s*\(.*1.*\)/);
+    // Should indicate 2 skills selected
+    expect(html).toContain('技能（已選擇 2）');
+    // Should provide clear selection button
+    expect(html).toContain('清除勾選 (2)');
   });
 });

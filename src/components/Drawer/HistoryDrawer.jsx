@@ -250,13 +250,19 @@ export default function HistoryDrawer({
                 );
               }
 
+              const isMeihua = conv.type === 'meihua';
+
               return (
                 <div
                   key={conv.id}
                   className={`group flex items-center justify-between p-2.5 rounded-xl text-xs cursor-pointer transition-all border ${
                     isSelected
-                      ? 'bg-slate-800/90 border-emerald-500/40 text-emerald-300'
-                      : 'border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white'
+                      ? isMeihua
+                        ? 'bg-rose-950/70 border-rose-500/50 text-rose-200 shadow-sm'
+                        : 'bg-slate-800/90 border-emerald-500/40 text-emerald-300'
+                      : isMeihua
+                        ? 'border-rose-900/40 bg-rose-950/20 text-rose-300/90 hover:bg-rose-950/40 hover:text-rose-100 hover:border-rose-800/60'
+                        : 'border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white'
                   }`}
                   onClick={() => {
                     onSelectConversation(conv.id);
@@ -264,8 +270,12 @@ export default function HistoryDrawer({
                   }}
                 >
                   <div className="flex items-center gap-2 min-w-0 flex-1 pr-1">
-                    <MessageSquare size={13} className={isSelected ? "text-emerald-400 shrink-0" : "text-slate-500 shrink-0"} />
-                    <span className="truncate">{conv.title || '新對話'}</span>
+                    {isMeihua ? (
+                      <span className="text-xs shrink-0 select-none">🌸</span>
+                    ) : (
+                      <MessageSquare size={13} className={isSelected ? "text-emerald-400 shrink-0" : "text-slate-500 shrink-0"} />
+                    )}
+                    <span className="truncate">{conv.title || (isMeihua ? '梅花易數占卜' : '新對話')}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <button

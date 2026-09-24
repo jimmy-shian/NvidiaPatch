@@ -226,15 +226,15 @@ export default function ChatView({
             type="button"
             onClick={onCompressContext}
             disabled={isCompressing || isStreaming}
-            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-[11px] disabled:opacity-40 active:scale-95 border border-slate-700/60"
+            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-[11px] disabled:opacity-40 active:scale-95 border border-slate-700/60 shrink-0 whitespace-nowrap"
             title="手動將歷史對話壓縮為結構化摘要"
           >
             {isCompressing ? (
-              <Loader2 size={11} className="animate-spin text-emerald-400" />
+              <Loader2 size={11} className="animate-spin text-emerald-400 shrink-0" />
             ) : (
-              <Minimize2 size={11} className="text-emerald-400" />
+              <Minimize2 size={11} className="text-emerald-400 shrink-0" />
             )}
-            <span>壓縮上下文</span>
+            <span className="hidden sm:inline">壓縮上下文</span>
           </button>
         )}
       </div>

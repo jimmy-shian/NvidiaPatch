@@ -25,6 +25,7 @@ export default function ScheduleTasksPanel({
   const [time, setTime] = useState('08:00');
   const [repeat, setRepeat] = useState('daily');
   const [selectedSkills, setSelectedSkills] = useState(['daily-fortune']);
+  const [deletingTaskId, setDeletingTaskId] = useState(null);
 
   const handleOpenNew = () => {
     setEditingTask('new');
@@ -209,63 +210,100 @@ export default function ScheduleTasksPanel({
             <p className="text-[10px]">點擊上方「新增任務」設定每天定時自動分析</p>
           </div>
         ) : (
-          tasks.map(task => (
-            <div
-              key={task.id}
-              className={`p-2.5 rounded-2xl border transition-all ${
-                task.enabled
-                  ? 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
-                  : 'bg-slate-950/40 border-slate-900 opacity-60'
-              }`}
-            >
-              <div className="flex items-center justify-between">
+          tasks.map(task => {
+            const isDeleting = deletingTaskId === task.id;
+
+            if (isDeleting) {
+              return (
                 <div
-                  className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
-                  onClick={() => handleOpenEdit(task)}
+                  key={task.id}
+                  className="p-2.5 rounded-2xl bg-rose-950/60 border border-rose-800/80 text-xs flex flex-col gap-1.5 animate-fade-in"
                 >
-                  <span className="font-mono text-amber-400 font-bold text-xs shrink-0">
-                    ⏰ {task.time}
-                  </span>
-                  <span className="font-semibold text-slate-200 truncate">
-                    {task.name}
-                  </span>
+                  <div className="flex items-center gap-1.5 text-rose-300 text-[11px] font-semibold">
+                    <Trash2 size={13} className="shrink-0" />
+                    <span className="truncate">確定刪除「{task.name}」？</span>
+                  </div>
+                  <div className="flex justify-end gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setDeletingTaskId(null)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await deleteTask(task.id);
+                        setDeletingTaskId(null);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-[11px] transition-colors shadow-sm"
+                    >
+                      確定刪除
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={task.id}
+                className={`p-2.5 rounded-2xl border transition-all ${
+                  task.enabled
+                    ? 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                    : 'bg-slate-950/40 border-slate-900 opacity-60'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div
+                    className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
+                    onClick={() => handleOpenEdit(task)}
+                  >
+                    <span className="font-mono text-amber-400 font-bold text-xs shrink-0">
+                      ⏰ {task.time}
+                    </span>
+                    <span className="font-semibold text-slate-200 truncate">
+                      {task.name}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    {/* Toggle Switch */}
+                    <button
+                      type="button"
+                      onClick={() => toggleTask(task.id, !task.enabled)}
+                      className={`w-7 h-4 flex items-center rounded-full p-0.5 transition-colors ${
+                        task.enabled ? 'bg-emerald-600 justify-end' : 'bg-slate-700 justify-start'
+                      }`}
+                    >
+                      <div className="w-3 h-3 rounded-full bg-white shadow-sm" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDeletingTaskId(task.id)}
+                      className="p-1 text-slate-500 hover:text-rose-400 transition-colors"
+                      title="刪除排程"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                  {/* Toggle Switch */}
-                  <button
-                    type="button"
-                    onClick={() => toggleTask(task.id, !task.enabled)}
-                    className={`w-7 h-4 flex items-center rounded-full p-0.5 transition-colors ${
-                      task.enabled ? 'bg-emerald-600 justify-end' : 'bg-slate-700 justify-start'
-                    }`}
-                  >
-                    <div className="w-3 h-3 rounded-full bg-white shadow-sm" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => deleteTask(task.id)}
-                    className="p-1 text-slate-500 hover:text-rose-400 transition-colors"
-                    title="刪除排程"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+                  <span className="truncate max-w-[140px] text-slate-400">
+                    {task.repeat === 'daily' ? '每天' : task.repeat === 'once' ? '僅一次' : '工作日'} · 下次: {formatNextRun(task.nextRunAt)}
+                  </span>
+                  {task.skillIds && task.skillIds.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                      {task.skillIds[0]}
+                    </span>
+                  )}
                 </div>
               </div>
-
-              <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-                <span className="truncate max-w-[140px] text-slate-400">
-                  {task.repeat === 'daily' ? '每天' : task.repeat === 'once' ? '僅一次' : '工作日'} · 下次: {formatNextRun(task.nextRunAt)}
-                </span>
-                {task.skillIds && task.skillIds.length > 0 && (
-                  <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
-                    {task.skillIds[0]}
-                  </span>
-                )}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

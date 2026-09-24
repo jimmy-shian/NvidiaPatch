@@ -23,8 +23,9 @@ export const SKILL_CHINESE_NAMES = {
 
 export function getSkillDisplayName(skill) {
   if (!skill) return '';
+  if (skill.nameZh) return skill.nameZh;
   if (SKILL_CHINESE_NAMES[skill.id]) return SKILL_CHINESE_NAMES[skill.id];
-  if (skill.name && !/^[a-zA-Z0-9_-]+$/.test(skill.name)) return skill.name;
+  if (skill.name && !/^[a-zA-Z0-9_\-\s]+$/.test(skill.name)) return skill.name;
   return SKILL_CHINESE_NAMES[skill.name] || skill.name || skill.id;
 }
 
@@ -214,90 +215,37 @@ export default function ChatInput({
         </div>
       )}
 
-      {/* Priority Skills Bar + Expandable More Skills Menu */}
+      {/* Collapsed Skills Selector Menu with Click-Outside Ref */}
       {!hideSkillsSelector && selectableSkills.length > 0 && (
         <div ref={skillsContainerRef} className="mb-2 relative">
-          {/* Quick Bar: Priority Chips + Extra Selected + Expand More Button */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {/* Priority Skills Quick Chips */}
-            {prioritySkills.map((skill, idx) => {
-              const isChecked = validSelectedIds.includes(skill.id);
-              const displayName = getSkillDisplayName(skill);
-              return (
-                <button
-                  key={skill.id}
-                  type="button"
-                  onClick={() => onToggleSkill(skill.id)}
-                  disabled={isStreaming}
-                  title={skill.description || displayName}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-medium transition-all border ${
-                    isChecked
-                      ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-200 font-semibold shadow-sm'
-                      : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:text-slate-100 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <span className="text-xs shrink-0">{skill.icon || '⚡'}</span>
-                  <span className="truncate max-w-[85px] sm:max-w-[120px]">{displayName}</span>
-                  {isChecked && (
-                    <span className="w-3.5 h-3.5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[9px] font-bold shrink-0">
-                      ✓
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+          {/* Collapsed Toggle Bar */}
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setIsSkillsMenuOpen(prev => !prev)}
+              disabled={isStreaming}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border ${
+                selectedCount > 0
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                  : 'bg-slate-900/80 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sparkles size={13} className={selectedCount > 0 ? "text-emerald-400" : "text-amber-400"} />
+              <span>{`技能（已選擇 ${selectedCount}）`}</span>
+              {isSkillsMenuOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
 
-            {/* Extra Selected Skills (non-priority skills chosen in expanded menu) */}
-            {extraSelectedSkills.map(skill => {
-              const displayName = getSkillDisplayName(skill);
-              return (
-                <button
-                  key={skill.id}
-                  type="button"
-                  onClick={() => onToggleSkill(skill.id)}
-                  disabled={isStreaming}
-                  title={skill.description || displayName}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-semibold transition-all border bg-emerald-500/20 border-emerald-500/60 text-emerald-200 shadow-sm"
-                >
-                  <span className="text-xs shrink-0">{skill.icon || '⚡'}</span>
-                  <span className="truncate max-w-[85px] sm:max-w-[120px]">{displayName}</span>
-                  <span className="w-3.5 h-3.5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[9px] font-bold shrink-0">
-                    ✓
-                  </span>
-                </button>
-              );
-            })}
-
-            {/* Expand / Collapse Button for More Skills */}
-            {otherSkills.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setIsSkillsMenuOpen(prev => !prev)}
-                disabled={isStreaming}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-medium transition-all border ${
-                  isSkillsMenuOpen
-                    ? 'bg-slate-800 border-slate-700 text-slate-200'
-                    : 'bg-slate-900/60 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                }`}
-                title="展開查看與勾選更多技能"
-              >
-                <Sparkles size={12} className={selectedCount > 0 ? "text-emerald-400" : "text-amber-400"} />
-                <span>{isSkillsMenuOpen ? '收起' : `更多 (+${otherSkills.length})`}</span>
-                {isSkillsMenuOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              </button>
-            )}
-
-            {/* Clear All Button */}
+            {/* Clear selection if any */}
             {selectedCount > 0 && (
               <button
                 type="button"
                 onClick={() => {
                   validSelectedIds.forEach(id => onToggleSkill(id));
                 }}
-                className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors px-1 ml-auto"
+                className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors px-1"
                 title="清除所有勾選技能"
               >
-                清除勾選 ({selectedCount})
+                {`清除勾選 (${selectedCount})`}
               </button>
             )}
           </div>

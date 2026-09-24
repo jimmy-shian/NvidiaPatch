@@ -14,7 +14,7 @@
     "close": "Close"
   },
   "chat": {
-    "inputPlaceholder": "Type a message... (Shift+Enter for newline)",
+    "inputPlaceholder": "Type a message...",
     "send": "Send",
     "stop": "Stop",
     "regenerate": "Regenerate",
