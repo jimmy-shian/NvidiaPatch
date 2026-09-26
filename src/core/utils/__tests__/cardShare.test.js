@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { shareCardAsImage } from '../cardShare';
+import { shareCardAsImage, shareMeihuaCardAsImage, buildMeihuaCardElement } from '../cardShare';
 import { toPng } from 'html-to-image';
 import { Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
@@ -58,5 +58,59 @@ describe('Card Share Utility', () => {
     );
     expect(res.success).toBe(true);
     expect(res.method).toBe('native_share');
+  });
+
+  it('buildMeihuaCardElement generates clean HTML with custom width and no interactive buttons', () => {
+    const calc = {
+      method: 'numbers',
+      randomNumbers: [346, 503, 81],
+      primary: { hexagram: { fullName: '澤天夬' }, upper: { name: '兌', element: '金' }, lower: { name: '乾', element: '金' }, movingLine: 4 },
+      mutual: { hexagram: { fullName: '乾為天' }, upper: { name: '乾', element: '金' }, lower: { name: '乾', element: '金' } },
+      changed: { hexagram: { fullName: '水天需' }, upper: { name: '坎', element: '水' }, lower: { name: '乾', element: '金' } },
+      tiYong: { relation: '比和' }
+    };
+    const know = {
+      ti: { trigram: { name: '乾', element: '金' } },
+      yong: { trigram: { name: '兌', element: '金' } },
+      relationRule: { nature: '吉', summary: '比和同道', guidance: '平穩可成' },
+      primaryHexagram: { judgement: '揚于王庭' },
+      movingLine: { name: '九四', text: '臀无膚' }
+    };
+
+    const element = buildMeihuaCardElement({ calc, know, width: 800 });
+    expect(element).toBeDefined();
+    expect(element.style.width).toBe('800px');
+    expect(element.textContent).toContain('澤天夬');
+    expect(element.textContent).toContain('乾為天');
+    expect(element.textContent).toContain('水天需');
+    expect(element.textContent).toContain('【比和】');
+    expect(element.textContent).toContain('揚于王庭');
+    expect(element.textContent).toContain('九四');
+    expect(element.textContent).toContain('346, 503, 81');
+    expect(element.textContent).toContain('NvidiaPatch Chat');
+  });
+
+  it('shareMeihuaCardAsImage reconstructs card and exports at specified width', async () => {
+    const mockDoc = {
+      createElement: () => {
+        const el = {
+          style: {},
+          appendChild: () => {},
+          parentNode: null
+        };
+        el.parentNode = { removeChild: () => {} };
+        return el;
+      },
+      body: {
+        appendChild: () => {}
+      }
+    };
+    const res = await shareMeihuaCardAsImage({
+      calc: { primary: { hexagram: { fullName: '乾為天' } } },
+      width: 1080,
+      customDocument: mockDoc
+    });
+    expect(res.success).toBe(true);
+    expect(toPng).toHaveBeenCalled();
   });
 });

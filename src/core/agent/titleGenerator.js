@@ -17,7 +17,9 @@ export function cleanGeneratedTitle(rawText) {
 
   let text = rawText;
 
-  // 1. Strip in-band think/thought tags (both closed and unclosed)
+  // 1. Strip meihua tags and in-band think/thought tags
+  const hadMeihua = /<meihua-numbers/i.test(text);
+  text = text.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '').replace(/<meihua-numbers[^>]*\/>/gi, '').trim();
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
   text = text.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
   text = text.replace(/<\|thought\|>[\s\S]*?<\|endofthought\|>/gi, '');
@@ -45,6 +47,9 @@ export function cleanGeneratedTitle(rawText) {
   text = text.replace(/^[：:,，\s\-—]+/, '').trim();
   text = text.replace(/[。！？\?!，,；;：:]+$/g, '').trim();
 
+  if (!text && hadMeihua) {
+    return '梅花易數占卜';
+  }
   return text;
 }
 
@@ -64,7 +69,17 @@ export async function generateTitleFromPrompt({ prompt, provider, model }) {
   }
 
   try {
-    const userQueryPreview = prompt.trim().slice(0, 150);
+    const isMeihuaPrompt = /<meihua-numbers/i.test(prompt);
+    const cleanedPrompt = prompt
+      .replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '')
+      .replace(/<meihua-numbers[^>]*\/>/gi, '')
+      .trim();
+
+    if (!cleanedPrompt) {
+      return isMeihuaPrompt ? '梅花易數占卜' : '新對話';
+    }
+
+    const userQueryPreview = cleanedPrompt.slice(0, 150);
 
     // Single concise prompt to minimize token usage
     const messages = [
@@ -118,12 +133,21 @@ export async function generateTitleFromPrompt({ prompt, provider, model }) {
  */
 export function cleanFallbackTitle(prompt) {
   if (!prompt || typeof prompt !== 'string') return '新對話';
-  let text = prompt.trim();
+  const hadMeihua = /<meihua-numbers/i.test(prompt);
+  let text = prompt
+    .replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '')
+    .replace(/<meihua-numbers[^>]*\/>/gi, '')
+    .trim();
+
+  if (!text) {
+    return hadMeihua ? '梅花易數占卜' : '新對話';
+  }
+
   text = text.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]+)`/g, '$1');
   text = text.replace(/^>+[^\n]*\n?/gm, ' ');
   text = text.replace(/^[#\s*\-+]+/gm, ' ');
   text = text.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
   text = text.replace(/^["'「」『』《》“”‘’]+|["'「」『』《》“”‘’]+$/g, '').trim();
   text = text.replace(/[。！？\?!，,；;：:]+$/g, '').trim();
-  return text || '新對話';
+  return text || (hadMeihua ? '梅花易數占卜' : '新對話');
 }

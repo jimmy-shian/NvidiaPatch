@@ -252,7 +252,15 @@ export default function HistoryDrawer({
                 );
               }
 
-              const isMeihua = conv.type === 'meihua';
+              const isMeihua = conv.type === 'meihua' ||
+                (Array.isArray(conv.skillIds) && conv.skillIds.includes('meihua')) ||
+                (typeof conv.title === 'string' && (conv.title.includes('梅花') || conv.title.includes('meihua')));
+
+              let cleanTitle = conv.title || '';
+              if (cleanTitle.includes('<meihua-numbers')) {
+                cleanTitle = cleanTitle.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '').replace(/<meihua-numbers[^>]*\/>/gi, '').trim();
+              }
+              const displayTitle = cleanTitle || (isMeihua ? '梅花易數占卜' : '新對話');
 
               return (
                 <div
@@ -277,7 +285,7 @@ export default function HistoryDrawer({
                     ) : (
                       <MessageSquare size={13} className={isSelected ? "text-emerald-400 shrink-0" : "text-slate-500 shrink-0"} />
                     )}
-                    <span className="truncate">{conv.title || (isMeihua ? '梅花易數占卜' : '新對話')}</span>
+                    <span className="truncate">{displayTitle}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <button

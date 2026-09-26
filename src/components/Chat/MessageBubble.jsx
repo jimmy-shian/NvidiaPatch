@@ -4,6 +4,7 @@ import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Load
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
 import { shareCardAsImage } from '../../core/utils/cardShare';
+import MeihuaShareModal from './MeihuaShareModal';
 
 export default function MessageBubble({
   message,
@@ -25,6 +26,7 @@ export default function MessageBubble({
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
   const [sharingMeihuaKey, setSharingMeihuaKey] = useState(null);
   const [previewImageUrl, setPreviewImageUrl] = useState(null);
+  const [meihuaShareModalData, setMeihuaShareModalData] = useState(null);
   const meihuaCardRefs = useRef({});
 
   if (message.role === 'system') return null; // Never render hidden system messages
@@ -252,12 +254,12 @@ export default function MessageBubble({
 
       {/* Bubble Container */}
       <div
-        className={`relative max-w-[94%] sm:max-w-[85%] rounded-2xl p-3 sm:p-3.5 shadow-sm text-sm break-words overflow-hidden ${
+        className={`relative rounded-2xl p-3 sm:p-3.5 shadow-sm text-sm break-words overflow-hidden ${
           isUser
-            ? 'bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-br-sm'
+            ? 'max-w-[94%] sm:max-w-[85%] bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-br-sm'
             : isFailed
-              ? 'bg-rose-950/40 border border-rose-800/60 text-slate-100 rounded-bl-sm'
-              : 'bg-slate-900 border border-slate-800 text-slate-100 rounded-bl-sm'
+              ? 'w-full max-w-[94%] sm:max-w-[85%] bg-rose-950/40 border border-rose-800/60 text-slate-100 rounded-bl-sm'
+              : 'w-full max-w-[94%] sm:max-w-[85%] bg-slate-900 border border-slate-800 text-slate-100 rounded-bl-sm'
         }`}
       >
         {/* Ephemeral Progress Status Row (only during live streaming) */}
@@ -298,29 +300,9 @@ export default function MessageBubble({
                 const cardKey = te.toolCallId || `meihua_${idx}`;
                 const isSharingThis = sharingMeihuaKey === cardKey;
 
-                const handleShareCard = async (e) => {
+                const handleShareCard = (e) => {
                   e.stopPropagation();
-                  if (isSharingThis) return;
-                  setSharingMeihuaKey(cardKey);
-
-                  if (!isExpanded) {
-                    setExpandedToolResults(prev => ({ ...prev, [cardKey]: true }));
-                    await new Promise(r => setTimeout(r, 150));
-                  }
-
-                  const domNode = meihuaCardRefs.current[cardKey];
-                  if (domNode) {
-                    try {
-                      const hexName = calc?.primary?.hexagram?.fullName || '梅花易數';
-                      await shareCardAsImage(domNode, {
-                        title: `${hexName} · 梅花排盤`,
-                        fileName: `meihua-${Date.now()}.png`
-                      });
-                    } catch (err) {
-                      console.warn('Share meihua card error:', err);
-                    }
-                  }
-                  setSharingMeihuaKey(null);
+                  setMeihuaShareModalData({ calc, know, cardKey });
                 };
 
                 return (
@@ -462,6 +444,12 @@ export default function MessageBubble({
                 toolTitle = isExec ? '正在搜尋…' : '已完成搜尋';
               }
 
+              const isCloudSearch = Boolean(
+                parsedResult?.effectiveProvider?.startsWith('worker') ||
+                parsedResult?.providersUsed?.some(p => typeof p === 'string' && p.startsWith('worker')) ||
+                resultsList.some(r => typeof r.source === 'string' && r.source.startsWith('worker'))
+              );
+
               return (
                 <div key={te.toolCallId || idx} className="rounded-xl bg-slate-950/80 border border-slate-800 p-2 text-xs">
                   <div
@@ -488,6 +476,11 @@ export default function MessageBubble({
 
                     {!isExec && te.result && (
                       <div className="flex items-center gap-1 text-[10px] text-slate-400 shrink-0">
+                        {isCloudSearch && (
+                          <span className="px-1.5 py-0.2 rounded bg-sky-950/80 text-sky-300 border border-sky-800/60 font-medium text-[9px] flex items-center gap-0.5">
+                            ☁️ Cloud
+                          </span>
+                        )}
                         {resultCount > 0 && <span>{resultCount} 筆</span>}
                         {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       </div>
@@ -705,20 +698,24 @@ export default function MessageBubble({
         ) : (
           <div className="relative leading-relaxed">
             {message.content ? (
-              <MarkdownRenderer content={message.content} />
+              <div className="relative">
+                <MarkdownRenderer content={message.content} />
+                {isStreaming && isLast && (
+                  <span className="inline-block w-2 h-4 ml-1 bg-emerald-400 animate-pulse align-middle rounded-sm shadow-sm shadow-emerald-400/50" />
+                )}
+              </div>
             ) : isStreaming && isLast ? (
-              <div className="flex items-center gap-2 text-slate-300 py-1 text-xs animate-pulse">
+              <div className="flex items-center gap-2 text-emerald-300 bg-emerald-950/60 border border-emerald-800/50 rounded-xl px-2.5 py-1.5 text-xs animate-pulse shadow-inner">
                 <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
-                <span>{isReasoningActive ? '正在思考與等待回覆…' : '正在等待回覆…'}</span>
+                <span className="font-sans leading-tight truncate">
+                  {activeStatusText || (isReasoningActive ? '正在思考與等待回覆…' : '正在等待回覆…')}
+                </span>
               </div>
             ) : message.toolExecutions && message.toolExecutions.length > 0 ? (
               <div className="text-xs text-slate-400 italic py-1">
                 已檢索上述資料並整合完成。
               </div>
             ) : null}
-            {isStreaming && isLast && !isReasoningActive && message.content && (
-              <span className="inline-block w-1.5 h-4 ml-1 bg-emerald-400 animate-pulse align-middle rounded-sm" />
-            )}
           </div>
         )}
       </div>
@@ -815,6 +812,16 @@ export default function MessageBubble({
             />
           </div>
         </div>
+      )}
+
+      {/* Meihua Card High-Definition HTML Reconstruction Share Modal */}
+      {meihuaShareModalData && (
+        <MeihuaShareModal
+          isOpen={Boolean(meihuaShareModalData)}
+          onClose={() => setMeihuaShareModalData(null)}
+          calc={meihuaShareModalData.calc}
+          know={meihuaShareModalData.know}
+        />
       )}
     </div>
   );

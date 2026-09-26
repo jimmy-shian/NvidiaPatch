@@ -93,7 +93,7 @@ export default function ChatInput({
   const handleKeyDown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
-      if (!isStreaming && canSend) {
+      if (canSend) {
         onSend();
       }
     }
@@ -223,7 +223,6 @@ export default function ChatInput({
             <button
               type="button"
               onClick={() => setIsSkillsMenuOpen(prev => !prev)}
-              disabled={isStreaming}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border ${
                 selectedCount > 0
                   ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
@@ -290,7 +289,6 @@ export default function ChatInput({
                       key={skill.id}
                       type="button"
                       onClick={() => onToggleSkill(skill.id)}
-                      disabled={isStreaming}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs transition-all border ${
                         isChecked
                           ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-200 font-semibold shadow-sm'
@@ -403,14 +401,26 @@ export default function ChatInput({
         />
 
         {isStreaming ? (
-          <button
-            type="button"
-            onClick={onStop}
-            className="p-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium shadow-md shadow-rose-950/40 transition-transform active:scale-95 shrink-0"
-            title={t('chat.stop')}
-          >
-            <Square size={16} className="fill-current" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {canSend && (
+              <button
+                type="button"
+                onClick={onSend}
+                className="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-md shadow-emerald-950/40 transition-transform active:scale-95 shrink-0"
+                title="即時插入送出（於當前階段完成時自動接續）"
+              >
+                <Send size={16} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onStop}
+              className="p-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium shadow-md shadow-rose-950/40 transition-transform active:scale-95 shrink-0"
+              title={t('chat.stop')}
+            >
+              <Square size={16} className="fill-current" />
+            </button>
+          </div>
         ) : (
           <button
             type="button"

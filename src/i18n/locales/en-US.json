@@ -97,9 +97,9 @@
   "app.newMeihuaChat": "New Meihua Chat",
   "meihua.welcome": "🌸 Meihua Divination",
   "meihua.welcomeDesc": "Describe what you want to divine and choose a casting method",
-  "meihua.randomCast": "🎲 Random Number Cast",
-  "meihua.timeCast": "⏰ Current Time Cast",
-  "meihua.help": "❓ Divination Help",
+  "meihua.randomCast": "Random Number Cast",
+  "meihua.timeCast": "Current Time Cast",
+  "meihua.help": "Divination Help",
   "meihua.seedBadge": "🎲 Seed Numbers",
   "meihua.removeSeed": "Remove seeds (switch to time casting)",
   "meihua.helpModal": {

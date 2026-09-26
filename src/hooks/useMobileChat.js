@@ -8,6 +8,8 @@ import { getModelContextLimit, getCompressionThreshold, getModelContextInfo } fr
 import { generateTitleFromPrompt, cleanFallbackTitle } from '../core/agent/titleGenerator';
 import { runMeihuaPipeline } from '../core/meihua';
 import { NotificationService } from '../core/notifications/notificationService';
+import { writeWidgetLatestTask } from '../core/schedule/scheduleEngine';
+import { NativeStreamClient } from '../core/network/nativeStreamClient';
 
 export function useMobileChat({
   currentProviderId,
@@ -50,6 +52,7 @@ export function useMobileChat({
   const activeRunsRef = useRef(new Map());
   const finalizedRunsRef = useRef(new Set());
   const loadMessagesGenRef = useRef(0); // Anti-race condition generation counter
+  const queuedFollowUpRef = useRef(null); // Follow-up messages queued while streaming
 
   // Load conversations on mount
   useEffect(() => {
@@ -59,7 +62,25 @@ export function useMobileChat({
       for (const conv of rawList) {
         const msgs = await LocalDB.getMessages(conv.id);
         if (msgs && msgs.length > 0) {
-          validList.push(conv);
+          const hasMeihuaFeature = conv.type === 'meihua' ||
+            (Array.isArray(conv.skillIds) && conv.skillIds.includes('meihua'));
+
+          let cleanTitle = conv.title || '';
+          if (cleanTitle.includes('<meihua-numbers')) {
+            cleanTitle = cleanTitle.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '').replace(/<meihua-numbers[^>]*\/>/gi, '').trim();
+          }
+
+          const normalizedConv = {
+            ...conv,
+            ...(hasMeihuaFeature ? { type: 'meihua' } : {}),
+            title: cleanTitle || conv.title || '新對話'
+          };
+
+          if (normalizedConv.type !== conv.type || normalizedConv.title !== conv.title) {
+            await LocalDB.saveConversation(normalizedConv);
+          }
+
+          validList.push(normalizedConv);
         } else {
           await LocalDB.deleteConversation(conv.id);
           await LocalDB.deleteConversationSummary(conv.id);
@@ -68,16 +89,27 @@ export function useMobileChat({
 
       if (validList.length > 0) {
         setConversations(validList);
-        setCurrentConversationId(validList[0].id);
+        let targetId = validList[0].id;
+        const pendingWidgetConv = (typeof window !== 'undefined' && window.NativeStreamBridge && typeof window.NativeStreamBridge.getPendingConversationId === 'function')
+          ? window.NativeStreamBridge.getPendingConversationId()
+          : null;
+        if (pendingWidgetConv && validList.some(c => c.id === pendingWidgetConv)) {
+          targetId = pendingWidgetConv;
+        } else if (currentConversationIdRef.current && validList.some(c => c.id === currentConversationIdRef.current)) {
+          targetId = currentConversationIdRef.current;
+        }
+        currentConversationIdRef.current = targetId;
+        setCurrentConversationId(targetId);
       } else {
         const draftConv = {
           id: `conv_${Date.now()}`,
           title: '新對話',
           providerId: currentProviderId,
           modelId: currentModelId,
-          skillIds: selectedSkillIds || []
+          skillIds: (selectedSkillIds || []).filter(id => id !== 'meihua')
         };
         setConversations([draftConv]);
+        currentConversationIdRef.current = draftConv.id;
         setCurrentConversationId(draftConv.id);
       }
     }
@@ -97,25 +129,35 @@ export function useMobileChat({
       const summary = await LocalDB.getConversationSummary(currentConversationId);
       if (loadMessagesGenRef.current !== currentGen) return; // Stale query discarded
 
-      setMessages(msgs);
-      setActiveSummary(summary || null);
-
       // Check if current conversation has an active background stream running
-      let hasActiveStreamForConv = false;
+      let activeRunForConv = null;
       for (const run of activeRunsRef.current.values()) {
         if (run.conversationId === currentConversationId) {
-          hasActiveStreamForConv = true;
+          activeRunForConv = run;
           break;
         }
       }
-      setIsStreaming(hasActiveStreamForConv);
+      setIsStreaming(Boolean(activeRunForConv));
+
+      // CRITICAL: If an active stream exists with a live in-flight assistant message not yet in DB, keep it in view!
+      if (activeRunForConv?.liveAssistantMsg) {
+        if (!msgs.some(m => m.id === activeRunForConv.liveAssistantMsg.id)) {
+          setMessages([...msgs, activeRunForConv.liveAssistantMsg]);
+        } else {
+          setMessages(msgs);
+        }
+      } else {
+        setMessages(msgs);
+      }
+      setActiveSummary(summary || null);
 
       const conv = await LocalDB.getConversation(currentConversationId);
       if (loadMessagesGenRef.current !== currentGen) return;
 
-      if (conv?.skillIds) {
-        setSelectedSkillIds(conv.skillIds);
-      }
+      const convSkills = Array.isArray(conv?.skillIds)
+        ? conv.skillIds
+        : (conv?.type === 'meihua' ? ['meihua'] : []);
+      setSelectedSkillIds(convSkills);
 
       // Lazy one-time cleanup: only scan for orphaned protocol rows once per conversation per session
       if (!cleanedConvsRef.current.has(currentConversationId)) {
@@ -311,7 +353,23 @@ export function useMobileChat({
     setLiveStatus(null);
     setActiveSummary(null);
 
+    // If input contains leftover meihua numbers, clean it up when switching conversations
+    setInput(prev => prev.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>|<meihua-numbers[^>]*\/>/gi, '').trimStart());
+
+    // Ensure conversation exists in local conversations state if generated in background
+    setConversations(prev => {
+      if (!prev.some(c => c.id === convId)) {
+        LocalDB.getConversation(convId).then(dbConv => {
+          if (dbConv) {
+            setConversations(current => current.some(c => c.id === convId) ? current : [dbConv, ...current]);
+          }
+        });
+      }
+      return prev;
+    });
+
     // Switch active conversation ID (background generation continues untouched)
+    currentConversationIdRef.current = convId;
     setCurrentConversationId(convId);
   }, [currentConversationId, messages.length, isStreaming]);
 
@@ -404,18 +462,22 @@ export function useMobileChat({
   }, [messages, isCompressing, isStreaming, providerConfigs, currentProviderId, currentConversationId, currentModelId, contextStats.usedTokens, input]);
 
   // Shared execution engine for streaming chat response
-  const executeChatStream = useCallback(async (historyMessages) => {
-    const streamConvId = currentConversationIdRef.current;
-    if (!currentModelId || historyMessages.length === 0 || !streamConvId) return;
+  const executeChatStream = useCallback(async (historyMessages, options = {}) => {
+    const streamConvId = options.targetConvId || currentConversationIdRef.current;
+    const targetModelId = options.modelId || currentModelId;
+    const targetProviderId = options.providerId || currentProviderId;
+    const targetSkillIds = options.skillIds !== undefined ? options.skillIds : (selectedSkillIds || []);
+
+    if (!targetModelId || historyMessages.length === 0 || !streamConvId) return;
 
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const startedAt = Date.now();
 
-    const activeConfig = providerConfigs[currentProviderId] || {};
-    const provider = createProvider(currentProviderId, activeConfig);
+    const activeConfig = providerConfigs[targetProviderId] || {};
+    const provider = createProvider(targetProviderId, activeConfig);
 
     // 1. Dynamic 80% Context Compression check
-    const compressionThreshold = getCompressionThreshold(currentModelId);
+    const compressionThreshold = getCompressionThreshold(targetModelId);
     const currentTokens = estimateFullContextTokens({
       systemPrompt: 'System',
       messages: historyMessages
@@ -428,7 +490,7 @@ export function useMobileChat({
           conversationId: streamConvId,
           messages: historyMessages,
           provider,
-          model: currentModelId,
+          model: targetModelId,
           force: false
         });
         if (autoCompResult?.compressed) {
@@ -451,7 +513,7 @@ export function useMobileChat({
 
     // 2.5 Pre-calculate deterministic skill calculations (e.g. Meihua Divination Engine)
     const initialToolExecutions = [];
-    if (selectedSkillIds && selectedSkillIds.includes('meihua')) {
+    if (targetSkillIds && targetSkillIds.includes('meihua')) {
       const lastUserMsg = [...historyMessages].reverse().find(m => m.role === 'user');
       if (lastUserMsg && lastUserMsg.content) {
         try {
@@ -482,7 +544,7 @@ export function useMobileChat({
       id: assistantMsgId,
       conversationId: streamConvId,
       role: 'assistant',
-      modelName: currentModelId.split('/').pop(),
+      modelName: targetModelId.split('/').pop(),
       content: '',
       thinkingContent: '',
       tool_calls: null,
@@ -490,6 +552,15 @@ export function useMobileChat({
       startedAt,
       createdAt: startedAt,
       ordinal: historyMessages.length
+    };
+
+    NativeStreamClient.startBackgroundExecution('stream_' + streamConvId);
+    let stoppedBackgroundExecution = false;
+    const safeStopBackgroundExecution = () => {
+      if (!stoppedBackgroundExecution) {
+        stoppedBackgroundExecution = true;
+        NativeStreamClient.stopBackgroundExecution();
+      }
     };
 
     if (currentConversationIdRef.current === streamConvId) {
@@ -502,7 +573,8 @@ export function useMobileChat({
     const agent = new AgentCore(provider);
     activeRunsRef.current.set(runId, {
       conversationId: streamConvId,
-      agentCore: agent
+      agentCore: agent,
+      liveAssistantMsg: assistantMsg
     });
 
     const payloadForAgent = modelRequestMessages.map(m => ({
@@ -518,41 +590,87 @@ export function useMobileChat({
     let liveToolExecutions = [...initialToolExecutions];
     let latestReportedUsage = null;
 
+    const updateLiveRunState = () => {
+      const runRecord = activeRunsRef.current.get(runId);
+      if (runRecord) {
+        runRecord.liveAssistantMsg = {
+          ...assistantMsg,
+          content: accumulatedContent,
+          thinkingContent: accumulatedThinking,
+          tool_calls: assistantMsg.tool_calls || null,
+          toolExecutions: [...liveToolExecutions]
+        };
+      }
+    };
+
+    let renderTimer = null;
+    let lastRenderTime = 0;
+    const RENDER_INTERVAL_MS = 40; // ~25 FPS throttling
+
+    const commitUIRender = () => {
+      if (renderTimer) {
+        clearTimeout(renderTimer);
+        renderTimer = null;
+      }
+      if (currentConversationIdRef.current !== streamConvId) return;
+      const currentMsgState = {
+        ...assistantMsg,
+        content: accumulatedContent,
+        thinkingContent: accumulatedThinking,
+        toolExecutions: [...liveToolExecutions]
+      };
+      setMessages(prev => {
+        if (prev.length === 0) return [currentMsgState];
+        const lastIdx = prev.length - 1;
+        const last = prev[lastIdx];
+        if (!last || last.id !== assistantMsgId) {
+          return [...prev, currentMsgState];
+        }
+        return [
+          ...prev.slice(0, lastIdx),
+          currentMsgState
+        ];
+      });
+    };
+
+    const scheduleUIRender = () => {
+      if (currentConversationIdRef.current !== streamConvId) return;
+      const now = Date.now();
+      if (now - lastRenderTime >= RENDER_INTERVAL_MS) {
+        lastRenderTime = now;
+        if (renderTimer) {
+          clearTimeout(renderTimer);
+          renderTimer = null;
+        }
+        commitUIRender();
+      } else if (!renderTimer) {
+        renderTimer = setTimeout(() => {
+          renderTimer = null;
+          lastRenderTime = Date.now();
+          commitUIRender();
+        }, RENDER_INTERVAL_MS - (now - lastRenderTime));
+      }
+    };
+
     await agent.runChat({
       runId,
       messages: payloadForAgent,
-      model: currentModelId,
-      selectedSkillIds,
+      model: targetModelId,
+      selectedSkillIds: targetSkillIds,
       onThinking: (delta) => {
         accumulatedThinking += delta;
+        updateLiveRunState();
         if (currentConversationIdRef.current === streamConvId) {
           setIsReasoningActive(true);
-          setMessages(prev => {
-            if (prev.length === 0) return prev;
-            const lastIdx = prev.length - 1;
-            const last = prev[lastIdx];
-            if (last.id !== assistantMsgId) return prev;
-            return [
-              ...prev.slice(0, lastIdx),
-              { ...last, thinkingContent: accumulatedThinking }
-            ];
-          });
+          scheduleUIRender();
         }
       },
       onContent: (delta) => {
         accumulatedContent += delta;
+        updateLiveRunState();
         if (currentConversationIdRef.current === streamConvId) {
           setIsReasoningActive(false);
-          setMessages(prev => {
-            if (prev.length === 0) return prev;
-            const lastIdx = prev.length - 1;
-            const last = prev[lastIdx];
-            if (last.id !== assistantMsgId) return prev;
-            return [
-              ...prev.slice(0, lastIdx),
-              { ...last, content: accumulatedContent, thinkingContent: accumulatedThinking }
-            ];
-          });
+          scheduleUIRender();
         }
       },
       onStatusChange: (status) => {
@@ -561,6 +679,10 @@ export function useMobileChat({
         }
       },
       onToolStart: (toolCalls) => {
+        if (renderTimer) {
+          clearTimeout(renderTimer);
+          renderTimer = null;
+        }
         accumulatedContent = ''; // Clear draft tool JSON arguments
         const newToolCalls = toolCalls.map(tc => ({
           toolCallId: tc.id,
@@ -569,16 +691,25 @@ export function useMobileChat({
           args: tc.function.arguments
         }));
         liveToolExecutions = [...initialToolExecutions, ...newToolCalls];
+        updateLiveRunState();
         if (currentConversationIdRef.current === streamConvId) {
           setIsReasoningActive(false);
+          const currentMsgState = {
+            ...assistantMsg,
+            content: '',
+            tool_calls: toolCalls,
+            toolExecutions: [...liveToolExecutions]
+          };
           setMessages(prev => {
-            if (prev.length === 0) return prev;
+            if (prev.length === 0) return [currentMsgState];
             const lastIdx = prev.length - 1;
             const last = prev[lastIdx];
-            if (last.id !== assistantMsgId) return prev;
+            if (!last || last.id !== assistantMsgId) {
+              return [...prev, currentMsgState];
+            }
             return [
               ...prev.slice(0, lastIdx),
-              { ...last, content: '', tool_calls: toolCalls, toolExecutions: [...liveToolExecutions] }
+              currentMsgState
             ];
           });
         }
@@ -587,15 +718,24 @@ export function useMobileChat({
         liveToolExecutions = liveToolExecutions.map(te =>
           te.toolCallId === toolCallId ? { ...te, status, args } : te
         );
+        updateLiveRunState();
         if (currentConversationIdRef.current === streamConvId) {
+          const currentMsgState = {
+            ...assistantMsg,
+            content: accumulatedContent,
+            thinkingContent: accumulatedThinking,
+            toolExecutions: [...liveToolExecutions]
+          };
           setMessages(prev => {
-            if (prev.length === 0) return prev;
+            if (prev.length === 0) return [currentMsgState];
             const lastIdx = prev.length - 1;
             const last = prev[lastIdx];
-            if (last.id !== assistantMsgId) return prev;
+            if (!last || last.id !== assistantMsgId) {
+              return [...prev, currentMsgState];
+            }
             return [
               ...prev.slice(0, lastIdx),
-              { ...last, toolExecutions: [...liveToolExecutions] }
+              currentMsgState
             ];
           });
         }
@@ -604,15 +744,24 @@ export function useMobileChat({
         liveToolExecutions = liveToolExecutions.map(te =>
           te.toolCallId === toolCallId ? { ...te, status: 'completed', args, result } : te
         );
+        updateLiveRunState();
         if (currentConversationIdRef.current === streamConvId) {
+          const currentMsgState = {
+            ...assistantMsg,
+            content: accumulatedContent,
+            thinkingContent: accumulatedThinking,
+            toolExecutions: [...liveToolExecutions]
+          };
           setMessages(prev => {
-            if (prev.length === 0) return prev;
+            if (prev.length === 0) return [currentMsgState];
             const lastIdx = prev.length - 1;
             const last = prev[lastIdx];
-            if (last.id !== assistantMsgId) return prev;
+            if (!last || last.id !== assistantMsgId) {
+              return [...prev, currentMsgState];
+            }
             return [
               ...prev.slice(0, lastIdx),
-              { ...last, toolExecutions: [...liveToolExecutions] }
+              currentMsgState
             ];
           });
         }
@@ -621,6 +770,10 @@ export function useMobileChat({
         latestReportedUsage = normalizeApiUsage(rawUsage);
       },
       onDone: async (doneData) => {
+        if (renderTimer) {
+          clearTimeout(renderTimer);
+          renderTimer = null;
+        }
         if (finalizedRunsRef.current.has(runId)) return;
         finalizedRunsRef.current.add(runId);
         activeRunsRef.current.delete(runId);
@@ -674,6 +827,9 @@ export function useMobileChat({
           });
         }
 
+        // Stop background execution lock held for this stream
+        safeStopBackgroundExecution();
+
         // Smart Title generation for first turn via LLM
         let resolvedTitle = null;
         if (historyMessages.length === 1 && historyMessages[0].role === 'user') {
@@ -684,32 +840,78 @@ export function useMobileChat({
               provider: titleProvider,
               model: currentModelId
             });
-            if (generatedTitle && generatedTitle.length >= 2) {
-              resolvedTitle = generatedTitle;
+            const existingConv = conversations.find(c => c.id === streamConvId);
+            const isMeihuaConv = existingConv?.type === 'meihua' || existingConv?.skillIds?.includes('meihua');
+            const cleanTitle = isMeihuaConv && (!generatedTitle || generatedTitle === '新對話')
+              ? '梅花易數占卜'
+              : generatedTitle;
+
+            if (cleanTitle && cleanTitle.length >= 2) {
+              resolvedTitle = cleanTitle;
               await LocalDB.saveConversation({
                 id: streamConvId,
-                title: generatedTitle,
+                title: cleanTitle,
+                ...(isMeihuaConv ? { type: 'meihua' } : {}),
                 updatedAt: Date.now()
               });
-              setConversations(prev => prev.map(c => c.id === streamConvId ? { ...c, title: generatedTitle } : c));
+              setConversations(prev => prev.map(c => c.id === streamConvId ? { ...c, title: cleanTitle, ...(isMeihuaConv ? { type: 'meihua' } : {}) } : c));
             }
           } catch (_) {}
+        }
+
+        // Sync latest conversation result to Android widget ONLY for scheduled tasks
+        if (options.isScheduledTask || options.taskId) {
+          let convTitle = resolvedTitle;
+          if (!convTitle) {
+            const currentConv = conversations.find(c => c.id === streamConvId);
+            convTitle = currentConv?.title;
+          }
+          if (!convTitle) {
+            try {
+              const dbConv = await LocalDB.getConversation(streamConvId);
+              convTitle = dbConv?.title;
+            } catch (_) {}
+          }
+
+          await writeWidgetLatestTask({
+            title: convTitle || '排程任務',
+            summary: finalContentToDisplay,
+            conversationId: streamConvId,
+            taskId: options.taskId || null
+          });
         }
 
         // Background stream completion notification (Plan §2.2)
         const isBackground = typeof document !== 'undefined' && (document.hidden || currentConversationIdRef.current !== streamConvId);
         if (isBackground) {
-          const currentConv = conversations.find(c => c.id === streamConvId);
-          const convTitle = resolvedTitle || currentConv?.title || 'AI 解卦/對話已完成';
           NotificationService.sendCompletionNotification({
             conversationId: streamConvId,
-            title: convTitle,
+            title: convTitle || 'AI 解卦/對話已完成',
             body: finalContentToDisplay,
             isError: false
           });
         }
+
+        // Process follow-up message queued while streaming
+        if (queuedFollowUpRef.current && queuedFollowUpRef.current.conversationId === streamConvId) {
+          queuedFollowUpRef.current = null;
+          setTimeout(async () => {
+            const allMsgs = await LocalDB.getMessages(streamConvId);
+            executeChatStream(allMsgs, {
+              targetConvId: streamConvId,
+              modelId: targetModelId,
+              providerId: targetProviderId,
+              skillIds: targetSkillIds
+            });
+          }, 300);
+        }
       },
       onError: async (err) => {
+        if (renderTimer) {
+          clearTimeout(renderTimer);
+          renderTimer = null;
+        }
+        safeStopBackgroundExecution();
         if (finalizedRunsRef.current.has(runId)) return;
         finalizedRunsRef.current.add(runId);
         activeRunsRef.current.delete(runId);
@@ -766,14 +968,35 @@ export function useMobileChat({
     });
   }, [currentModelId, currentProviderId, providerConfigs, selectedSkillIds]);
 
-  // Send new user message
-  const sendMessage = useCallback(async () => {
-    const textToSend = input.trim();
+  // Send new user message (supports queuing/sending while streaming)
+  const sendMessage = useCallback(async (customText = null) => {
+    const textToSend = (customText !== null ? customText : input).trim();
     const hasImages = attachedImages.length > 0;
-    if ((!textToSend && !hasImages) || !currentModelId || isStreaming) return;
+    if ((!textToSend && !hasImages) || !currentModelId) return;
 
     const currId = currentConversationId;
     const currConv = conversations.find(c => c.id === currId);
+
+    // If stream is currently active, queue message with auxiliary prompt: [使用者又說: ...]
+    if (isStreaming) {
+      const followUpText = `使用者又說: ${textToSend}`;
+      const followUpMsg = {
+        id: `msg_${Date.now()}_u`,
+        conversationId: currId,
+        role: 'user',
+        content: followUpText,
+        ...(hasImages ? { images: attachedImages.map(img => img.url) } : {}),
+        createdAt: Date.now(),
+        ordinal: messages.length + 1
+      };
+
+      await LocalDB.saveMessage(followUpMsg);
+      setMessages(prev => [...prev, followUpMsg]);
+      setInput('');
+      setAttachedImages([]);
+      queuedFollowUpRef.current = followUpMsg;
+      return;
+    }
 
     const userMsg = {
       id: `msg_${Date.now()}_u`,
@@ -787,20 +1010,24 @@ export function useMobileChat({
 
     // If this is the first message in this conversation, persist conversation record to LocalDB
     if (messages.length === 0) {
-      const initialTitle = currConv?.type === 'meihua'
-        ? '梅花易數占卜'
+      const isMeihuaConv = currConv?.type === 'meihua' || /<meihua-numbers/i.test(textToSend);
+
+      const initialTitle = isMeihuaConv
+        ? (textToSend ? cleanFallbackTitle(textToSend) : '梅花易數占卜')
         : (textToSend ? cleanFallbackTitle(textToSend) : '圖片分析');
+      const finalTitle = (initialTitle && initialTitle !== '新對話') ? initialTitle : (isMeihuaConv ? '梅花易數占卜' : '新對話');
+
       const convToSave = {
         id: currId,
-        title: currConv?.title || initialTitle,
+        title: currConv?.title && currConv.title !== '新對話' && !currConv.title.includes('<meihua-numbers') ? currConv.title : finalTitle,
         providerId: currentProviderId,
         modelId: currentModelId,
-        skillIds: selectedSkillIds || [],
-        ...(currConv?.type ? { type: currConv.type } : {}),
+        skillIds: isMeihuaConv && !selectedSkillIds?.includes('meihua') ? [...(selectedSkillIds || []), 'meihua'] : (selectedSkillIds || []),
+        ...(isMeihuaConv ? { type: 'meihua' } : (currConv?.type ? { type: currConv.type } : {})),
         updatedAt: Date.now()
       };
       await LocalDB.saveConversation(convToSave);
-      setConversations(prev => prev.map(c => c.id === currId ? { ...c, ...convToSave, title: initialTitle } : c));
+      setConversations(prev => prev.map(c => c.id === currId ? { ...c, ...convToSave, title: convToSave.title } : c));
     }
 
     await LocalDB.saveMessage(userMsg);
@@ -809,6 +1036,65 @@ export function useMobileChat({
 
     await executeChatStream([...messages, userMsg]);
   }, [input, attachedImages, currentModelId, isStreaming, currentConversationId, messages, conversations, currentProviderId, selectedSkillIds, executeChatStream]);
+
+  // Simulate user creating a new chat and streaming a prompt (e.g. for Scheduled Tasks)
+  const simulateUserChat = useCallback(async ({
+    title,
+    prompt,
+    skillIds,
+    providerId,
+    modelId,
+    shouldSwitchView = true
+  }) => {
+    const startedAt = Date.now();
+    const convId = `conv_task_${startedAt}`;
+    const pId = providerId || currentProviderId;
+    const mId = modelId || currentModelId;
+    const skills = skillIds || ['daily-fortune'];
+
+    const newConv = {
+      id: convId,
+      title: title || '排程任務',
+      providerId: pId,
+      modelId: mId,
+      skillIds: skills,
+      type: 'chat',
+      createdAt: startedAt,
+      updatedAt: startedAt
+    };
+
+    await LocalDB.saveConversation(newConv);
+    setConversations(prev => [newConv, ...prev]);
+
+    const userMsg = {
+      id: `msg_${startedAt}_u`,
+      conversationId: convId,
+      role: 'user',
+      content: prompt,
+      createdAt: startedAt,
+      ordinal: 0
+    };
+
+    await LocalDB.saveMessage(userMsg);
+
+    if (shouldSwitchView) {
+      currentConversationIdRef.current = convId;
+      setCurrentConversationId(convId);
+      setSelectedSkillIds(skills);
+      setMessages([userMsg]);
+    }
+
+    // Launch real-time streaming generation
+    await executeChatStream([userMsg], {
+      targetConvId: convId,
+      modelId: mId,
+      providerId: pId,
+      skillIds: skills,
+      isScheduledTask: true
+    });
+
+    return { conversationId: convId };
+  }, [currentProviderId, currentModelId, executeChatStream, setSelectedSkillIds]);
 
   // Stop Generation for current active conversation
   const stopGeneration = useCallback(() => {
@@ -899,6 +1185,7 @@ export function useMobileChat({
     renameConversation,
     deleteConversation,
     sendMessage,
+    simulateUserChat,
     stopGeneration,
     regenerate,
     deleteMessage,
