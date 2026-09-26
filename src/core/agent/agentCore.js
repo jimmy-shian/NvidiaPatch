@@ -71,16 +71,16 @@ export class AgentCore {
     const signal = this.abortController.signal;
 
     let isFinalized = false;
-    const safeDone = (payload) => {
+    const safeDone = async (payload) => {
       if (isFinalized || this.activeRunId !== runId) return;
       isFinalized = true;
-      onDone?.({ ...payload, runId });
+      await onDone?.({ ...payload, runId });
     };
 
-    const safeError = (err) => {
+    const safeError = async (err) => {
       if (isFinalized || this.activeRunId !== runId) return;
       isFinalized = true;
-      onError?.(err, { runId });
+      await onError?.(err, { runId });
     };
 
     try {
@@ -92,7 +92,7 @@ export class AgentCore {
       });
 
       if (signal.aborted) {
-        safeDone({ aborted: true });
+        await safeDone({ aborted: true });
         return;
       }
 
@@ -113,7 +113,7 @@ export class AgentCore {
 
       while (round < AGENT_SAFETY_LIMITS.MAX_TOOL_ROUNDS) {
         if (signal.aborted) {
-          safeDone({ aborted: true });
+          await safeDone({ aborted: true });
           return;
         }
 
@@ -150,6 +150,8 @@ export class AgentCore {
           tools: toolsToPass
         });
 
+        let shouldFallbackObservation = false;
+
         for await (const chunk of stream) {
           if (!chunk || signal.aborted || this.activeRunId !== runId) break;
 
@@ -182,13 +184,37 @@ export class AgentCore {
 
           // 4. Handle Error
           if (chunk.type === 'error') {
-            safeError(new Error(chunk.delta || 'Stream error'));
+            if (round > 1 && allExecutedToolMessages.length > 0) {
+              const errMsg = (chunk.delta || '').toLowerCase();
+              if (errMsg.includes('tool') || errMsg.includes('400') || errMsg.includes('422') || errMsg.includes('role') || errMsg.includes('schema') || errMsg.includes('連線') || errMsg.includes('fail') || errMsg.includes('abort') || errMsg.includes('reset') || errMsg.includes('closed')) {
+                console.warn('[AgentCore] Upstream model rejected native tool schema or connection failed in Round 2, falling back to observation injection...', errMsg);
+                const toolResults = allExecutedToolMessages.filter(m => m.role === 'tool');
+                const observationText = toolResults.map(t => typeof t.content === 'string' ? t.content : JSON.stringify(t.content)).join('\n\n');
+                currentMessages = currentMessages.filter(m => m.role !== 'tool' && !(m.role === 'assistant' && m.tool_calls));
+                currentMessages.push({
+                  role: 'assistant',
+                  content: '我已執行搜尋與資料檢索。'
+                });
+                currentMessages.push({
+                  role: 'user',
+                  content: `【檢索資料事實如下】:\n${observationText}\n\n請根據以上檢索結果向使用者產出完整回答。`
+                });
+                totalToolCalls = AGENT_SAFETY_LIMITS.MAX_TOOL_CALLS_PER_RUN; // Prevent further tool calls
+                shouldFallbackObservation = true;
+                break;
+              }
+            }
+            await safeError(new Error(chunk.delta || 'Stream error'));
             return;
           }
         }
 
+        if (shouldFallbackObservation) {
+          continue;
+        }
+
         if (signal.aborted || this.activeRunId !== runId) {
-          safeDone({ aborted: true });
+          await safeDone({ aborted: true });
           return;
         }
 
@@ -196,12 +222,14 @@ export class AgentCore {
 
         // Check if model called any tools in this round (native SSE tool_calls or In-Band <tool_call> tags)
         let validToolCalls = accumulatedToolCalls.filter(tc => Boolean(tc && tc.function?.name));
+        let isInBandCall = false;
 
         if (validToolCalls.length === 0 && hasBudget) {
           const inBandResult = parseInBandToolCalls(roundContent || finalContent);
           if (inBandResult.toolCalls.length > 0) {
             validToolCalls = inBandResult.toolCalls;
             finalContent = inBandResult.cleanedText;
+            isInBandCall = true;
           }
         }
 
@@ -225,15 +253,38 @@ export class AgentCore {
               if (toolResults.length > 0) {
                 try {
                   const lastTool = toolResults[toolResults.length - 1];
-                  const parsed = typeof lastTool.content === 'string' ? JSON.parse(lastTool.content) : lastTool.content;
-                  if (parsed.results && parsed.results.length > 0) {
-                    const top = parsed.results[0];
-                    finalContent = top.content || top.snippet || top.title || '';
-                  } else if (parsed.formattedText) {
-                    finalContent = parsed.formattedText;
-                  } else if (parsed.error) {
-                    finalContent = `[工具執行回報]: ${parsed.error}`;
+                  let extractedText = '';
+                  if (typeof lastTool.content === 'object' && lastTool.content !== null) {
+                    const parsed = lastTool.content;
+                    if (parsed.results && parsed.results.length > 0) {
+                      const top = parsed.results[0];
+                      extractedText = top.content || top.snippet || top.title || '';
+                    } else if (parsed.formattedText) {
+                      extractedText = parsed.formattedText;
+                    } else if (parsed.error) {
+                      extractedText = `[工具執行回報]: ${parsed.error}`;
+                    }
+                  } else if (typeof lastTool.content === 'string') {
+                    try {
+                      const parsed = JSON.parse(lastTool.content);
+                      if (parsed && typeof parsed === 'object') {
+                        if (parsed.results && parsed.results.length > 0) {
+                          const top = parsed.results[0];
+                          extractedText = top.content || top.snippet || top.title || '';
+                        } else if (parsed.formattedText) {
+                          extractedText = parsed.formattedText;
+                        } else if (parsed.error) {
+                          extractedText = `[工具執行回報]: ${parsed.error}`;
+                        }
+                      }
+                    } catch (_) {
+                      extractedText = lastTool.content;
+                    }
+                    if (!extractedText) {
+                      extractedText = lastTool.content;
+                    }
                   }
+                  finalContent = extractedText;
                   if (finalContent) {
                     onContent?.(finalContent, { runId });
                   }
@@ -248,7 +299,7 @@ export class AgentCore {
 
           // Generation complete!
           onStatusChange?.({ phase: 'completed', runId });
-          safeDone({
+          await safeDone({
             content: finalContent,
             thinking: finalThinking,
             usage: latestUsage,
@@ -262,17 +313,26 @@ export class AgentCore {
         totalToolCalls += validToolCalls.length;
         onToolStart?.(validToolCalls, { runId });
 
-        const assistantToolMsg = {
-          role: 'assistant',
-          content: null,
-          tool_calls: validToolCalls
-        };
-        currentMessages.push(assistantToolMsg);
-        allExecutedToolMessages.push(assistantToolMsg);
+        if (!isInBandCall) {
+          const assistantToolMsg = {
+            role: 'assistant',
+            content: null,
+            tool_calls: validToolCalls
+          };
+          currentMessages.push(assistantToolMsg);
+          allExecutedToolMessages.push(assistantToolMsg);
+        } else {
+          const assistantInBandMsg = {
+            role: 'assistant',
+            content: roundContent || '正在調用工具檢索即時資料...'
+          };
+          currentMessages.push(assistantInBandMsg);
+          allExecutedToolMessages.push(assistantInBandMsg);
+        }
 
         for (const tc of validToolCalls) {
           if (signal.aborted || this.activeRunId !== runId) {
-            safeDone({ aborted: true });
+            await safeDone({ aborted: true });
             return;
           }
 
@@ -339,19 +399,32 @@ export class AgentCore {
           }
 
           if (signal.aborted || this.activeRunId !== runId) {
-            safeDone({ aborted: true });
+            await safeDone({ aborted: true });
             return;
           }
 
-          const toolResultMsg = {
-            role: 'tool',
-            tool_call_id: tc.id,
-            name: toolName,
-            content: typeof resultPayload === 'string' ? resultPayload : JSON.stringify(resultPayload)
-          };
+          const cleanToolContent = resultPayload?.formattedText
+            ? `${resultPayload.instruction || ''}\n\n${resultPayload.formattedText}`
+            : (typeof resultPayload === 'string' ? resultPayload : JSON.stringify(resultPayload));
 
-          currentMessages.push(toolResultMsg);
-          allExecutedToolMessages.push(toolResultMsg);
+          if (!isInBandCall) {
+            // Strict OpenAI / NVIDIA NIM schema: role: 'tool', tool_call_id, content. OMIT 'name'!
+            const toolResultMsg = {
+              role: 'tool',
+              tool_call_id: tc.id,
+              content: cleanToolContent
+            };
+            currentMessages.push(toolResultMsg);
+            allExecutedToolMessages.push(toolResultMsg);
+          } else {
+            // In-band observation injection for models without native function calling
+            const observationMsg = {
+              role: 'user',
+              content: `【工具執行結果 (${toolName})】:\n${cleanToolContent}\n\n請根據以上工具檢索的最新事實，繼續為使用者產出完整回答。`
+            };
+            currentMessages.push(observationMsg);
+            allExecutedToolMessages.push(observationMsg);
+          }
 
           // If new MCP tools were registered, refresh active tools for subsequent rounds
           if (toolName === 'request_mcp_connection' || toolName === 'search_mcp_tools') {
@@ -378,15 +451,38 @@ export class AgentCore {
         if (toolResults.length > 0) {
           try {
             const lastTool = toolResults[toolResults.length - 1];
-            const parsed = typeof lastTool.content === 'string' ? JSON.parse(lastTool.content) : lastTool.content;
-            if (parsed.results && parsed.results.length > 0) {
-              const top = parsed.results[0];
-              finalContent = top.content || top.snippet || top.title || '';
-            } else if (parsed.formattedText) {
-              finalContent = parsed.formattedText;
-            } else if (parsed.error) {
-              finalContent = `[工具執行回報]: ${parsed.error}`;
+            let extractedText = '';
+            if (typeof lastTool.content === 'object' && lastTool.content !== null) {
+              const parsed = lastTool.content;
+              if (parsed.results && parsed.results.length > 0) {
+                const top = parsed.results[0];
+                extractedText = top.content || top.snippet || top.title || '';
+              } else if (parsed.formattedText) {
+                extractedText = parsed.formattedText;
+              } else if (parsed.error) {
+                extractedText = `[工具執行回報]: ${parsed.error}`;
+              }
+            } else if (typeof lastTool.content === 'string') {
+              try {
+                const parsed = JSON.parse(lastTool.content);
+                if (parsed && typeof parsed === 'object') {
+                  if (parsed.results && parsed.results.length > 0) {
+                    const top = parsed.results[0];
+                    extractedText = top.content || top.snippet || top.title || '';
+                  } else if (parsed.formattedText) {
+                    extractedText = parsed.formattedText;
+                  } else if (parsed.error) {
+                    extractedText = `[工具執行回報]: ${parsed.error}`;
+                  }
+                }
+              } catch (_) {
+                extractedText = lastTool.content;
+              }
+              if (!extractedText) {
+                extractedText = lastTool.content;
+              }
             }
+            finalContent = extractedText;
             if (finalContent) {
               onContent?.(finalContent, { runId });
             }
@@ -395,7 +491,7 @@ export class AgentCore {
       }
 
       onStatusChange?.({ phase: 'completed', runId });
-      safeDone({
+      await safeDone({
         content: finalContent,
         thinking: finalThinking,
         usage: latestUsage,
@@ -403,9 +499,9 @@ export class AgentCore {
       });
     } catch (err) {
       if (err.name === 'AbortError' || signal.aborted) {
-        safeDone({ aborted: true });
+        await safeDone({ aborted: true });
       } else {
-        safeError(err);
+        await safeError(err);
       }
     } finally {
       if (this.activeRunId === runId) {

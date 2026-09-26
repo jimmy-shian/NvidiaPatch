@@ -30,9 +30,10 @@ export class SearchProviderRegistry {
 
   /**
    * Get list of providers sorted by health status
+   * Cloudflare Worker proxy maintains top priority unless facing severe persistent failures (>= 3).
    */
   getPrioritizedProviders() {
-    const COOLDOWN_MS = 5 * 60 * 1000;
+    const COOLDOWN_MS = 3 * 60 * 1000;
     const now = Date.now();
 
     return [...this.providers].sort((a, b) => {
@@ -45,6 +46,14 @@ export class SearchProviderRegistry {
       }
       if (statsB.failures >= 3 && statsB.lastFailure && now - statsB.lastFailure > COOLDOWN_MS) {
         statsB.failures = 0;
+      }
+
+      // Worker priority: if worker has fewer than 3 severe failures, it should always be prioritized
+      if (a.name === 'worker' && b.name !== 'worker') {
+        if (statsA.failures < 3) return -1;
+      }
+      if (b.name === 'worker' && a.name !== 'worker') {
+        if (statsB.failures < 3) return 1;
       }
 
       return statsA.failures - statsB.failures;
@@ -60,8 +69,12 @@ export class SearchProviderRegistry {
   }
 
   recordFailure(providerName, error) {
-    // If worker is simply not configured or disabled, do not count as a health failure
-    if (providerName === 'worker' && error?.code === 'NOT_CONFIGURED') {
+    // If worker is simply not configured, disabled, or returned 0 results, do NOT treat as a server health failure
+    if (providerName === 'worker' && (
+      error?.code === 'NOT_CONFIGURED' ||
+      error?.errorKind === 'no_results' ||
+      error?.message?.includes('0 results')
+    )) {
       return;
     }
 

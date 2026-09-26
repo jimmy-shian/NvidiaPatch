@@ -131,4 +131,116 @@ describe('Universal Web Search & AgentCore Integration', () => {
     expect(doneResult.content).toContain('根據 NVIDIA 官方公告');
     expect(doneResult.toolMessages).toHaveLength(2);
   });
+
+  it('AgentCore recovers via observation injection when Round 2 fails with schema/tool error', async () => {
+    vi.spyOn(HttpClient, 'request')
+      .mockResolvedValueOnce({ ok: true, status: 200, data: MOCK_BING_HTML })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: MOCK_WEBPAGE_HTML });
+
+    let callCount = 0;
+    const mockProvider = {
+      chatStream({ messages }) {
+        callCount++;
+        const currentCount = callCount;
+        return (async function* () {
+          if (currentCount === 1) {
+            // Round 1: Model requests web_search
+            yield {
+              type: 'chunk',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_test_fail_1',
+                  type: 'function',
+                  function: { name: 'web_search', arguments: '{"query": "NVIDIA Blackwell news"}' }
+                }
+              ]
+            };
+            yield { type: 'done' };
+          } else if (currentCount === 2) {
+            // Round 2: Provider returns schema/role error
+            yield {
+              type: 'error',
+              delta: 'HTTP 400: Model does not support role tool in messages'
+            };
+          } else if (currentCount === 3) {
+            // Round 3: Observation injection succeeded, normal user-assistant synthesis
+            const lastMsg = messages[messages.length - 1];
+            expect(lastMsg.role).toBe('user');
+            expect(lastMsg.content).toContain('【檢索資料事實如下】');
+            yield {
+              type: 'chunk',
+              content: '已根據檢索事實成功生成回覆。'
+            };
+            yield { type: 'done' };
+          }
+        })();
+      }
+    };
+
+    const agent = new AgentCore(mockProvider);
+    let capturedContent = '';
+    let doneResult = null;
+
+    await agent.runChat({
+      messages: [{ role: 'user', content: '搜尋最新消息' }],
+      model: 'openai/gpt-oss-120b',
+      onContent: (d) => { capturedContent += d; },
+      onDone: (res) => { doneResult = res; }
+    });
+
+    expect(callCount).toBe(3);
+    expect(capturedContent).toContain('已根據檢索事實成功生成回覆。');
+    expect(doneResult?.content).toContain('已根據檢索事實成功生成回覆。');
+  });
+
+  it('AgentCore extracts formattedText plain-string tool fallback when model produces empty content', async () => {
+    vi.spyOn(HttpClient, 'request')
+      .mockResolvedValueOnce({ ok: true, status: 200, data: MOCK_BING_HTML })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: MOCK_WEBPAGE_HTML });
+
+    let callCount = 0;
+    const mockProvider = {
+      chatStream() {
+        callCount++;
+        const currentCount = callCount;
+        return (async function* () {
+          if (currentCount === 1) {
+            yield {
+              type: 'chunk',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_test_fallback_1',
+                  type: 'function',
+                  function: { name: 'web_search', arguments: '{"query": "NVIDIA Blackwell news"}' }
+                }
+              ]
+            };
+            yield { type: 'done' };
+          } else {
+            // Round 2: Model finishes with empty content
+            yield { type: 'chunk', content: '' };
+            yield { type: 'done' };
+          }
+        })();
+      }
+    };
+
+    const agent = new AgentCore(mockProvider);
+    let capturedContent = '';
+    let doneResult = null;
+
+    await agent.runChat({
+      messages: [{ role: 'user', content: '搜尋最新消息' }],
+      model: 'openai/gpt-oss-120b',
+      onContent: (d) => { capturedContent += d; },
+      onDone: (res) => { doneResult = res; }
+    });
+
+    expect(callCount).toBe(2);
+    // Should fallback to the extracted tool content rather than staying empty
+    expect(capturedContent.length).toBeGreaterThan(0);
+    expect(doneResult?.content).toContain('NVIDIA Blackwell architecture');
+  });
 });

@@ -9,6 +9,7 @@ import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { fetchNvidiaCatalog, sortNvidiaModels } from './nvidiaModelCatalog';
 import { resolveUpstreamModelId } from './modelResolver';
+import { sanitizeMessagesForApi } from '../network/messageSanitizer';
 
 export const DEFAULT_NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_NVIDIA_MODEL = 'nvidia/llama-3.1-nemotron-120b-instruct';
@@ -120,7 +121,7 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
 
     const buildPayload = (includeTools, includeUsage) => ({
       model: targetModel,
-      messages,
+      messages: sanitizeMessagesForApi(messages),
       temperature,
       max_tokens,
       stream: true,
@@ -197,10 +198,15 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
       yield { type: 'done', delta: '' };
     }.bind(this);
 
+    let contentChunksCount = 0;
+
     while (true) {
       try {
         const payload = buildPayload(Boolean(activeTools), true);
         for await (const chunk of executeStream(payload)) {
+          if (chunk.content || chunk.delta) {
+            contentChunksCount++;
+          }
           yield chunk;
         }
         return;
@@ -210,20 +216,21 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
           return;
         }
 
-        const isTemporary = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504;
+        const errMsg = (err.message || '').toLowerCase();
+        const isTransient = errMsg.includes('abort') || errMsg.includes('reset') || errMsg.includes('closed') || errMsg.includes('broken pipe') || errMsg.includes('eof') || errMsg.includes('timeout') || errMsg.includes('network') || errMsg.includes('連線');
+        const isTemporary = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504 || (isTransient && contentChunksCount === 0);
         if (isTemporary && retryCount < MAX_RETRIES) {
           retryCount++;
           const backoffMs = 1000 * Math.pow(2, retryCount - 1);
           yield {
             type: 'chunk',
-            reasoning: `\n[暫時性 HTTP ${err.status || '網路'} 錯誤 - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
+            reasoning: `\n[暫時性連線異常 (${err.status ? 'HTTP ' + err.status : '網路中斷'}) - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
           };
           await new Promise(r => setTimeout(r, backoffMs));
           continue;
         }
 
         // Capability Fallback check for tools or stream_options
-        const errMsg = (err.message || '').toLowerCase();
         const isToolError = activeTools && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || err.status === 400);
         const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || err.status === 400);
 

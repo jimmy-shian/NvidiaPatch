@@ -14,6 +14,7 @@ import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { resolveUpstreamModelId } from './modelResolver';
 import { hasImagesInMessages, isImageRejectionError, repackageMessagesWithoutImages } from './visionCapabilities';
+import { sanitizeMessagesForApi } from '../network/messageSanitizer';
 
 export class OpenAICompatibleProvider extends ProviderAdapter {
   constructor(config = {}) {
@@ -196,7 +197,7 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
 
     const buildPayload = (includeTools, includeUsage) => ({
       model: targetModel,
-      messages,
+      messages: sanitizeMessagesForApi(messages),
       temperature,
       max_tokens,
       stream: true,
@@ -272,19 +273,42 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
       yield { type: 'done', delta: '' };
     }.bind(this);
 
-    // Try initial streaming request with capability fallback
-    try {
-      const payload = buildPayload(Boolean(activeTools), true);
-      for await (const chunk of executeStream(payload)) {
-        yield chunk;
-      }
-    } catch (err) {
-      if (err.name === 'AbortError' || signal?.aborted) {
-        yield { type: 'done', delta: '' };
-        return;
-      }
+    const MAX_RETRIES = 2;
+    let retryCount = 0;
+    let contentChunksCount = 0;
 
-      // 1. Reactive Image Rejection Fallback (收到錯誤，自己重發包裝)
+    while (true) {
+      try {
+        const payload = buildPayload(Boolean(activeTools), true);
+        for await (const chunk of executeStream(payload)) {
+          if (chunk.content || chunk.delta) {
+            contentChunksCount++;
+          }
+          yield chunk;
+        }
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError' || signal?.aborted) {
+          yield { type: 'done', delta: '' };
+          return;
+        }
+
+        const errMsg = (err.message || '').toLowerCase();
+        const isTransient = errMsg.includes('abort') || errMsg.includes('reset') || errMsg.includes('closed') || errMsg.includes('broken pipe') || errMsg.includes('eof') || errMsg.includes('timeout') || errMsg.includes('network') || errMsg.includes('連線');
+        const isTemporary = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504 || (isTransient && contentChunksCount === 0);
+
+        if (isTemporary && retryCount < MAX_RETRIES) {
+          retryCount++;
+          const backoffMs = 1000 * Math.pow(2, retryCount - 1);
+          yield {
+            type: 'chunk',
+            reasoning: `\n[暫時性連線異常 (${err.status ? 'HTTP ' + err.status : '網路中斷'}) - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
+          };
+          await new Promise(r => setTimeout(r, backoffMs));
+          continue;
+        }
+
+        // 1. Reactive Image Rejection Fallback (收到錯誤，自己重發包裝)
       if (hasImagesInMessages(messages) && isImageRejectionError(err)) {
         console.warn(`[OpenAICompatibleProvider] 模型「${targetModel}」拒絕圖片輸入或報錯，自動重發純文字包裝訊息...`);
         const repackagedMessages = repackageMessagesWithoutImages(messages, targetModel);
@@ -304,7 +328,6 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
       }
 
       // 2. Check if error was caused by stream_options or tools rejecting in unknown model
-      const errMsg = (err.message || '').toLowerCase();
       const isToolError = activeTools && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || err.status === 400);
       const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || err.status === 400);
 
@@ -337,6 +360,8 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
       }
 
       yield { type: 'error', delta: `連線失敗: ${sanitizeLog(err.message)}` };
+      return;
     }
   }
+}
 }

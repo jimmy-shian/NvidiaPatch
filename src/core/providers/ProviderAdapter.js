@@ -41,4 +41,23 @@ export class ProviderAdapter {
   supportsToolCalling(modelId) {
     return false;
   }
+
+  /**
+   * Compatibility stream generator method
+   */
+  async *sendMessageStream({ model, messages, systemInstruction, ...rest }) {
+    const finalMessages = [...(messages || [])];
+    if (systemInstruction && !finalMessages.some(m => m.role === 'system')) {
+      finalMessages.unshift({ role: 'system', content: systemInstruction });
+    }
+    for await (const chunk of this.chatStream({ model, messages: finalMessages, ...rest })) {
+      const text = chunk.content || chunk.delta || '';
+      const type = chunk.content ? 'content' : chunk.reasoning ? 'thinking' : (chunk.type || 'content');
+      yield {
+        type,
+        text,
+        ...chunk
+      };
+    }
+  }
 }
