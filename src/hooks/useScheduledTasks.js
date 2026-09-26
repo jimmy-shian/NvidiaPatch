@@ -1,11 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { LocalDB } from '../core/storage/localDatabase';
-import { calculateNextRunTime, executeScheduledTask } from '../core/schedule/scheduleEngine';
+import { calculateNextRunTime, executeScheduledTask, advanceStaleTask, isTaskExecuting } from '../core/schedule/scheduleEngine';
 
-export function useScheduledTasks({ providerConfigs, skills = [] }) {
+export function useScheduledTasks({
+  providerConfigs,
+  skills = [],
+  onSimulateChat = null,
+  onCloseDrawer = null
+}) {
   const [tasks, setTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const isCheckingRef = useRef(false);
+
+  const providerConfigsRef = useRef(providerConfigs);
+  providerConfigsRef.current = providerConfigs;
+
+  const skillsRef = useRef(skills);
+  skillsRef.current = skills;
+
+  const onSimulateChatRef = useRef(onSimulateChat);
+  onSimulateChatRef.current = onSimulateChat;
+
+  const onCloseDrawerRef = useRef(onCloseDrawer);
+  onCloseDrawerRef.current = onCloseDrawer;
 
   const loadTasks = useCallback(async () => {
     try {
@@ -57,7 +74,23 @@ export function useScheduledTasks({ providerConfigs, skills = [] }) {
     await loadTasks();
   }, [loadTasks]);
 
-  // Periodic checker (runs every 30 seconds to trigger due tasks when App is active)
+  const executeTaskNow = useCallback(async (task) => {
+    if (!task) return null;
+    if (onCloseDrawerRef.current) {
+      try {
+        onCloseDrawerRef.current();
+      } catch (_) {}
+    }
+    const res = await executeScheduledTask(task, {
+      providerConfigs: providerConfigsRef.current,
+      skills: skillsRef.current,
+      onSimulateChat: onSimulateChatRef.current
+    });
+    await loadTasks();
+    return res;
+  }, [loadTasks]);
+
+  // Periodic checker (runs every 15 seconds to reliably trigger due tasks on exact schedule)
   useEffect(() => {
     const checkAndExecuteDueTasks = async () => {
       if (isCheckingRef.current) return;
@@ -66,13 +99,31 @@ export function useScheduledTasks({ providerConfigs, skills = [] }) {
       try {
         const now = Date.now();
         const allTasks = await LocalDB.getScheduledTasks();
-        const dueTasks = allTasks.filter(t => t.enabled && t.nextRunAt && t.nextRunAt <= now);
+        let hasChanges = false;
 
-        for (const task of dueTasks) {
-          await executeScheduledTask(task, { providerConfigs, skills });
+        for (const task of allTasks) {
+          if (!task.enabled || !task.nextRunAt) continue;
+
+          // Check if task is due
+          if (task.nextRunAt <= now) {
+            // Guard against stale tasks overdue by more than 4 hours (e.g. phone was powered off for a day)
+            const isStale = (now - task.nextRunAt) > (4 * 3600 * 1000);
+            if (isStale) {
+              console.warn(`[useScheduledTasks] Task ${task.id} (${task.name}) is overdue by >4h, advancing to next cycle without late fire`);
+              await advanceStaleTask(task, now);
+              hasChanges = true;
+            } else if (!isTaskExecuting(task.id)) {
+              await executeScheduledTask(task, {
+                providerConfigs: providerConfigsRef.current,
+                skills: skillsRef.current,
+                onSimulateChat: onSimulateChatRef.current
+              });
+              hasChanges = true;
+            }
+          }
         }
 
-        if (dueTasks.length > 0) {
+        if (hasChanges) {
           await loadTasks();
         }
       } catch (err) {
@@ -82,12 +133,22 @@ export function useScheduledTasks({ providerConfigs, skills = [] }) {
       }
     };
 
-    const timer = setInterval(checkAndExecuteDueTasks, 30000);
-    // Also check on mount
+    const timer = setInterval(checkAndExecuteDueTasks, 15000);
     checkAndExecuteDueTasks();
 
-    return () => clearInterval(timer);
-  }, [providerConfigs, skills, loadTasks]);
+    // Check immediately when app comes into foreground
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndExecuteDueTasks();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadTasks]);
 
   return {
     tasks,
@@ -95,6 +156,7 @@ export function useScheduledTasks({ providerConfigs, skills = [] }) {
     loadTasks,
     saveTask,
     deleteTask,
-    toggleTask
+    toggleTask,
+    executeTaskNow
   };
 }

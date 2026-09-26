@@ -7,6 +7,26 @@ export const NativeStreamClient = {
     return typeof window !== 'undefined' && Boolean(window.NativeStreamBridge);
   },
 
+  startBackgroundExecution(reason = 'background_task') {
+    if (this.isAvailable() && typeof window.NativeStreamBridge.startBackgroundExecution === 'function') {
+      try {
+        window.NativeStreamBridge.startBackgroundExecution(reason);
+      } catch (e) {
+        console.warn('[NativeStreamClient] startBackgroundExecution failed:', e);
+      }
+    }
+  },
+
+  stopBackgroundExecution() {
+    if (this.isAvailable() && typeof window.NativeStreamBridge.stopBackgroundExecution === 'function') {
+      try {
+        window.NativeStreamBridge.stopBackgroundExecution();
+      } catch (e) {
+        console.warn('[NativeStreamClient] stopBackgroundExecution failed:', e);
+      }
+    }
+  },
+
   async *stream({ url, headers = {}, body = {}, signal = null }) {
     if (!this.isAvailable()) {
       throw new Error('NativeStreamBridge not available');

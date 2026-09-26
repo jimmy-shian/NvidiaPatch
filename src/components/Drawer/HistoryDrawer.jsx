@@ -17,7 +17,8 @@ export default function HistoryDrawer({
   providerConfigs,
   skills,
   currentProviderId,
-  currentModelId
+  currentModelId,
+  scheduledTasks
 }) {
   const { t } = useTranslation();
   const [drawerTab, setDrawerTab] = useState('chats');
@@ -129,6 +130,7 @@ export default function HistoryDrawer({
             skills={skills}
             currentProviderId={currentProviderId}
             currentModelId={currentModelId}
+            scheduledTasks={scheduledTasks}
           />
         ) : (
           <>

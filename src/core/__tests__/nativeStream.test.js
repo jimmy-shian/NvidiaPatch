@@ -34,4 +34,11 @@ describe('NativeStreamClient & Stream SSE Parser', () => {
     expect(provider._parseSseLine(': keepalive')).toBeNull();
     expect(provider._parseSseLine('data: malformed json')).toBeNull();
   });
+
+  it('safely handles background execution bridge calls without crashing when absent', () => {
+    expect(() => {
+      NativeStreamClient.startBackgroundExecution('test_task');
+      NativeStreamClient.stopBackgroundExecution();
+    }).not.toThrow();
+  });
 });

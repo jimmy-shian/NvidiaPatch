@@ -14,6 +14,7 @@ import { LocalDB } from './core/storage/localDatabase';
 import { PROVIDER_TYPES } from './core/providers';
 import { NotificationService } from './core/notifications/notificationService';
 import { checkPendingSharedText } from './core/utils/shareTarget';
+import { useScheduledTasks } from './hooks/useScheduledTasks';
 
 export default function App() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -23,6 +24,21 @@ export default function App() {
   const [selectedSkillIds, setSelectedSkillIds] = useState([]);
 
   const settings = useMobileSettings();
+
+  const chat = useMobileChat({
+    currentProviderId: settings.currentProviderId,
+    currentModelId: settings.currentModelId,
+    providerConfigs: settings.providerConfigs,
+    selectedSkillIds,
+    setSelectedSkillIds
+  });
+
+  const scheduledTasks = useScheduledTasks({
+    providerConfigs: settings.providerConfigs,
+    skills: settings.skills,
+    onSimulateChat: chat.simulateUserChat,
+    onCloseDrawer: () => setIsDrawerOpen(false)
+  });
 
   useEffect(() => {
     if (Capacitor.isNativePlatform()) {
@@ -38,14 +54,6 @@ export default function App() {
     // Request notification permission and initialize listener
     NotificationService.requestPermission();
   }, []);
-
-  const chat = useMobileChat({
-    currentProviderId: settings.currentProviderId,
-    currentModelId: settings.currentModelId,
-    providerConfigs: settings.providerConfigs,
-    selectedSkillIds,
-    setSelectedSkillIds
-  });
 
   useEffect(() => {
     NotificationService.initActionListener((conversationId) => {
@@ -85,6 +93,34 @@ export default function App() {
       window.removeEventListener('focus', handleCheckShared);
     };
   }, [chat.newChat, chat.setInput]);
+
+  // Handle desktop widget click to open specific conversation
+  useEffect(() => {
+    const handleCheckWidgetConv = () => {
+      if (typeof window !== 'undefined' && window.NativeStreamBridge && typeof window.NativeStreamBridge.getPendingConversationId === 'function') {
+        const convId = window.NativeStreamBridge.getPendingConversationId();
+        if (convId && chat.selectConversation) {
+          chat.selectConversation(convId);
+        }
+      }
+    };
+
+    handleCheckWidgetConv();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleCheckWidgetConv();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleCheckWidgetConv);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleCheckWidgetConv);
+    };
+  }, [chat.selectConversation]);
 
   const toggleSkill = (skillId) => {
     setSelectedSkillIds(prev => {
@@ -180,6 +216,7 @@ export default function App() {
         skills={settings.skills}
         currentProviderId={settings.currentProviderId}
         currentModelId={settings.currentModelId}
+        scheduledTasks={scheduledTasks}
       />
 
       {/* Quick Model Selector Bottom Sheet */}

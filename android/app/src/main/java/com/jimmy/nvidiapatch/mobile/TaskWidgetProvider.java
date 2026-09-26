@@ -63,6 +63,9 @@ public class TaskWidgetProvider extends AppWidgetProvider {
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         if (conversationId != null) {
             intent.putExtra("conversationId", conversationId);
+            intent.setData(android.net.Uri.parse("nvidiapatch://conversation/" + conversationId));
+        } else {
+            intent.setData(android.net.Uri.parse("nvidiapatch://home"));
         }
 
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
@@ -76,16 +79,23 @@ public class TaskWidgetProvider extends AppWidgetProvider {
         appWidgetManager.updateAppWidget(appWidgetId, views);
     }
 
+    public static void refreshAllWidgets(Context context) {
+        if (context == null) return;
+        AppWidgetManager appWidgetManager = AppWidgetManager.getInstance(context);
+        ComponentName thisAppWidget = new ComponentName(context.getPackageName(), TaskWidgetProvider.class.getName());
+        int[] appWidgetIds = appWidgetManager.getAppWidgetIds(thisAppWidget);
+        if (appWidgetIds != null && appWidgetIds.length > 0) {
+            for (int appWidgetId : appWidgetIds) {
+                updateAppWidget(context, appWidgetManager, appWidgetId);
+            }
+        }
+    }
+
     @Override
     public void onReceive(Context context, Intent intent) {
         super.onReceive(context, intent);
 
         // When receiving widget update broadcast, refresh all widgets
-        AppWidgetManager appWidgetManager = AppWidgetManager.getInstance(context);
-        ComponentName thisAppWidget = new ComponentName(context.getPackageName(), TaskWidgetProvider.class.getName());
-        int[] appWidgetIds = appWidgetManager.getAppWidgetIds(thisAppWidget);
-        if (appWidgetIds != null && appWidgetIds.length > 0) {
-            onUpdate(context, appWidgetManager, appWidgetIds);
-        }
+        refreshAllWidgets(context);
     }
 }

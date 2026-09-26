@@ -82,7 +82,9 @@ export const LocalDB = {
   },
 
   async saveConversation(conv) {
+    const existing = await this.getConversation(conv.id);
     const updated = {
+      ...(existing || {}),
       ...conv,
       updatedAt: conv.updatedAt || Date.now()
     };

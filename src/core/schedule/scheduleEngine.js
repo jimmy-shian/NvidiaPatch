@@ -6,6 +6,16 @@ import { LocalDB } from '../storage/localDatabase';
 import { NotificationService } from '../notifications/notificationService';
 import { createProvider } from '../providers';
 import { AgentCore } from '../agent/agentCore';
+import { NativeStreamClient } from '../network/nativeStreamClient';
+
+const runningTaskIds = new Set();
+
+/**
+ * Checks if a task is currently executing
+ */
+export function isTaskExecuting(taskId) {
+  return runningTaskIds.has(taskId);
+}
 
 /**
  * Calculates the next timestamp for a given time "HH:mm" and repeat rule
@@ -51,35 +61,125 @@ export function calculateNextRunTime(timeStr, repeat = 'daily', fromTime = new D
  */
 export async function writeWidgetLatestTask({ title, summary, conversationId, taskId }) {
   try {
+    const cleanSummary = (summary || '')
+      .replace(/^#+\s+/gm, '')
+      .replace(/\*\*/g, '')
+      .replace(/`{1,3}[^`]*`{1,3}/g, '')
+      .replace(/\n{2,}/g, '\n')
+      .trim()
+      .slice(0, 300);
+
     const payload = JSON.stringify({
       title: title || '今日排程任務',
-      summary: (summary || '').slice(0, 200),
+      summary: cleanSummary || '點擊開啟 NvidiaPatch 查看完整內容。',
       updatedAt: Date.now(),
       conversationId: conversationId || null,
       taskId: taskId || null
     });
 
+    // 1. Capacitor Preferences
     await Preferences.set({
       key: 'widget_latest_task',
       value: payload
     });
+
+    // 2. Direct Android Native AppWidget refresh via NativeStreamBridge
+    if (typeof window !== 'undefined' && window.NativeStreamBridge && typeof window.NativeStreamBridge.updateWidget === 'function') {
+      try {
+        window.NativeStreamBridge.updateWidget(payload);
+      } catch (bridgeErr) {
+        console.warn('[ScheduleEngine] NativeStreamBridge.updateWidget failed:', bridgeErr);
+      }
+    }
   } catch (err) {
     console.warn('[ScheduleEngine] Write widget latest task failed:', err);
   }
 }
 
 /**
- * Executes a single scheduled task
+ * Advances a stale task that missed its run window by more than 4 hours
  */
-export async function executeScheduledTask(task, { providerConfigs, skills = [] }) {
+export async function advanceStaleTask(task, now = Date.now()) {
+  const nextRun = calculateNextRunTime(task.time, task.repeat, new Date(now));
+  const updated = {
+    ...task,
+    nextRunAt: nextRun
+  };
+  await LocalDB.saveScheduledTask(updated);
+  return updated;
+}
+
+/**
+ * Executes a single scheduled task with concurrency locks and atomic nextRunAt advancement
+ */
+export async function executeScheduledTask(task, { providerConfigs, skills = [], onSimulateChat = null }) {
   if (!task || !task.enabled) return null;
+
+  if (runningTaskIds.has(task.id)) {
+    console.warn(`[ScheduleEngine] Task ${task.id} (${task.name}) is already executing, skipping duplicate trigger`);
+    return null;
+  }
+
+  runningTaskIds.add(task.id);
+  NativeStreamClient.startBackgroundExecution('scheduled_task_' + task.id);
 
   const startedAt = Date.now();
   let conversationId = task.conversationId;
 
-  // 1. Create or get conversation
+  // ATOMIC ADVANCE: Update task nextRunAt in database IMMEDIATELY upon pickup
+  // This guarantees that any concurrent check or remount will NEVER trigger this task again
+  const nextRunAt = task.repeat === 'once'
+    ? null
+    : calculateNextRunTime(task.time, task.repeat, new Date(startedAt));
+
+  let currentTaskRecord = {
+    ...task,
+    conversationId,
+    lastRunAt: startedAt,
+    nextRunAt,
+    enabled: task.repeat === 'once' ? false : task.enabled
+  };
+  await LocalDB.saveScheduledTask(currentTaskRecord);
+
+  // If chat engine delegate is provided, simulate user creating a new chat and streaming
+  if (typeof onSimulateChat === 'function') {
+    NativeStreamClient.startBackgroundExecution('task_' + task.id);
+    try {
+      const res = await onSimulateChat({
+        title: task.name || '排程任務',
+        prompt: task.prompt || '執行排程任務',
+        skillIds: task.skillIds || ['daily-fortune'],
+        providerId: task.providerId,
+        modelId: task.modelId,
+        shouldSwitchView: typeof document !== 'undefined' && !document.hidden
+      });
+      if (res?.conversationId) {
+        currentTaskRecord.conversationId = res.conversationId;
+        // Fetch generated assistant response to populate widget correctly!
+        try {
+          const msgs = await LocalDB.getMessages(res.conversationId);
+          const lastAsstMsg = [...msgs].reverse().find(m => m.role === 'assistant');
+          const summaryText = lastAsstMsg?.content || '排程任務已執行完成。';
+          await writeWidgetLatestTask({
+            title: task.name || '排程任務',
+            summary: summaryText,
+            conversationId: res.conversationId,
+            taskId: task.id
+          });
+          currentTaskRecord.lastRunStatus = 'success';
+        } catch (_) {}
+        await LocalDB.saveScheduledTask(currentTaskRecord);
+      }
+      return currentTaskRecord;
+    } finally {
+      runningTaskIds.delete(task.id);
+      NativeStreamClient.stopBackgroundExecution();
+    }
+  }
+
+  // 1. Fallback Headless: Create or get conversation
   if (!conversationId) {
-    conversationId = `conv_task_${Date.now()}`;
+    conversationId = `conv_task_${startedAt}`;
     await LocalDB.saveConversation({
       id: conversationId,
       title: task.name || '排程任務',
@@ -87,10 +187,12 @@ export async function executeScheduledTask(task, { providerConfigs, skills = [] 
       createdAt: startedAt,
       updatedAt: startedAt
     });
+    currentTaskRecord.conversationId = conversationId;
+    await LocalDB.saveScheduledTask(currentTaskRecord);
   }
 
-  const userMsgId = `msg_user_${Date.now()}`;
-  const assistantMsgId = `msg_asst_${Date.now() + 1}`;
+  const userMsgId = `msg_user_${startedAt}`;
+  const assistantMsgId = `msg_asst_${startedAt + 1}`;
 
   // Save User Prompt
   const userMsg = {
@@ -108,6 +210,7 @@ export async function executeScheduledTask(task, { providerConfigs, skills = [] 
   let finalContent = '';
   let isFailed = false;
 
+  NativeStreamClient.startBackgroundExecution('task_headless_' + task.id);
   try {
     const provider = createProvider(providerId, config);
     const activeSkills = (task.skillIds || []).map(id => skills.find(s => s.id === id)).filter(Boolean);
@@ -122,21 +225,52 @@ export async function executeScheduledTask(task, { providerConfigs, skills = [] 
       { role: 'user', content: task.prompt }
     ];
 
-    const stream = await provider.sendMessageStream({
-      model: task.modelId,
-      messages,
-      systemInstruction: systemPrompt
-    });
+    const stream = provider.sendMessageStream
+      ? provider.sendMessageStream({
+          model: task.modelId,
+          messages,
+          systemInstruction: systemPrompt
+        })
+      : provider.chatStream({
+          model: task.modelId,
+          messages
+        });
+
+    let accumulatedReasoning = '';
 
     for await (const chunk of stream) {
-      if (chunk.type === 'content') {
+      if (chunk.type === 'error') {
+        isFailed = true;
+        finalContent = `[排程執行錯誤]: ${chunk.text || chunk.delta || '串流傳輸錯誤'}`;
+        break;
+      }
+      if (chunk.text) {
         finalContent += chunk.text;
+      } else if (chunk.content) {
+        finalContent += chunk.content;
+      } else if (chunk.delta) {
+        finalContent += chunk.delta;
+      }
+      if (chunk.reasoning) {
+        accumulatedReasoning += chunk.reasoning;
+      }
+    }
+
+    if (!finalContent.trim()) {
+      if (accumulatedReasoning.trim()) {
+        finalContent = accumulatedReasoning.trim();
+      } else if (!isFailed) {
+        isFailed = true;
+        finalContent = '[排程執行結果為空或連線中斷]';
       }
     }
   } catch (err) {
     isFailed = true;
     finalContent = `[排程執行錯誤]: ${err.message}`;
     console.error('[ScheduleEngine] Task execution error:', err);
+  } finally {
+    runningTaskIds.delete(task.id);
+    NativeStreamClient.stopBackgroundExecution();
   }
 
   // 3. Save Assistant Message
@@ -153,21 +287,7 @@ export async function executeScheduledTask(task, { providerConfigs, skills = [] 
   };
   await LocalDB.saveMessage(assistantMsg);
 
-  // 4. Update Task Next Run Time
-  const nextRunAt = task.repeat === 'once'
-    ? null
-    : calculateNextRunTime(task.time, task.repeat, new Date(completedAt));
-
-  const updatedTask = {
-    ...task,
-    conversationId,
-    lastRunAt: completedAt,
-    nextRunAt,
-    enabled: task.repeat === 'once' ? false : task.enabled
-  };
-  await LocalDB.saveScheduledTask(updatedTask);
-
-  // 5. Send Notification
+  // 4. Send Notification
   await NotificationService.sendCompletionNotification({
     conversationId,
     title: task.name || '排程任務已完成',
@@ -175,7 +295,7 @@ export async function executeScheduledTask(task, { providerConfigs, skills = [] 
     isError: isFailed
   });
 
-  // 6. Write to Widget Preferences
+  // 5. Write to Widget Preferences
   await writeWidgetLatestTask({
     title: task.name || '排程任務',
     summary: finalContent,
@@ -183,5 +303,12 @@ export async function executeScheduledTask(task, { providerConfigs, skills = [] 
     taskId: task.id
   });
 
-  return updatedTask;
+  currentTaskRecord = {
+    ...currentTaskRecord,
+    lastRunStatus: isFailed ? 'failed' : 'success',
+    lastRunError: isFailed ? finalContent : null
+  };
+  await LocalDB.saveScheduledTask(currentTaskRecord);
+
+  return currentTaskRecord;
 }

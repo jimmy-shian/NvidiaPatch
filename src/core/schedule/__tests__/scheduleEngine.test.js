@@ -115,5 +115,105 @@ describe('Schedule Engine & LocalDB Tasks Store', () => {
       const found = await LocalDB.getScheduledTask('task_del');
       expect(found).toBeFalsy();
     });
+
+    it('advances stale tasks properly without late firing', async () => {
+      const { advanceStaleTask } = await import('../scheduleEngine');
+      const pastTime = Date.now() - (6 * 3600 * 1000); // 6 hours ago
+      const staleTask = {
+        id: 'task_stale',
+        name: '過期任務',
+        time: '08:00',
+        repeat: 'daily',
+        enabled: true,
+        nextRunAt: pastTime
+      };
+      await LocalDB.saveScheduledTask(staleTask);
+
+      const updated = await advanceStaleTask(staleTask);
+      expect(updated.nextRunAt).toBeGreaterThan(Date.now());
+      const inDb = await LocalDB.getScheduledTask('task_stale');
+      expect(inDb.nextRunAt).toBe(updated.nextRunAt);
+    });
+
+    it('marks scheduled task as failed when stream yields error chunk', async () => {
+      const { executeScheduledTask } = await import('../scheduleEngine');
+      const testTask = {
+        id: 'task_error_chunk',
+        name: '錯誤串流測試',
+        prompt: '測試排程報錯',
+        providerId: 'mock_fail',
+        modelId: 'mock_model',
+        enabled: true,
+        repeat: 'none'
+      };
+
+      const mockProvider = {
+        chatStream() {
+          return (async function* () {
+            yield { type: 'chunk', text: '前置內容' };
+            yield { type: 'error', text: '503 Service Unavailable' };
+          })();
+        }
+      };
+
+      const result = await executeScheduledTask(testTask, {
+        createProvider: () => mockProvider
+      });
+
+      expect(result.lastRunStatus).toBe('failed');
+      const messages = await LocalDB.getMessages(result.conversationId);
+      const asstMsg = messages.find(m => m.role === 'assistant');
+      expect(asstMsg.content).toContain('[排程執行錯誤]');
+    });
+
+    it('updates widget with conversationId and summary when executed via onSimulateChat', async () => {
+      const { executeScheduledTask } = await import('../scheduleEngine');
+      const testTask = {
+        id: 'task_widget_sync',
+        name: '每日排程運勢',
+        prompt: '問今日排程分析',
+        providerId: 'nvidia',
+        modelId: 'meta/llama-3.3-70b-instruct',
+        enabled: true,
+        repeat: 'none'
+      };
+
+      const testConvId = 'conv_task_mock_123';
+      await LocalDB.saveConversation({
+        id: testConvId,
+        title: '每日排程運勢',
+        createdAt: Date.now()
+      });
+      await LocalDB.saveMessage({
+        id: 'msg_asst_123',
+        conversationId: testConvId,
+        role: 'assistant',
+        content: '今日運勢極佳，建議全力推進專案。',
+        createdAt: Date.now()
+      });
+
+      const onSimulateChat = vi.fn().mockResolvedValue({
+        conversationId: testConvId
+      });
+
+      const result = await executeScheduledTask(testTask, {
+        onSimulateChat
+      });
+
+      expect(onSimulateChat).toHaveBeenCalledTimes(1);
+      expect(result.conversationId).toBe(testConvId);
+      expect(result.lastRunStatus).toBe('success');
+
+      // Verify Preferences.set was called with widget_latest_task containing conversationId
+      expect(Preferences.set).toHaveBeenCalled();
+      const lastCall = Preferences.set.mock.calls[Preferences.set.mock.calls.length - 1][0];
+      expect(lastCall.key).toBe('widget_latest_task');
+      const parsed = JSON.parse(lastCall.value);
+      expect(parsed.conversationId).toBe(testConvId);
+      expect(parsed.summary).toContain('今日運勢極佳');
+      expect(parsed.title).toBe('每日排程運勢');
+    });
   });
 });
+
+
