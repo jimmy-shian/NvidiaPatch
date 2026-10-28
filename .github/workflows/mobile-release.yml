@@ -89,7 +89,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Mobile Release ${{ github.ref_name }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-ci-test-') }}
           files: |
             android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/apk/debug/*.apk

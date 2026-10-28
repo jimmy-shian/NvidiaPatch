@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "cap:sync": "npx cap sync android",
-    "cap:open": "npx cap open android"
+    "cap:open": "npx cap open android",
+    "postinstall": "node tools/ensure-ad-config.cjs",
+    "prebuild": "node tools/ensure-ad-config.cjs",
+    "predev": "node tools/ensure-ad-config.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",
