@@ -43,6 +43,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         setTheme(R.style.AppTheme_NoActionBar);
+        registerPlugin(StartupAdPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Ensure edge-to-edge window compatibility (Android 15+ targetSdk 35)

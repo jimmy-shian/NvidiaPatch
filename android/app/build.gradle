@@ -2,6 +2,20 @@ import groovy.json.JsonSlurper
 
 apply plugin: 'com.android.application'
 
+def signingProperties = new Properties()
+def signingFile = rootProject.file('../../keystores/signing.properties')
+if (signingFile.exists()) signingFile.withInputStream { signingProperties.load(it) }
+def signingValue = { name, names -> names.collect { System.getenv(it) }.find { it } ?: signingProperties.getProperty(name) }
+def releaseStore = signingValue('storeFile', ['KEYSTORE_FILE', 'ANDROID_KEYSTORE_PATH', 'REATER_KEYSTORE_FILE'])
+def releaseStorePassword = signingValue('storePassword', ['KEYSTORE_PASSWORD', 'ANDROID_KEYSTORE_PASSWORD', 'REATER_STORE_PASS'])
+def releaseAlias = signingValue('keyAlias', ['KEY_ALIAS', 'ANDROID_KEY_ALIAS', 'REATER_KEY_ALIAS'])
+def releaseKeyPassword = signingValue('keyPassword', ['KEY_PASSWORD', 'ANDROID_KEY_PASSWORD', 'REATER_KEY_PASS'])
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') } &&
+    (!releaseStore || !releaseStorePassword || !releaseAlias || !releaseKeyPassword)) {
+    throw new GradleException('Release signing requires environment variables or central keystores/signing.properties')
+}
+
+
 def packageJsonFile = file('../../package.json')
 def packageJson = new JsonSlurper().parseText(packageJsonFile.text)
 def appVersionName = packageJson.version
@@ -34,23 +48,17 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    signingConfigs {
-        debug {
-            storeFile file('debug.keystore')
-            storePassword '123456'
-            keyAlias 'nvidiapatchkey'
-            keyPassword '123456'
-        }
+        signingConfigs {
         release {
-            storeFile file('debug.keystore')
-            storePassword '123456'
-            keyAlias 'nvidiapatchkey'
-            keyPassword '123456'
+            if (releaseStore) storeFile file(releaseStore)
+            storePassword releaseStorePassword
+            keyAlias releaseAlias
+            keyPassword releaseKeyPassword
         }
     }
     buildTypes {
         debug {
-            signingConfig signingConfigs.debug
+
         }
         release {
             signingConfig signingConfigs.release
@@ -81,6 +89,7 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+    implementation 'com.google.android.gms:play-services-ads:25.4.0'
 }
 
 apply from: 'capacitor.build.gradle'

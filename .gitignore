@@ -22,3 +22,14 @@ keystore.properties
 
 # Cloudflare Worker cache & temp artifacts
 cloudflare-search-worker/.wrangler/
+
+# Private signing, temporary tooling and incomplete ad configuration
+*.jks
+*.keystore
+**/keystore.properties
+**/signing.properties
+/keystores/key.txt
+/keystores/*base64*.txt
+/AD_UNITS_CONFIG.xlsx
+/ad_config.json
+/admob-config.json

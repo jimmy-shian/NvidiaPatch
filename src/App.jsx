@@ -1,3 +1,5 @@
+import SplashAd from './components/Common/SplashAd';
+import FloatingWaitingAd from './components/Chat/FloatingWaitingAd';
 import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -17,6 +19,7 @@ import { checkPendingSharedText } from './core/utils/shareTarget';
 import { useScheduledTasks } from './hooks/useScheduledTasks';
 
 export default function App() {
+  const [showSplashAd, setShowSplashAd] = useState(true);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -273,6 +276,12 @@ export default function App() {
         isOpen={isMeihuaHelpModalOpen}
         onClose={() => setIsMeihuaHelpModalOpen(false)}
       />
+
+      {/* yesolve studio 開場廣告覆蓋層（翡翠綠神經運算主題） */}
+      {showSplashAd && <SplashAd onFinish={() => setShowSplashAd(false)} appName="NvidiaPatch AI" />}
+
+      {/* 串流等待期間懸浮廣告（翡翠綠微光卡片） */}
+      <FloatingWaitingAd isStreaming={chat.isStreaming} />
     </div>
   );
 }
