@@ -60,6 +60,15 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/task_widget_info" />
         </receiver>
+
+        <!--
+          AdMob App ID。
+          缺少這個 meta-data 時，Google Mobile Ads SDK 的 MobileAdsInitProvider（ContentProvider，
+          會在 Activity 之前啟動）會直接拋 IllegalStateException，造成「安裝成功但一開啟就閃退」。
+          目前尚未申請正式 App ID，先以 Google 官方測試 App ID 佔位；由 sync_ads.py 在打包時自動覆寫。
+          上架 Play 前務必到 AdMob 後台建立此 App 的 App ID 並填入 AD_UNITS_CONFIG.xlsx。
+        -->
+        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-2415998114933157~8967081999"/>
     </application>
 
     <!-- Permissions -->

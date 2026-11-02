@@ -1,4 +1,4 @@
-package com.jimmy.nvidiapatch.mobile;
+package com.yesolve.nvidiapatch.mobile;
 
 import android.app.Notification;
 import android.app.NotificationChannel;

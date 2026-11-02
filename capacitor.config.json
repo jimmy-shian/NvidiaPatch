@@ -1,5 +1,5 @@
 {
-  "appId": "com.jimmy.nvidiapatch.mobile",
+  "appId": "com.yesolve.nvidiapatch.mobile",
   "appName": "NvidiaPatch Chat",
   "webDir": "dist",
   "bundledWebRuntime": false,

@@ -32,10 +32,10 @@ def parseVersionCode(String version) {
 def appVersionCode = parseVersionCode(appVersionName)
 
 android {
-    namespace = "com.jimmy.nvidiapatch.mobile"
+    namespace = "com.yesolve.nvidiapatch.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.jimmy.nvidiapatch.mobile"
+        applicationId "com.yesolve.nvidiapatch.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode appVersionCode
