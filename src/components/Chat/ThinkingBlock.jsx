@@ -17,13 +17,12 @@ export default function ThinkingBlock({
   const hasThinking = Boolean(thinkingContent && thinkingContent.trim().length > 0);
   const isThinkingNow = isStreaming && isReasoningActive;
 
+  // 只有真的收到思考內容才自動展開；尚未有內容時維持收合的單行狀態列，
+  // 避免出現「空殼思考框 + 額外載入動畫」。
   useEffect(() => {
-    if (isThinkingNow && !userToggled) {
-      setExpanded(true);
-    } else if (!isThinkingNow && !userToggled) {
-      setExpanded(false);
-    }
-  }, [isThinkingNow, userToggled]);
+    if (userToggled) return;
+    setExpanded(isThinkingNow && hasThinking);
+  }, [isThinkingNow, hasThinking, userToggled]);
 
   // Auto scroll reasoning box to bottom as thoughts stream in
   useEffect(() => {
@@ -47,7 +46,7 @@ export default function ThinkingBlock({
         className="w-full flex items-center justify-between px-3.5 py-2.5 text-left hover:bg-slate-900/60 transition-colors"
       >
         <div className="flex items-center gap-2 text-xs font-semibold">
-          <Brain size={14} className={isThinkingNow ? "animate-pulse text-emerald-400" : "text-slate-400"} />
+          <Brain size={14} className={isThinkingNow ? "text-emerald-400" : "text-slate-400"} />
           {isThinkingNow ? (
             <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
               <Loader2 size={12} className="animate-spin text-emerald-400" />
@@ -81,8 +80,7 @@ export default function ThinkingBlock({
             </div>
           ) : (
             <div className="flex items-center gap-2 text-slate-400 py-1 text-[11px]">
-              <Loader2 size={12} className="animate-spin text-emerald-400" />
-              <span>正在分析問題脈絡與邏輯構思中...</span>
+              <span>正在分析問題脈絡與邏輯構思中…</span>
             </div>
           )}
         </div>

@@ -28,7 +28,10 @@
     "activeSkills": "Active Skills",
     "selectSkills": "Select Skills",
     "skillsCount": "{{count}} skills active",
-    "streaming": "Generating answer..."
+    "streaming": "Generating answer...",
+    "showContextUsage": "Show context usage",
+    "scrollMarkers": "Conversation scroll position markers",
+    "jumpToMessage": "Jump to message #{{index}}"
   },
   "settings": {
     "title": "Settings",

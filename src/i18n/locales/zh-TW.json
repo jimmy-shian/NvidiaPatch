@@ -28,7 +28,10 @@
     "activeSkills": "已啟用技能",
     "selectSkills": "選擇技能",
     "skillsCount": "{{count}} 個技能啟用中",
-    "streaming": "正在生成回答..."
+    "streaming": "正在生成回答...",
+    "showContextUsage": "顯示 Context 用量",
+    "scrollMarkers": "對話捲軸位置標記",
+    "jumpToMessage": "跳至第 {{index}} 則訊息"
   },
   "settings": {
     "title": "App 設定",

@@ -140,7 +140,7 @@ export default function MessageBubble({
     const { phase, meta = {} } = liveStatus;
     switch (phase) {
       case 'thinking':
-        return '正在思考與分析問題…';
+        return '思考推理中…';
       case 'searching':
         return meta.query ? `正在搜尋相關資料: "${meta.query}"…` : '正在搜尋相關資料…';
       case 'retrying_query':
@@ -166,6 +166,26 @@ export default function MessageBubble({
   };
 
   const activeStatusText = isStreaming && isLast ? getLiveStatusText() : null;
+
+  // ---------------------------------------------------------------------------
+  // 等待狀態的「單一 spinner 擁有者」規則
+  //   1. 思考中  -> ThinkingBlock 標題列（思考框）負責，氣泡狀態列讓位
+  //   2. 工具執行中 -> 氣泡狀態列負責，工具卡改為靜態圖示
+  //   3. 其他等待  -> 氣泡狀態列負責
+  // ---------------------------------------------------------------------------
+  const isReasoningNow = isStreaming && isLast && isReasoningActive;
+  const hasActiveToolExecution = (message.toolExecutions || []).some(
+    te => te.status === 'executing' || te.status === 'calling'
+  );
+
+  // 沒有 liveStatus 時的保底文案（避免等待期間畫面完全空白）
+  const fallbackStatusText =
+    isStreaming && isLast && !message.content && !isReasoningNow && !hasActiveToolExecution
+      ? '等待回覆中…'
+      : null;
+
+  const statusText = activeStatusText || fallbackStatusText;
+  const statusRowVisible = !isUser && Boolean(statusText) && !isReasoningNow;
 
   // Render standalone Tool Result message if in history
   if (isTool) {
@@ -263,10 +283,10 @@ export default function MessageBubble({
         }`}
       >
         {/* Ephemeral Progress Status Row (only during live streaming) */}
-        {!isUser && activeStatusText && (
+        {statusRowVisible && (
           <div className="flex items-center gap-2 text-xs text-emerald-300 bg-emerald-950/70 border border-emerald-800/60 rounded-xl px-2.5 py-1.5 mb-2.5 animate-fade-in shadow-inner">
             <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
-            <span className="font-sans leading-tight truncate">{activeStatusText}</span>
+            <span className="font-sans leading-tight truncate">{statusText}</span>
           </div>
         )}
 
@@ -457,7 +477,7 @@ export default function MessageBubble({
                     className="flex items-center justify-between gap-2 cursor-pointer select-none"
                   >
                     <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-                      {isExec ? (
+                      {isExec && !statusRowVisible ? (
                         <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
                       ) : isMcp ? (
                         <Plug size={13} className="text-emerald-400 shrink-0" />
@@ -704,14 +724,7 @@ export default function MessageBubble({
                   <span className="inline-block w-2 h-4 ml-1 bg-emerald-400 animate-pulse align-middle rounded-sm shadow-sm shadow-emerald-400/50" />
                 )}
               </div>
-            ) : isStreaming && isLast ? (
-              <div className="flex items-center gap-2 text-emerald-300 bg-emerald-950/60 border border-emerald-800/50 rounded-xl px-2.5 py-1.5 text-xs animate-pulse shadow-inner">
-                <Loader2 size={13} className="animate-spin text-emerald-400 shrink-0" />
-                <span className="font-sans leading-tight truncate">
-                  {activeStatusText || (isReasoningActive ? '正在思考與等待回覆…' : '正在等待回覆…')}
-                </span>
-              </div>
-            ) : message.toolExecutions && message.toolExecutions.length > 0 ? (
+            ) : !isStreaming && message.toolExecutions && message.toolExecutions.length > 0 ? (
               <div className="text-xs text-slate-400 italic py-1">
                 已檢索上述資料並整合完成。
               </div>
