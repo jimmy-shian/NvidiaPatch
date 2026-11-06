@@ -1,17 +1,19 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Menu, Settings, ChevronDown, Bot, Sparkles, Minimize2, Loader2, Zap, AlertCircle, ArrowDown } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import InlineWaitingAd from './InlineWaitingAd';
 import ChatInput from './ChatInput';
 import MeihuaActionBar from './MeihuaActionBar';
+import {
+  CONTEXT_COLLAPSE_DISTANCE,
+  CONTEXT_EXPAND_DISTANCE,
+  nextContextBarCollapsed
+} from './contextBarLogic';
 import { formatTokenNumber } from '../../core/context/modelLimits';
 
 // Scroll-rail marker offset (matches .chat-message-anchor scroll-margin-top)
 const SCROLL_MARKER_OFFSET = 14;
-// Distance from bottom (px) that triggers collapsing / restoring the context bar
-const CONTEXT_COLLAPSE_DISTANCE = 80;
-const CONTEXT_EXPAND_DISTANCE = 25;
 
 export default function ChatView({
   conversation,
@@ -59,6 +61,10 @@ export default function ChatView({
   const lastScrollTopRef = useRef(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [contextBarCollapsed, setContextBarCollapsed] = useState(false);
+  // Context 列本體與高度追蹤：收合／展開會改變訊息視窗高度，必須做捲動補償
+  const contextBarRef = useRef(null);
+  const contextBarHeightRef = useRef(null);
+  const lastConvIdRef = useRef(conversation?.id);
   const [scrollTicks, setScrollTicks] = useState([]);
   const [activeTickId, setActiveTickId] = useState(null);
 
@@ -152,6 +158,27 @@ export default function ChatView({
     setContextBarCollapsed(false);
   }, [conversation?.id]);
 
+  // Context bar collapse/expand resizes the message viewport by the bar height.
+  // Compensate scrollTop with the same delta (in the same frame, before paint) so the
+  // reading position stays visually stable — otherwise the jump fights CSS scroll
+  // anchoring, shifts the scroll-rail mapping, and can clamp-scroll near the bottom
+  // into a collapse/expand oscillation.
+  useLayoutEffect(() => {
+    const bar = contextBarRef.current;
+    const scroller = scrollContainerRef.current;
+    if (!bar || !scroller) return;
+    const convChanged = lastConvIdRef.current !== conversation?.id;
+    lastConvIdRef.current = conversation?.id;
+    const prevHeight = contextBarHeightRef.current;
+    const height = bar.offsetHeight;
+    contextBarHeightRef.current = height;
+    // Skip on mount, conversation switches, and no-op height changes
+    if (convChanged || prevHeight === null || prevHeight === height) return;
+    const delta = height - prevHeight; // negative on collapse, positive on expand
+    scroller.scrollTop += delta;
+    lastScrollTopRef.current = scroller.scrollTop;
+  }, [contextBarCollapsed, conversation?.id]);
+
   // Monitor user scroll position & update auto-follow
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -161,17 +188,19 @@ export default function ChatView({
     const nearBottom = distanceFromBottom <= 35;
     setIsNearBottom(nearBottom);
 
-    // Only an actual upward scroll collapses the bar (keeps the initial load untouched)
     const prevScrollTop = lastScrollTopRef.current;
     lastScrollTopRef.current = el.scrollTop;
-    const scrolledUp = el.scrollTop < prevScrollTop - 1;
 
-    // Collapse the context token bar while browsing history, restore it near the latest message
-    if (scrolledUp && distanceFromBottom > CONTEXT_COLLAPSE_DISTANCE) {
-      setContextBarCollapsed(true);
-    } else if (distanceFromBottom <= CONTEXT_EXPAND_DISTANCE) {
-      setContextBarCollapsed(false);
-    }
+    // Collapse the context token bar while browsing history, restore it near the latest
+    // message. Programmatic scrolls (marker jumps / scroll-to-bottom) never toggle here:
+    // the layout compensation writes scrollTop and would cancel the running smooth scroll.
+    setContextBarCollapsed((prev) => nextContextBarCollapsed({
+      collapsed: prev,
+      scrollTop: el.scrollTop,
+      prevScrollTop,
+      distanceFromBottom,
+      isProgrammatic: isProgrammaticScrollRef.current
+    }));
 
     scheduleActiveMarkerUpdate();
 
@@ -258,6 +287,12 @@ export default function ChatView({
     setTimeout(() => {
       isProgrammaticScrollRef.current = false;
       autoFollowRef.current = true;
+      // Landed at the latest message: restore the context bar (toggling was suppressed
+      // during the jump so the smooth scroll would not be cancelled)
+      const current = scrollContainerRef.current;
+      if (current && current.scrollHeight - current.scrollTop - current.clientHeight <= CONTEXT_EXPAND_DISTANCE) {
+        setContextBarCollapsed(false);
+      }
     }, 350);
   }, []);
 
@@ -284,6 +319,9 @@ export default function ChatView({
       if (current && current.scrollHeight - current.scrollTop - current.clientHeight <= 35) {
         autoFollowRef.current = true;
         setIsNearBottom(true);
+        if (current.scrollHeight - current.scrollTop - current.clientHeight <= CONTEXT_EXPAND_DISTANCE) {
+          setContextBarCollapsed(false);
+        }
       }
     }, 450);
   }, []);
@@ -341,9 +379,12 @@ export default function ChatView({
         </button>
       </header>
 
-      {/* Context Usage Bar & Dynamic 80% Compression Indicator (collapses when scrolling up) */}
+      {/* Context Usage Bar & Dynamic 80% Compression Indicator (collapses when scrolling up).
+          Height toggles instantly (opacity-only transition): the layout effect compensates
+          scrollTop with the height delta, which only works on an instant height swap. */}
       <div
-        className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${
+        ref={contextBarRef}
+        className={`overflow-hidden transition-opacity duration-150 ${
           contextBarCollapsed ? 'max-h-0 opacity-0' : 'max-h-16 opacity-100'
         }`}
         aria-hidden={contextBarCollapsed}
@@ -504,10 +545,11 @@ export default function ChatView({
           </button>
         )}
 
-        {/* Scroll rail: each dash marks a message position, tap to jump */}
+        {/* Scroll rail: each dash marks a message position, tap to jump.
+            z-30 keeps the ticks clickable above the collapsed context strip (z-20). */}
         {scrollTicks.length > 1 && (
           <div
-            className="absolute inset-y-0 right-0 w-4 z-10 pointer-events-none select-none"
+            className="absolute inset-y-0 right-0 w-4 z-30 pointer-events-none select-none"
             role="group"
             aria-label={t('chat.scrollMarkers', '對話捲軸位置標記')}
           >
