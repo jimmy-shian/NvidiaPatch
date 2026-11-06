@@ -33,3 +33,4 @@ cloudflare-search-worker/.wrangler/
 /AD_UNITS_CONFIG.xlsx
 /ad_config.json
 /admob-config.json
+/ad-reset-config.json

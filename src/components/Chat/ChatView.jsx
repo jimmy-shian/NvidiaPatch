@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Menu, Settings, ChevronDown, Bot, Sparkles, Minimize2, Loader2, Zap, AlertCircle, ArrowDown } from 'lucide-react';
 import MessageBubble from './MessageBubble';
+import InlineWaitingAd from './InlineWaitingAd';
 import ChatInput from './ChatInput';
 import MeihuaActionBar from './MeihuaActionBar';
 import { formatTokenNumber } from '../../core/context/modelLimits';
@@ -455,25 +456,31 @@ export default function ChatView({
                   return true;
                 })
                 .map((msg, idx, arr) => (
-                  <div
-                    key={msg.id || idx}
-                    data-msg-id={msg.id || `msg-${idx}`}
-                    data-msg-role={msg.role}
-                    data-msg-index={idx}
-                    className="chat-message-anchor"
-                    style={{ overflowAnchor: 'auto' }}
-                  >
-                    <MessageBubble
-                      message={msg}
-                      isLast={idx === arr.length - 1}
-                      isStreaming={isStreaming}
-                      isReasoningActive={isReasoningActive}
-                      liveStatus={idx === arr.length - 1 ? liveStatus : null}
-                      onRegenerate={onRegenerate}
-                      onDelete={onDeleteMessage}
-                      onEdit={onEditMessage}
-                    />
-                  </div>
+                  <React.Fragment key={msg.id || idx}>
+                    {/* 生成等待廣告：插在前一則泡泡與生成中助理泡泡之間（inline，不懸浮）。
+                        不帶 data-msg-id，不會變成右側位置標籤的刻度。 */}
+                    {isStreaming && idx === arr.length - 1 && (
+                      <InlineWaitingAd isStreaming={isStreaming} />
+                    )}
+                    <div
+                      data-msg-id={msg.id || `msg-${idx}`}
+                      data-msg-role={msg.role}
+                      data-msg-index={idx}
+                      className="chat-message-anchor"
+                      style={{ overflowAnchor: 'auto' }}
+                    >
+                      <MessageBubble
+                        message={msg}
+                        isLast={idx === arr.length - 1}
+                        isStreaming={isStreaming}
+                        isReasoningActive={isReasoningActive}
+                        liveStatus={idx === arr.length - 1 ? liveStatus : null}
+                        onRegenerate={onRegenerate}
+                        onDelete={onDeleteMessage}
+                        onEdit={onEditMessage}
+                      />
+                    </div>
+                  </React.Fragment>
                 ))
             )}
             <div ref={messagesEndRef} style={{ overflowAnchor: 'none' }} />
