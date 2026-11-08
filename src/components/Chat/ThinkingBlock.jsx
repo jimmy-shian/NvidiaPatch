@@ -16,6 +16,7 @@ export default function ThinkingBlock({
 
   const hasThinking = Boolean(thinkingContent && thinkingContent.trim().length > 0);
   const isThinkingNow = isStreaming && isReasoningActive;
+  const thinkingCharCount = thinkingContent ? thinkingContent.trim().length : 0;
 
   // 只有真的收到思考內容才自動展開；尚未有內容時維持收合的單行狀態列，
   // 避免出現「空殼思考框 + 額外載入動畫」。
@@ -50,17 +51,22 @@ export default function ThinkingBlock({
           {isThinkingNow ? (
             <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
               <Loader2 size={12} className="animate-spin text-emerald-400" />
-              <span>思考推理中…</span>
+              <span>正在分析問題脈絡與邏輯推理中…</span>
             </span>
           ) : (
-            <span className="text-slate-300 font-medium flex items-center gap-1">
-              <span>已完成思考</span>
+            <span className="text-slate-300 font-medium flex items-center gap-1.5">
+              <span>已完成思考分析</span>
+              {thinkingCharCount > 0 && (
+                <span className="text-[10px] font-mono text-emerald-400/90 bg-emerald-950/60 border border-emerald-800/40 px-1.5 py-0.2 rounded-md">
+                  {thinkingCharCount} 字
+                </span>
+              )}
               <Sparkles size={11} className="text-emerald-400/80" />
             </span>
           )}
         </div>
         <div className="flex items-center gap-1 text-[11px] text-slate-400">
-          <span>{expanded ? '收合' : '展開'}</span>
+          <span>{expanded ? '收合' : '展開記錄'}</span>
           {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </div>
       </button>

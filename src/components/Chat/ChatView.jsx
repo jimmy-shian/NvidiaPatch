@@ -213,8 +213,10 @@ export default function ChatView({
     }
 
     if (nearBottom) {
-      autoFollowRef.current = true;
-    } else if (distanceFromBottom > 60) {
+      if (touchStartYRef.current === null) {
+        autoFollowRef.current = true;
+      }
+    } else if (distanceFromBottom > 35) {
       autoFollowRef.current = false;
     }
   }, [scheduleActiveMarkerUpdate]);
@@ -235,33 +237,31 @@ export default function ChatView({
     const deltaY = currentY - touchStartYRef.current; // Positive = pulling down to view older messages
     const deltaX = currentX - (touchStartXRef.current ?? currentX);
 
-    const el = scrollContainerRef.current;
-    if (el) {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if ((deltaY > 8 && distanceFromBottom > 40) || (Math.abs(deltaX) > 10 && distanceFromBottom > 20)) {
-        autoFollowRef.current = false;
-        setIsNearBottom(false);
-      }
+    // Any clear user gesture pulling down to read older history immediately disables auto-follow
+    if (deltaY > 3 || (Math.abs(deltaX) > 10 && deltaY >= 0)) {
+      autoFollowRef.current = false;
+      setIsNearBottom(false);
     }
+  }, []);
+
+  // Gesture handling: Touch end / cancel
+  const handleTouchEnd = useCallback(() => {
+    touchStartYRef.current = null;
+    touchStartXRef.current = null;
   }, []);
 
   // Wheel handling: Detect wheeling up
   const handleWheel = useCallback((e) => {
-    if (e.deltaY < -2) { // Scrolling up
-      const el = scrollContainerRef.current;
-      if (el) {
-        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        if (distanceFromBottom > 40) {
-          autoFollowRef.current = false;
-          setIsNearBottom(false);
-        }
-      }
+    if (e.deltaY < 0) { // Scrolling up to read history
+      autoFollowRef.current = false;
+      setIsNearBottom(false);
     }
   }, []);
 
   // RAF-throttled auto follow bottom during streaming
   useEffect(() => {
-    if (!autoFollowRef.current || isProgrammaticScrollRef.current) return;
+    // Prohibit auto-scrolling if user disabled follow, programmatic jump is running, or user finger is on screen
+    if (!autoFollowRef.current || isProgrammaticScrollRef.current || touchStartYRef.current !== null) return;
     const el = scrollContainerRef.current;
     if (!el) return;
 
@@ -269,8 +269,12 @@ export default function ChatView({
       rafPendingRef.current = true;
       requestAnimationFrame(() => {
         rafPendingRef.current = false;
-        if (autoFollowRef.current && el && !isProgrammaticScrollRef.current) {
-          el.scrollTop = el.scrollHeight - el.clientHeight;
+        // Verify user is still near bottom before jumping, avoiding fighting active user reading
+        if (autoFollowRef.current && el && !isProgrammaticScrollRef.current && touchStartYRef.current === null) {
+          const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+          if (distanceFromBottom <= 50) {
+            el.scrollTop = el.scrollHeight - el.clientHeight;
+          }
         }
       });
     }
@@ -448,8 +452,10 @@ export default function ChatView({
           onScroll={handleScroll}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
           onWheel={handleWheel}
-          className="h-full chat-scroll-container p-2 sm:p-4 space-y-2 max-w-full relative"
+          className="h-full chat-scroll-container p-2 sm:p-4 pb-8 space-y-2 max-w-full relative"
           style={{ scrollBehavior: 'auto', overflowAnchor: 'auto' }}
         >
           <div key={conversation?.id || 'empty_conv'} className="animate-chat-switch space-y-2">
@@ -519,12 +525,32 @@ export default function ChatView({
                         onRegenerate={onRegenerate}
                         onDelete={onDeleteMessage}
                         onEdit={onEditMessage}
+                        onSelectOption={(opt) => {
+                          const val = opt.label || opt.value;
+                          if (val) {
+                            // 填入選項文字並保留使用者在對話框繼續輸入文字（不自動送出）
+                            setInput(prev => {
+                              const trimmed = (prev || '').trim();
+                              if (!trimmed) return val + ' ';
+                              return trimmed + '\n' + val + ' ';
+                            });
+                            // 自動 focus 至輸入框末端，方便使用者接著補充內容一起送出
+                            setTimeout(() => {
+                              const textarea = document.querySelector('textarea');
+                              if (textarea) {
+                                textarea.focus();
+                                const len = textarea.value.length;
+                                textarea.setSelectionRange(len, len);
+                              }
+                            }, 50);
+                          }
+                        }}
                       />
                     </div>
                   </React.Fragment>
                 ))
             )}
-            <div ref={messagesEndRef} style={{ overflowAnchor: 'none' }} />
+            <div ref={messagesEndRef} className="h-6 w-full shrink-0" style={{ overflowAnchor: 'none' }} />
           </div>
         </main>
 
@@ -545,33 +571,49 @@ export default function ChatView({
           </button>
         )}
 
-        {/* Scroll rail: each dash marks a message position, tap to jump.
-            z-30 keeps the ticks clickable above the collapsed context strip (z-20). */}
+        {/* Scroll rail: 集中在畫面中間右側（垂直置中，圖 2 風格） */}
         {scrollTicks.length > 1 && (
           <div
-            className="absolute inset-y-0 right-0 w-4 z-30 pointer-events-none select-none"
+            className="absolute right-2 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-1.5 py-2.5 px-1.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-800/80 shadow-2xl select-none"
             role="group"
             aria-label={t('chat.scrollMarkers', '對話捲軸位置標記')}
           >
-            {scrollTicks.map((tick) => {
+            {scrollTicks.map((tick, tIdx) => {
               const isActive = tick.id === activeTickId;
               const isUserTurn = tick.role === 'user';
               return (
-                <button
-                  key={tick.id}
-                  type="button"
-                  onClick={() => scrollToMessage(tick.top)}
-                  title={t('chat.jumpToMessage', { index: tick.index + 1 })}
-                  aria-label={t('chat.jumpToMessage', { index: tick.index + 1 })}
-                  className="pointer-events-auto absolute right-[6px] h-3 flex items-center justify-end"
-                  style={{ top: `calc(${(tick.pct * 100).toFixed(2)}% - 6px)` }}
-                >
-                  <span
-                    className={`block h-[2px] rounded-full transition-all duration-150 ${
-                      isUserTurn ? 'bg-emerald-400/80' : 'bg-slate-400/45'
-                    } ${isActive ? 'w-2.5 opacity-100' : 'w-1.5 opacity-70'}`}
-                  />
-                </button>
+                <div key={tick.id} className="relative flex items-center justify-end">
+                  {/* 圖 2 風格：當前作用中浮出的輪次卡片 */}
+                  {isActive && (
+                    <div className="absolute right-7 px-2.5 py-1 rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl text-[11px] text-slate-200 font-medium whitespace-nowrap flex items-center gap-1.5 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+                      <span className={isUserTurn ? 'text-emerald-400 font-semibold' : 'text-slate-300 font-semibold'}>
+                        {isUserTurn ? '您' : 'AI'}
+                      </span>
+                      <span className="text-slate-500 font-mono text-[10px]">
+                        {tIdx + 1} of {scrollTicks.length}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* 圓點指示按鈕 */}
+                  <button
+                    type="button"
+                    onClick={() => scrollToMessage(tick.top)}
+                    title={t('chat.jumpToMessage', { index: tick.index + 1 })}
+                    aria-label={t('chat.jumpToMessage', { index: tick.index + 1 })}
+                    className="p-1 rounded-full flex items-center justify-center transition-all cursor-pointer hover:scale-125"
+                  >
+                    <span
+                      className={`block rounded-full transition-all duration-200 ${
+                        isActive
+                          ? 'w-2.5 h-2.5 bg-white shadow-md shadow-white/60 ring-2 ring-emerald-400/80 scale-110'
+                          : isUserTurn
+                            ? 'w-2 h-2 bg-emerald-400/50 hover:bg-emerald-300'
+                            : 'w-2 h-2 bg-slate-500/40 hover:bg-slate-300'
+                      }`}
+                    />
+                  </button>
+                </div>
               );
             })}
           </div>

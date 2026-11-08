@@ -3,6 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Loader2, Search, Globe, ChevronDown, ChevronRight, Sparkles, Plug, Share2 } from 'lucide-react';
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
+import OptionsBlock from './OptionsBlock';
+import { parseOptionsBlocks } from '../../core/utils/optionsParser';
+import { formatToolProgressSummary, extractCleanQuery } from '../../core/utils/toolDisplayHelper';
+
 import { shareCardAsImage } from '../../core/utils/cardShare';
 import MeihuaShareModal from './MeihuaShareModal';
 
@@ -14,7 +18,8 @@ export default function MessageBubble({
   liveStatus,
   onRegenerate,
   onDelete,
-  onEdit
+  onEdit,
+  onSelectOption
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -196,7 +201,7 @@ export default function MessageBubble({
       parsedContent = message.content;
     }
 
-    const queryStr = parsedContent?.query || '';
+    const queryStr = extractCleanQuery(parsedContent) || parsedContent?.query || '';
     const resultsList = Array.isArray(parsedContent?.results) ? parsedContent.results : [];
     const resultsCount = parsedContent?.resultCount ?? parsedContent?.count ?? resultsList.length;
     const isExpanded = Boolean(expandedToolResults[message.id]);
@@ -440,7 +445,17 @@ export default function MessageBubble({
               }
 
               const isMcp = te.toolName?.startsWith('mcp__') || te.toolName === 'request_mcp_connection' || te.toolName === 'search_mcp_tools';
-              const queryStr = typeof te.args === 'object' ? (te.args?.query || te.args?.url || te.args?.taskId || JSON.stringify(te.args)) : te.args;
+              const allSearchCalls = (message.toolExecutions || []).filter(t => t.toolName === 'web_search');
+              const currentSearchIndex = allSearchCalls.findIndex(t => (t.toolCallId || t) === (te.toolCallId || te));
+
+              const progressSummary = formatToolProgressSummary({
+                toolName: te.toolName,
+                status: te.status,
+                args: te.args,
+                result: te.result,
+                index: currentSearchIndex >= 0 ? currentSearchIndex : idx,
+                totalSearchCalls: allSearchCalls.length
+              });
 
               let parsedResult = te.result;
               if (typeof parsedResult === 'string') {
@@ -449,26 +464,7 @@ export default function MessageBubble({
                 } catch (_) {}
               }
               const resultsList = Array.isArray(parsedResult?.results) ? parsedResult.results : (Array.isArray(parsedResult) ? parsedResult : []);
-              const resultCount = parsedResult?.resultCount ?? parsedResult?.count ?? resultsList.length;
-
-              let toolTitle = '搜尋工具';
-              if (te.toolName === 'request_mcp_connection') {
-                toolTitle = isExec ? '正在連線 MCP 伺服器…' : '已連線 MCP 伺服器';
-              } else if (te.toolName === 'search_mcp_tools') {
-                toolTitle = isExec ? '正在搜尋 MCP 工具…' : '已搜尋 MCP 工具';
-              } else if (te.toolName?.startsWith('mcp__')) {
-                const parts = te.toolName.split('__');
-                const rawName = parts.length >= 3 ? parts.slice(2).join('__') : te.toolName;
-                toolTitle = isExec ? `正在執行 MCP [${rawName}]…` : `MCP 工具 [${rawName}]`;
-              } else {
-                toolTitle = isExec ? '正在搜尋…' : '已完成搜尋';
-              }
-
-              const isCloudSearch = Boolean(
-                parsedResult?.effectiveProvider?.startsWith('worker') ||
-                parsedResult?.providersUsed?.some(p => typeof p === 'string' && p.startsWith('worker')) ||
-                resultsList.some(r => typeof r.source === 'string' && r.source.startsWith('worker'))
-              );
+              const resultCount = progressSummary.resultCount;
 
               return (
                 <div key={te.toolCallId || idx} className="rounded-xl bg-slate-950/80 border border-slate-800 p-2 text-xs">
@@ -485,23 +481,27 @@ export default function MessageBubble({
                         <Search size={13} className="text-emerald-400 shrink-0" />
                       )}
                       <span className="font-semibold text-emerald-300 whitespace-nowrap shrink-0">
-                        {toolTitle}
+                        {progressSummary.title}
                       </span>
-                      {queryStr && (
+                      {progressSummary.detail && (
                         <span className="text-slate-400 font-mono truncate min-w-0 flex-1">
-                          "{queryStr}"
+                          {progressSummary.detail}
                         </span>
                       )}
                     </div>
 
                     {!isExec && te.result && (
                       <div className="flex items-center gap-1 text-[10px] text-slate-400 shrink-0">
-                        {isCloudSearch && (
+                        {progressSummary.isCloud && (
                           <span className="px-1.5 py-0.2 rounded bg-sky-950/80 text-sky-300 border border-sky-800/60 font-medium text-[9px] flex items-center gap-0.5">
                             ☁️ Cloud
                           </span>
                         )}
-                        {resultCount > 0 && <span>{resultCount} 筆</span>}
+                        {progressSummary.badge && !progressSummary.isCloud && (
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700/60 font-mono text-[9px]">
+                            {progressSummary.badge}
+                          </span>
+                        )}
                         {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       </div>
                     )}
@@ -719,7 +719,25 @@ export default function MessageBubble({
           <div className="relative leading-relaxed">
             {message.content ? (
               <div className="relative">
-                <MarkdownRenderer content={message.content} />
+                {(() => {
+                  const parsedBlocks = parseOptionsBlocks(message.content);
+                  if (parsedBlocks.length === 1 && parsedBlocks[0].type === 'markdown') {
+                    return <MarkdownRenderer content={message.content} />;
+                  }
+                  return parsedBlocks.map((blk, bIdx) => {
+                    if (blk.type === 'options') {
+                      return (
+                        <OptionsBlock
+                          key={bIdx}
+                          title={blk.title}
+                          options={blk.options}
+                          onSelectOption={onSelectOption}
+                        />
+                      );
+                    }
+                    return <MarkdownRenderer key={bIdx} content={blk.content} />;
+                  });
+                })()}
                 {isStreaming && isLast && (
                   <span className="inline-block w-2 h-4 ml-1 bg-emerald-400 animate-pulse align-middle rounded-sm shadow-sm shadow-emerald-400/50" />
                 )}
