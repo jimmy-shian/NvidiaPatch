@@ -1,30 +1,59 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { requestAdFill, useAdSenseSlot } from '../../lib/adsense';
 
 /**
- * 廣告舞台（Ad Shell ②）的實際載體。
+ * 廣告內容載體。
  *
- * - 網頁版且 slot id 已設定、且 AdSense script 載入完成 → 渲染 <ins> 並 push() 填充
- * - 原生平台 / slot 未設定 / script 載入失敗或逾時 → 渲染品牌佔位板
- *
- * 兩者都不會出現「永遠空白的死 <ins> 框」，也不會曝露 ad unit id。
+ * 狀態流轉：
+ * - 網頁版且 slot id 已設定，且 AdSense script 載入完成 → 渲染 <ins> 並 push() 填充
+ * - 載入中 / 原生原生層準備中 → 顯示低對比、柔和過渡的 Skeleton 骨架佔位，避免刺眼邊框與假廣告文字
+ * - 失敗或無填充 → 回報父層收合空間，不持續佔用螢幕
  */
-export default function AdSenseSlot({ slotKey, minHeight = 100 }) {
+export default function AdSenseSlot({
+  slotKey,
+  minHeight = 100,
+  onStateChange,
+  showSkeleton = true,
+}) {
   const { client, slot, renderable } = useAdSenseSlot(slotKey);
+  const [adFailed, setAdFailed] = useState(false);
 
-  // <ins> 動態掛載後再 push 一次，確保它進入 AdSense 的填充佇列
+  // <ins> 動態掛載後進入 AdSense 填充佇列
   useEffect(() => {
-    if (renderable) requestAdFill();
-  }, [renderable]);
+    if (renderable) {
+      try {
+        requestAdFill();
+        onStateChange?.('loaded');
+      } catch (err) {
+        setAdFailed(true);
+        onStateChange?.('failed');
+      }
+    } else {
+      onStateChange?.('loading');
+    }
+  }, [renderable, onStateChange]);
+
+  if (adFailed) {
+    return null;
+  }
 
   if (!renderable) {
+    if (!showSkeleton) return null;
     return (
       <div
-        className="flex w-full flex-col items-center justify-center gap-2.5 rounded-lg border border-dashed border-[#1F2937] bg-[#0F1624] px-4 py-3 text-center"
-        style={{ minHeight }}
+        className="w-full rounded-xl overflow-hidden bg-slate-900/60 p-3 flex flex-col justify-center gap-2.5 transition-all duration-300"
+        style={{ minHeight: `${minHeight}px` }}
+        aria-hidden="true"
       >
-        <div className="h-[3px] w-[120px] rounded-full bg-gradient-to-r from-transparent via-emerald-400 to-transparent opacity-70" />
-        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#94A3B8]">廣告載位 · 贊助支持</div>
+        {/* 低對比柔和 Skeleton 佔位 */}
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-slate-800/80 animate-pulse shrink-0" />
+          <div className="flex-1 flex flex-col gap-1.5">
+            <div className="w-1/3 h-3 rounded bg-slate-800/80 animate-pulse" />
+            <div className="w-2/3 h-2.5 rounded bg-slate-800/50 animate-pulse" />
+          </div>
+        </div>
+        <div className="w-full flex-1 min-h-[44px] rounded-lg bg-slate-800/40 animate-pulse" />
       </div>
     );
   }
