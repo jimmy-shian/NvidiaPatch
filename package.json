@@ -1,6 +1,6 @@
 {
   "name": "nvidiapatch-mobile",
-  "version": "0.3.4",
+  "version": "1.0.0",
   "private": true,
   "description": "NvidiaPatch Mobile Chat - Local-first Android AI Chat & Agent",
   "type": "module",
