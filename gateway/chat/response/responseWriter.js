@@ -156,7 +156,7 @@ async function sendValidatedResponse({ context, result, currentModel }) {
     });
   }
 
-  stats.recordRequest(true);
+  stats.recordRequest(true, requestId);
   const durationMs = Date.now() - requestStartedAt;
 
   try {
@@ -210,7 +210,7 @@ async function sendPassthroughResponse({ context, result, currentModel }) {
     res.end();
   });
 
-  stats.recordRequest(true);
+  stats.recordRequest(true, requestId);
   const durationMs = Date.now() - requestStartedAt;
 
   try {

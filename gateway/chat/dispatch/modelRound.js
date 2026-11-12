@@ -9,7 +9,8 @@
  *  - 空回傳 → 最多 MAX_EMPTY_RESPONSE_RETRIES 次重試同一 Key
  *  - contentValidationFailed → forceRetrySameModel
  *  - streamReadFailed → forceRetrySameModel
- *  - model 層級失敗 → forceFallbackModel
+ *  - 暫時性上游錯誤（HTTP 200 假成功 / 串流讀取逾時 / 首 Token 逾時）→ forceRetrySameModel + transientFailure
+ *  - 模型層級失敗（404 / 410 / 400 參數錯誤 / 5xx / 網路異常 / 連線逾時）→ forceFallbackModel
  *  - fatal → fatal 旗標
  *  - key 層級錯誤 → 換下一把 Key 繼續
  */
@@ -134,6 +135,15 @@ async function tryModelWithKeys({ context, model, roundNumber, sanitizedBody, MA
                 errorText: validatedRetry.errorText || '串流讀取失敗'
               };
             }
+            if (validatedRetry.transientFailure) {
+              addLog('warning', `請求 #${requestId}：模型「${modelId}」空回傳重試期間回傳暫時性上游錯誤（${validatedRetry.errorText || '上游暫時性錯誤'}），將重試同一模型。`);
+              return {
+                success: false,
+                forceRetrySameModel: true,
+                transientFailure: true,
+                errorText: validatedRetry.errorText || '上游暫時性錯誤'
+              };
+            }
             if (validatedRetry.forceFallbackModel || validatedRetry.retryScope === 'model') {
               return {
                 success: false,
@@ -150,6 +160,16 @@ async function tryModelWithKeys({ context, model, roundNumber, sanitizedBody, MA
               statusCode: retryResult.statusCode,
               errorText: retryResult.errorText,
               response: retryResult.response
+            };
+          }
+          if (retryResult.shouldRetrySameModel || retryResult.isTransient) {
+            addLog('warning', `請求 #${requestId}：模型「${modelId}」空回傳重試期間發生暫時性上游錯誤（${retryResult.errorText || `HTTP ${retryResult.statusCode}`}），將重試同一模型。`);
+            return {
+              success: false,
+              forceRetrySameModel: true,
+              transientFailure: true,
+              statusCode: retryResult.statusCode,
+              errorText: retryResult.errorText || `HTTP ${retryResult.statusCode}`
             };
           }
           if (retryResult.shouldFallbackModel || retryResult.retryScope === 'model') {
@@ -173,6 +193,16 @@ async function tryModelWithKeys({ context, model, roundNumber, sanitizedBody, MA
         };
       }
 
+      if (validated.transientFailure) {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」回傳暫時性上游錯誤（${validated.errorText || '上游暫時性錯誤'}），將重試同一模型。`);
+        return {
+          success: false,
+          forceRetrySameModel: true,
+          transientFailure: true,
+          errorText: validated.errorText || '上游暫時性錯誤'
+        };
+      }
+
       if (validated.forceFallbackModel || validated.retryScope === 'model') {
         return {
           success: false,
@@ -191,6 +221,17 @@ async function tryModelWithKeys({ context, model, roundNumber, sanitizedBody, MA
         statusCode: result.statusCode,
         errorText: result.errorText,
         response: result.response
+      };
+    }
+
+    if (result.shouldRetrySameModel || result.isTransient) {
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」發生暫時性上游錯誤（${result.errorText || `HTTP ${result.statusCode}`}），將重試同一模型。`);
+      return {
+        success: false,
+        forceRetrySameModel: true,
+        transientFailure: true,
+        statusCode: result.statusCode,
+        errorText: result.errorText || `HTTP ${result.statusCode}`
       };
     }
 

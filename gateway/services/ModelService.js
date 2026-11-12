@@ -17,10 +17,21 @@ class ModelService {
     if (!models || !Array.isArray(models)) {
       throw new ValidationError('Models list is required and must be an array', { requestId });
     }
-    const result = modelsConfig.savePriorityList(models, groupId);
-    addLog('info', `已更新第 ${result.groupId} 組模型順位：${models.join(' -> ')}`, { requestId });
+
+    const normalizedModels = [];
+    for (const raw of models) {
+      if (typeof raw !== 'string') continue;
+      const modelId = raw.trim().replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+      if (!modelId || modelId.length < 2) continue;
+      if (!normalizedModels.includes(modelId)) {
+        normalizedModels.push(modelId);
+      }
+    }
+
+    const result = modelsConfig.savePriorityList(normalizedModels, groupId);
+    addLog('info', `已更新第 ${result.groupId} 組模型順位：${normalizedModels.join(' -> ')}`, { requestId });
     broadcastEvent('models', { action: 'update-priority', groupId: result.groupId });
-    return result;
+    return { ...result, models: normalizedModels };
   }
 
   setActiveGroup(groupId, requestId = null) {

@@ -20,14 +20,14 @@ export default function useGatewayApi(gatewayUrl, adminToken) {
     ...(adminToken ? { 'Authorization': `Bearer ${adminToken}` } : {})
   }), [adminToken]);
 
-  const apiFetch = useCallback(async (path, options = {}) => {
+  const apiFetch = useCallback(async (path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) => {
     const res = await fetchWithTimeout(`${gatewayUrl}${path}`, {
       ...options,
       headers: {
         ...authHeaders(),
         ...(options.headers || {})
       }
-    });
+    }, timeoutMs);
     if (res.status === 401) {
       throw new Error('AUTH_REQUIRED');
     }

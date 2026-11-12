@@ -10,6 +10,7 @@
  *  - fatal → 視情形 stream error 或 400
  *  - forceFallbackModel → 標記模型冷卻、跳到下一個模型
  *  - forceRetrySameModel → 繼續下一輪
+ *    （transientFailure：暫時性上游錯誤，等待 ROUND_DELAY_MS 後重試同一模型）
  *  - 包裝回傳失敗 → 視 headerSent 決定用 SSE error 或 end()
  *
  * 所有模型皆失敗時，最終發出 stream error 或 503。
@@ -24,7 +25,7 @@ const { sendValidatedResponse, sendStreamError } = require('../response/response
 async function handleDispatchError({ context, err, stream }) {
   const { requestId, res } = context;
   addLog('error', `請求 #${requestId}：Gateway 調度流程發生未預期錯誤：${err.stack || err.message}`);
-  stats.recordRequest(false);
+  stats.recordRequest(false, requestId);
 
   if (stream && res.headersSent) {
     return sendStreamError({
@@ -156,16 +157,21 @@ function handleRoundFailure({ context, result, currentModel, round }) {
   }
 
   if (result.forceRetrySameModel) {
+    const canRetry = round < context.MAX_ROUNDS_PER_MODEL;
     if (result.contentValidationFailed) {
       addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪回傳格式失敗，立即重試同一模型。`);
-      if (round < context.MAX_ROUNDS_PER_MODEL) return { continueRound: true };
-    }
-    if (result.streamReadFailed) {
+      if (canRetry) return { continueRound: true };
+    } else if (result.streamReadFailed) {
       addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪發生串流讀取錯誤，排程進行下一輪重試。`);
-      if (round < context.MAX_ROUNDS_PER_MODEL) return { continueRound: true };
+      if (canRetry) return { continueRound: true };
+    } else if (result.transientFailure) {
+      const delaySec = (context.activeConfig?.ROUND_DELAY_MS || 3000) / 1000;
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」第 ${round}/${context.MAX_ROUNDS_PER_MODEL} 輪遇到暫時性上游錯誤（${result.errorText || '暫時性錯誤'}），等待 ${delaySec} 秒後重試同一模型。`);
+      if (canRetry) return { continueRound: true };
+    } else {
+      addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪僅發生 Key 層級錯誤。`);
+      if (canRetry) return { continueRound: true };
     }
-    addLog('info', `請求 #${requestId}：模型「${modelId}」第 ${round} 輪僅發生 Key 層級錯誤。`);
-    if (round < context.MAX_ROUNDS_PER_MODEL) return { continueRound: true };
 
     // 已達 MAX_ROUNDS_PER_MODEL 上限仍無法成功，標記模型冷卻並切換下一個模型，
     // 避免 fall through 到 return {} 造成「無任何動作」的隱性失敗。
@@ -215,11 +221,15 @@ async function dispatchRequest({ context, configuredModels, sanitizedBody }) {
 
     let lastResultContentValidationFailed = false;
     let lastResultStreamReadFailed = false;
+    let lastResultTransientFailure = false;
 
     for (let round = 1; round <= MAX_ROUNDS_PER_MODEL; round += 1) {
       if (round > 1) {
         if (lastResultContentValidationFailed) {
           addLog('info', `請求 #${requestId}：模型「${modelId}」因回傳格式失敗立即重試，不等待。`);
+        } else if (lastResultTransientFailure) {
+          addLog('info', `請求 #${requestId}：模型「${modelId}」因先前發生暫時性上游錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪重試。`);
+          await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
         } else if (lastResultStreamReadFailed) {
           addLog('info', `請求 #${requestId}：模型「${modelId}」因先前發生串流讀取錯誤，等待 ${ROUND_DELAY_MS / 1000} 秒後進入第 ${round} 輪重試。`);
           await new Promise(resolve => setTimeout(resolve, ROUND_DELAY_MS));
@@ -238,6 +248,7 @@ async function dispatchRequest({ context, configuredModels, sanitizedBody }) {
       });
       lastResultContentValidationFailed = !!(result && result.contentValidationFailed);
       lastResultStreamReadFailed = !!(result && result.streamReadFailed);
+      lastResultTransientFailure = !!(result && result.transientFailure);
 
       if (result.clientGone) {
         addLog('warning', `請求 #${requestId}：客戶端已中斷，停止後續模型調度。`);

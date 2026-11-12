@@ -15,6 +15,7 @@ class SettingsService {
       ROUND_DELAY_MS: current.ROUND_DELAY_MS / 1000,
       REQUEST_TIMEOUT_MS: current.REQUEST_TIMEOUT_MS / 1000,
       STREAM_READ_TIMEOUT_MS: current.STREAM_READ_TIMEOUT_MS / 1000,
+      FIRST_TOKEN_TIMEOUT_MS: current.FIRST_TOKEN_TIMEOUT_MS / 1000,
       TEST_TIMEOUT_MS: current.TEST_TIMEOUT_MS / 1000,
       MODEL_FAILURE_COOLDOWN_MS: current.MODEL_FAILURE_COOLDOWN_MS / 1000,
       KEY_CONCURRENCY_DELAY_MS: current.KEY_CONCURRENCY_DELAY_MS / 1000
@@ -27,6 +28,7 @@ class SettingsService {
       ROUND_DELAY_MS,
       REQUEST_TIMEOUT_MS,
       STREAM_READ_TIMEOUT_MS,
+      FIRST_TOKEN_TIMEOUT_MS,
       TEST_TIMEOUT_MS,
       MODEL_FAILURE_COOLDOWN_MS,
       KEY_CONCURRENCY_DELAY_MS,
@@ -61,6 +63,12 @@ class SettingsService {
       const val = Number(STREAM_READ_TIMEOUT_MS);
       if (!Number.isFinite(val) || val < 1) {
         validationErrors.push('串流讀取逾時必須至少 1 秒。');
+      }
+    }
+    if (FIRST_TOKEN_TIMEOUT_MS !== undefined) {
+      const val = Number(FIRST_TOKEN_TIMEOUT_MS);
+      if (!Number.isFinite(val) || val < 1) {
+        validationErrors.push('首 Token 逾時必須至少 1 秒。');
       }
     }
     if (TEST_TIMEOUT_MS !== undefined) {
@@ -120,6 +128,7 @@ class SettingsService {
       ROUND_DELAY_MS,
       REQUEST_TIMEOUT_MS,
       STREAM_READ_TIMEOUT_MS,
+      FIRST_TOKEN_TIMEOUT_MS,
       NVIDIA_API_URL,
       PORT,
       MAX_ROUNDS_PER_MODEL,
@@ -139,6 +148,7 @@ class SettingsService {
       ROUND_DELAY_MS: ROUND_DELAY_MS !== undefined ? Math.round(Number(ROUND_DELAY_MS) * 1000) : current.ROUND_DELAY_MS,
       REQUEST_TIMEOUT_MS: REQUEST_TIMEOUT_MS !== undefined ? Math.round(Number(REQUEST_TIMEOUT_MS) * 1000) : current.REQUEST_TIMEOUT_MS,
       STREAM_READ_TIMEOUT_MS: STREAM_READ_TIMEOUT_MS !== undefined ? Math.round(Number(STREAM_READ_TIMEOUT_MS) * 1000) : current.STREAM_READ_TIMEOUT_MS,
+      FIRST_TOKEN_TIMEOUT_MS: FIRST_TOKEN_TIMEOUT_MS !== undefined ? Math.round(Number(FIRST_TOKEN_TIMEOUT_MS) * 1000) : current.FIRST_TOKEN_TIMEOUT_MS,
       NVIDIA_API_URL: NVIDIA_API_URL !== undefined ? String(NVIDIA_API_URL).trim() : current.NVIDIA_API_URL,
       PORT: PORT !== undefined ? Number(PORT) : current.PORT,
       MAX_ROUNDS_PER_MODEL: MAX_ROUNDS_PER_MODEL !== undefined ? Number(MAX_ROUNDS_PER_MODEL) : current.MAX_ROUNDS_PER_MODEL,
@@ -154,13 +164,14 @@ class SettingsService {
       CURRENCY_SYMBOL: CURRENCY_SYMBOL !== undefined ? String(CURRENCY_SYMBOL).trim() : current.CURRENCY_SYMBOL
     });
 
-    addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, 模型失敗冷卻 ${(updated.MODEL_FAILURE_COOLDOWN_MS / 1000)}秒, 金鑰防併發等待 ${(updated.KEY_CONCURRENCY_DELAY_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪, 空回傳重試: ${updated.MAX_EMPTY_RESPONSE_RETRIES}次, 內容校驗: ${updated.ENABLE_CONTENT_VALIDATION ? '啟用' : '停用'}`, { requestId });
+    addLog('info', `已更新參數設定：每輪等待 ${(updated.ROUND_DELAY_MS / 1000)}秒, 請求逾時 ${(updated.REQUEST_TIMEOUT_MS / 1000)}秒, 串流逾時 ${(updated.STREAM_READ_TIMEOUT_MS / 1000)}秒, 首 Token 逾時 ${(updated.FIRST_TOKEN_TIMEOUT_MS / 1000)}秒, 測試逾時 ${(updated.TEST_TIMEOUT_MS / 1000)}秒, 模型失敗冷卻 ${(updated.MODEL_FAILURE_COOLDOWN_MS / 1000)}秒, 金鑰防併發等待 ${(updated.KEY_CONCURRENCY_DELAY_MS / 1000)}秒, URL: ${updated.NVIDIA_API_URL}, PORT: ${updated.PORT}, 最大重試: ${updated.MAX_ROUNDS_PER_MODEL}輪, 空回傳重試: ${updated.MAX_EMPTY_RESPONSE_RETRIES}次, 內容校驗: ${updated.ENABLE_CONTENT_VALIDATION ? '啟用' : '停用'}`, { requestId });
 
     const formatted = {
       ...updated,
       ROUND_DELAY_MS: updated.ROUND_DELAY_MS / 1000,
       REQUEST_TIMEOUT_MS: updated.REQUEST_TIMEOUT_MS / 1000,
       STREAM_READ_TIMEOUT_MS: updated.STREAM_READ_TIMEOUT_MS / 1000,
+      FIRST_TOKEN_TIMEOUT_MS: updated.FIRST_TOKEN_TIMEOUT_MS / 1000,
       TEST_TIMEOUT_MS: updated.TEST_TIMEOUT_MS / 1000,
       MODEL_FAILURE_COOLDOWN_MS: updated.MODEL_FAILURE_COOLDOWN_MS / 1000,
       KEY_CONCURRENCY_DELAY_MS: updated.KEY_CONCURRENCY_DELAY_MS / 1000

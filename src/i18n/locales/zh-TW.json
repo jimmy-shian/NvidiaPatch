@@ -19,6 +19,7 @@
     "roundDelay": "每輪重試等待 (秒)",
     "requestTimeout": "模型請求逾時 (秒)",
     "streamTimeout": "串流讀取逾時 (秒)",
+    "firstTokenTimeout": "首 Token 逾時 (秒)",
     "testTimeout": "模型測試逾時 (秒)",
     "modelCooldown": "模型失敗暫時停用時間 (秒)",
     "keyConcurrencyDelay": "金鑰防併發等待限制 (秒)",

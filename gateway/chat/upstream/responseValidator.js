@@ -6,10 +6,13 @@
  *  1. 串流模式：消費 reader，逐行解析 SSE chunk，將多種可能欄位
  *     (delta.content / delta.reasoning_content / message.content / text / content)
  *     合併為 fullContent；最終交給 smartValidate 校驗。
+ *     - 第一個 chunk 之前套用 FIRST_TOKEN_TIMEOUT_MS（首 Token 逾時）：
+ *       未開始生成即重發同一模型（transientFailure）
  *     - 上游錯誤 / 審查拒絕 → 切換模型（forceFallbackModel）
  *     - 空內容 → 依空回傳策略重試同一模型（forceRetrySameModelOnEmpty）
  *     - 校驗失敗 → 切換模型（forceFallbackModel）
- *     - 逾時 / 客戶端中斷 → 對應分支
+ *     - 串流讀取逾時（idle）→ 重試同一模型（transientFailure）
+ *     - 客戶端中斷 → clientGone
  *
  *  2. 非串流模式：await response.json() 後校驗 choices[0].message.content
  *     - 空內容 / 校驗失敗 → 同上
@@ -18,14 +21,14 @@
 
 const { apiKeys, stats } = require('../../../database');
 const { addLog } = require('../../logs/logger');
-const { smartValidate, formatValidationIssue, isUpstreamErrorContent, extractUpstreamErrorDetail } = require('../../engine/contentValidator');
+const { smartValidate, formatValidationIssue, isUpstreamErrorContent, extractUpstreamErrorDetail, isTransientUpstreamError } = require('../../engine/contentValidator');
 const { isFakeStreamContent } = require('../utils/fakeStreamFilter');
 
-function readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS) {
+function readStreamChunkWithTimeout(reader, timeoutMs, timeoutMessage) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`串流讀取逾時 ${STREAM_READ_TIMEOUT_MS / 1000} 秒`));
-    }, STREAM_READ_TIMEOUT_MS);
+      reject(new Error(timeoutMessage || `串流讀取逾時 ${timeoutMs / 1000} 秒`));
+    }, timeoutMs);
 
     reader.read()
       .then((result) => {
@@ -148,6 +151,13 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
   const { requestId, originalBody, activeConfig, isClientGone } = context;
   const modelId = model.model_id;
   const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
+  // 首 Token 逾時（FIRST_TOKEN_TIMEOUT_MS）：收到第一個 chunk 前的等待上限。
+  // 逾時表示上游上游沒有開始生成 → 重發同一模型。
+  // 未設定或 <=0 時沿用 STREAM_READ_TIMEOUT_MS（向後相容）。
+  const parsedFirstTokenTimeout = Number(activeConfig.FIRST_TOKEN_TIMEOUT_MS);
+  const FIRST_TOKEN_TIMEOUT_MS = (Number.isFinite(parsedFirstTokenTimeout) && parsedFirstTokenTimeout > 0)
+    ? parsedFirstTokenTimeout
+    : STREAM_READ_TIMEOUT_MS;
 
   const reader = result.response.body.getReader();
   const decoder = new TextDecoder();
@@ -158,14 +168,21 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
   const hasToolCallsRef = { value: false };
   const streamMeta = { dataChunkCount: 0, lastError: null, refusal: null };
   let streamUsage = null;
+  let hasReceivedFirstChunk = false;
 
   try {
     while (true) {
       if (isClientGone()) {
         throw new Error('客戶端已中斷連線');
       }
-      const { done, value } = await readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS);
+      // 首個 chunk 之前套用首 Token 逾時；開始串流後一律套用串流讀取逾時
+      const readTimeoutMs = hasReceivedFirstChunk ? STREAM_READ_TIMEOUT_MS : FIRST_TOKEN_TIMEOUT_MS;
+      const timeoutMessage = hasReceivedFirstChunk
+        ? `串流讀取逾時 ${readTimeoutMs / 1000} 秒`
+        : `首 Token 逾時 ${readTimeoutMs / 1000} 秒（上游未送出任何 Chunk）`;
+      const { done, value } = await readStreamChunkWithTimeout(reader, readTimeoutMs, timeoutMessage);
       if (done) break;
+      hasReceivedFirstChunk = true;
 
       streamBuffer += decoder.decode(value, { stream: true });
       const lines = streamBuffer.split('\n');
@@ -197,9 +214,17 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
     // 1. 檢查上游 SSE chunk 是否夾帶明確錯誤物件
     if (streamMeta.lastError || (fullContent && isUpstreamErrorContent(fullContent))) {
       const errDetail = streamMeta.lastError || extractUpstreamErrorDetail(fullContent);
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 上游回傳內容包含錯誤訊息（${errDetail}），判定為模型層級失敗，立即切換下一個模型。`);
+      const isTransient = isTransientUpstreamError(errDetail);
+      if (isTransient) {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 上游回傳內容包含暫時性錯誤訊息（${errDetail}），判定為可重試，將重試同一模型。`);
+      } else {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 上游回傳內容包含錯誤訊息（${errDetail}），判定為模型層級失敗，立即切換下一個模型。`);
+      }
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${errDetail.substring(0, 80)}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
+      if (isTransient) {
+        return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 上游回傳錯誤：${errDetail}` };
+      }
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 上游回傳錯誤：${errDetail}` };
     }
 
@@ -208,7 +233,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       const refusalMsg = streamMeta.refusal ? `，拒絕原因：${streamMeta.refusal}` : '';
       addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸入端內容審查 / 安全拒絕] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: content_filter / refusal${refusalMsg}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸入端內容審查] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}）` };
     }
 
@@ -216,7 +241,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
     if (finishReasonRef.value === 'length') {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸出長度截斷] 串流輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸出長度截斷] 輸出因達到 max_tokens 上限被截斷（finish_reason="length"）` };
     }
 
@@ -232,7 +257,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       }
       addLog('warning', `請求 #${requestId}：模型「${modelId}」${emptyDetail}，將依空回傳重試策略重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty content (${streamMeta.dataChunkCount} chunks, reason: ${finishReasonRef.value || 'none'})`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：${emptyDetail}` };
     }
 
@@ -256,7 +281,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
         const validationIssue = formatValidationIssue(validation);
         addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] 串流內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
         apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-        stats.recordRequest(false);
+        stats.recordRequest(false, requestId);
         return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[模型生成標記校驗失敗] ${validationIssue}` };
       }
     }
@@ -282,22 +307,30 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
 
     const isClientDisconnect = err.message.includes('客戶端已中斷連線');
     const isTimeout = err.message.includes('逾時') || err.message.toLowerCase().includes('timeout');
+    const isFirstTokenTimeout = isTimeout && err.message.includes('首 Token');
     if (isClientDisconnect) {
       apiKeys.recordFailure(selectedKey.id, `客戶端中斷連線：${err.message}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, clientGone: true, errorText: err.message };
+    }
+    if (isFirstTokenTimeout) {
+      const timeoutDesc = `[API 端首 Token 逾時] 上游串流在 ${FIRST_TOKEN_TIMEOUT_MS / 1000} 秒內未送出任何 Chunk，依首 Token 逾時策略重發同一模型。`;
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}`);
+      apiKeys.recordFailure(selectedKey.id, `首 Token 逾時：${err.message}`);
+      stats.recordRequest(false, requestId);
+      return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, firstTokenTimeout: true, statusCode: 0, errorText: timeoutDesc };
     }
     if (isTimeout) {
       const timeoutDesc = `[API 端讀取超時] 上游串流讀取逾時（已等待 ${STREAM_READ_TIMEOUT_MS / 1000} 秒，累計接收 ${streamMeta.dataChunkCount} 個 Chunk，上游節點排隊過載無響應）`;
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}，判定為模型層級失敗，立即切換下一個模型。`);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}，判定為串流讀取錯誤，重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `串流讀取逾時（${streamMeta.dataChunkCount} chunks）：${err.message}`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: timeoutDesc };
+      stats.recordRequest(false, requestId);
+      return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, statusCode: 0, errorText: timeoutDesc };
     }
 
     addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端串流錯誤] 串流讀取或校驗失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
     apiKeys.recordFailure(selectedKey.id, `串流讀取錯誤：${err.message}`);
-    stats.recordRequest(false);
+    stats.recordRequest(false, requestId);
     return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
   }
 }
@@ -321,9 +354,17 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
     // 1. 檢查上游 JSON 或內容是否為伺服器錯誤結構
     if (isUpstreamErrorContent(json) || (contentToCheck && isUpstreamErrorContent(contentToCheck))) {
       const errDetail = extractUpstreamErrorDetail(json) || extractUpstreamErrorDetail(contentToCheck) || '上游伺服器內部錯誤';
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${errDetail}），判定為模型層級失敗，立即切換下一個模型。`);
+      const isTransient = isTransientUpstreamError(errDetail);
+      if (isTransient) {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] JSON 回傳 HTTP 200 但內容為暫時性上游錯誤訊息（${errDetail}），判定為可重試，將重試同一模型。`);
+      } else {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] JSON 回傳 HTTP 200 但內容為上游錯誤訊息（${errDetail}），判定為模型層級失敗，立即切換下一個模型。`);
+      }
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in 200 body: ${errDetail.substring(0, 80)}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
+      if (isTransient) {
+        return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, statusCode: 0, errorText: `[API 端伺服器錯誤] HTTP 200 但內容為上游錯誤：${errDetail}` };
+      }
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] HTTP 200 但內容為上游錯誤：${errDetail}` };
     }
 
@@ -332,7 +373,7 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       const refusalMsg = targetMsg?.refusal ? `，拒絕原因：${targetMsg.refusal}` : '';
       addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸入端內容審查 / 安全拒絕] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: content_filter / refusal${refusalMsg}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸入端內容審查] 觸發上游安全審查機制（finish_reason="content_filter"${refusalMsg}）` };
     }
 
@@ -340,7 +381,7 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
     if (finishReason === 'length') {
       addLog('warning', `請求 #${requestId}：模型「${modelId}」[輸出長度截斷] JSON 輸出因 max_tokens 被截斷（finish_reason="length"），判定為模型層級失敗，切換下一個模型重試。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: finish_reason=length (truncated)`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸出長度截斷] 輸出因達到 max_tokens 上限被截斷（finish_reason="length"）` };
     }
 
@@ -354,7 +395,7 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       }
       addLog('warning', `請求 #${requestId}：模型「${modelId}」${emptyDetail}，將依空回傳重試策略重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Empty JSON content (reason: ${finishReason || 'none'})`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceRetrySameModelOnEmpty: true, emptyResponse: true, statusCode: 0, errorText: `內容校驗失敗：${emptyDetail}` };
     }
 
@@ -378,7 +419,7 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       const validationIssue = formatValidationIssue(validation);
       addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] JSON 內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[模型生成標記校驗失敗] ${validationIssue}` };
     }
 
@@ -398,7 +439,7 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
   } catch (err) {
     addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端格式錯誤] JSON 解析失敗（${err.message}），判定為回傳格式失敗，改用下一把 Key 重試同一模型。`);
     apiKeys.recordFailure(selectedKey.id, `JSON parse error: ${err.message}`);
-    stats.recordRequest(false);
+    stats.recordRequest(false, requestId);
     return { success: false, retryScope: 'key', contentValidationFailed: true, errorText: err.message };
   }
 }
@@ -435,6 +476,11 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
   const { requestId, originalBody, activeConfig, isClientGone } = context;
   const modelId = model.model_id;
   const STREAM_READ_TIMEOUT_MS = activeConfig.STREAM_READ_TIMEOUT_MS;
+  // 首 Token 逾時：透傳串流同樣在收到第一個 chunk 前套用，逾時重發
+  const parsedFirstTokenTimeout = Number(activeConfig.FIRST_TOKEN_TIMEOUT_MS);
+  const FIRST_TOKEN_TIMEOUT_MS = (Number.isFinite(parsedFirstTokenTimeout) && parsedFirstTokenTimeout > 0)
+    ? parsedFirstTokenTimeout
+    : STREAM_READ_TIMEOUT_MS;
 
   const reader = result.response.body.getReader();
   const decoder = new TextDecoder();
@@ -446,14 +492,20 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
   let hasUpstreamError = false;
   let upstreamErrorDetail = '';
   let chunkCount = 0;
+  let hasReceivedFirstChunk = false;
 
   try {
     while (true) {
       if (isClientGone()) {
         throw new Error('客戶端已中斷連線');
       }
-      const { done, value } = await readStreamChunkWithTimeout(reader, STREAM_READ_TIMEOUT_MS);
+      const readTimeoutMs = hasReceivedFirstChunk ? STREAM_READ_TIMEOUT_MS : FIRST_TOKEN_TIMEOUT_MS;
+      const timeoutMessage = hasReceivedFirstChunk
+        ? `串流讀取逾時 ${readTimeoutMs / 1000} 秒`
+        : `首 Token 逾時 ${readTimeoutMs / 1000} 秒（上游未送出任何 Chunk）`;
+      const { done, value } = await readStreamChunkWithTimeout(reader, readTimeoutMs, timeoutMessage);
       if (done) break;
+      hasReceivedFirstChunk = true;
 
       chunkCount += 1;
       lastChunkBytes = value;
@@ -500,9 +552,17 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
     }
 
     if (hasUpstreamError) {
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 透傳串流中檢測到上游錯誤訊息（${String(upstreamErrorDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      const isTransient = isTransientUpstreamError(upstreamErrorDetail);
+      if (isTransient) {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 透傳串流中檢測到暫時性上游錯誤訊息（${String(upstreamErrorDetail).substring(0, 120)}），判定為可重試，將重試同一模型。`);
+      } else {
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端伺服器錯誤 (HTTP 200 假成功)] 透傳串流中檢測到上游錯誤訊息（${String(upstreamErrorDetail).substring(0, 120)}），判定為模型層級失敗，立即切換下一個模型。`);
+      }
       apiKeys.recordFailure(selectedKey.id, `ContentValidation: Upstream error in passthrough stream: ${String(upstreamErrorDetail).substring(0, 80)}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
+      if (isTransient) {
+        return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
+      }
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
     }
 
@@ -536,22 +596,30 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
 
     const isClientDisconnect = err.message.includes('客戶端已中斷連線');
     const isTimeout = err.message.includes('逾時') || err.message.toLowerCase().includes('timeout');
+    const isFirstTokenTimeout = isTimeout && err.message.includes('首 Token');
     if (isClientDisconnect) {
       apiKeys.recordFailure(selectedKey.id, `客戶端中斷連線：${err.message}`);
-      stats.recordRequest(false);
+      stats.recordRequest(false, requestId);
       return { success: false, clientGone: true, errorText: err.message };
+    }
+    if (isFirstTokenTimeout) {
+      const timeoutDesc = `[API 端首 Token 逾時] 透傳串流在 ${FIRST_TOKEN_TIMEOUT_MS / 1000} 秒內未送出任何 Chunk，依首 Token 逾時策略重發同一模型。`;
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}`);
+      apiKeys.recordFailure(selectedKey.id, `首 Token 逾時：${err.message}`);
+      stats.recordRequest(false, requestId);
+      return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, firstTokenTimeout: true, statusCode: 0, errorText: timeoutDesc };
     }
     if (isTimeout) {
       const timeoutDesc = `[API 端讀取超時] 透傳串流讀取逾時（已等待 ${STREAM_READ_TIMEOUT_MS / 1000} 秒，累計接收 ${chunkCount} 個 Chunk，上游節點排隊過載無響應）`;
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}，判定為模型層級失敗，立即切換下一個模型。`);
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${timeoutDesc}，判定為串流讀取錯誤，重試同一模型。`);
       apiKeys.recordFailure(selectedKey.id, `透傳串流讀取逾時（${chunkCount} chunks）：${err.message}`);
-      stats.recordRequest(false);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: timeoutDesc };
+      stats.recordRequest(false, requestId);
+      return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, statusCode: 0, errorText: timeoutDesc };
     }
 
     addLog('warning', `請求 #${requestId}：模型「${modelId}」[API 端串流錯誤] 透傳串流讀取失敗（${err.message}），判定為串流讀取錯誤，將進行後續等待與重試。`);
     apiKeys.recordFailure(selectedKey.id, `透傳串流讀取錯誤：${err.message}`);
-    stats.recordRequest(false);
+    stats.recordRequest(false, requestId);
     return { success: false, retryScope: 'key', streamReadFailed: true, errorText: err.message };
   }
 }

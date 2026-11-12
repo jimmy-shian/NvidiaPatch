@@ -16,6 +16,7 @@ const express = require('express');
 const { modelsConfig, settings } = require('../../database');
 const { resolveModelGroupFromRequest } = require('../utils/modelGroup');
 const { sanitizeChatCompletionBody } = require('../utils/sanitize');
+const { isCustomUpstreamUrl } = require('../utils/urlHelper');
 const { requireAdminAuth } = require('../middleware/auth');
 const { createChatContext, resolveRetryLimits } = require('../chat/context/chatContext');
 const { createFakeStreamController } = require('../chat/response/fakeStream');
@@ -77,7 +78,9 @@ router.post('/v1/chat/completions', async (req, res) => {
     context.fakeStreamController.start();
   }
 
-  const sanitizedBody = sanitizeChatCompletionBody(originalBody);
+  // NVIDIA NIM 端點才過濾不支援參數；自訂端點（Ollama / LM Studio）不過濾
+  const nvidiaEndpoint = !isCustomUpstreamUrl(activeConfig?.NVIDIA_API_URL || process.env.NVIDIA_API_URL);
+  const sanitizedBody = sanitizeChatCompletionBody(originalBody, { nvidiaEndpoint });
   context.sanitizedBody = sanitizedBody;
 
   try {

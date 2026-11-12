@@ -9,12 +9,13 @@ function parseMetadataRows(rows) {
   }
 
   return {
-    ROUND_DELAY_MS: Number(map.get('ROUND_DELAY_MS') || 15000),
+    ROUND_DELAY_MS: Number(map.get('ROUND_DELAY_MS') || 3000),
     REQUEST_TIMEOUT_MS: Number(map.get('REQUEST_TIMEOUT_MS') || 120000),
     STREAM_READ_TIMEOUT_MS: Number(map.get('STREAM_READ_TIMEOUT_MS') || 120000),
+    FIRST_TOKEN_TIMEOUT_MS: Number(map.get('FIRST_TOKEN_TIMEOUT_MS') || 20000),
     NVIDIA_API_URL: map.get('NVIDIA_API_URL') || 'https://integrate.api.nvidia.com/v1',
     PORT: Number(map.get('PORT') || 4000),
-    MAX_ROUNDS_PER_MODEL: Number(map.get('MAX_ROUNDS_PER_MODEL') || 2),
+    MAX_ROUNDS_PER_MODEL: Number(map.get('MAX_ROUNDS_PER_MODEL') || 10),
     MAX_EMPTY_RESPONSE_RETRIES: Number(map.get('MAX_EMPTY_RESPONSE_RETRIES') || 3),
     TEST_TIMEOUT_MS: Number(map.get('TEST_TIMEOUT_MS') || 60000),
     MODEL_FAILURE_COOLDOWN_MS: Number(map.get('MODEL_FAILURE_COOLDOWN_MS') || 60000),
@@ -70,6 +71,7 @@ const settings = {
       'ROUND_DELAY_MS',
       'REQUEST_TIMEOUT_MS',
       'STREAM_READ_TIMEOUT_MS',
+      'FIRST_TOKEN_TIMEOUT_MS',
       'NVIDIA_API_URL',
       'PORT',
       'MAX_ROUNDS_PER_MODEL',

@@ -203,13 +203,22 @@ describe('Service Layer Unit Tests', () => {
       const res = settingsService.updateSettings({
         ROUND_DELAY_MS: 10,
         REQUEST_TIMEOUT_MS: 60,
+        STREAM_READ_TIMEOUT_MS: 45,
+        FIRST_TOKEN_TIMEOUT_MS: 25,
         PORT: 4000
       });
       expect(res.ROUND_DELAY_MS).toBe(10);
       expect(res.REQUEST_TIMEOUT_MS).toBe(60);
+      expect(res.STREAM_READ_TIMEOUT_MS).toBe(45);
+      expect(res.FIRST_TOKEN_TIMEOUT_MS).toBe(25);
 
       const raw = settingsService.getRawSettings();
       expect(raw.ROUND_DELAY_MS).toBe(10000);
+      expect(raw.FIRST_TOKEN_TIMEOUT_MS).toBe(25000);
+    });
+
+    it('should reject first token timeout below one second', () => {
+      expect(() => settingsService.updateSettings({ FIRST_TOKEN_TIMEOUT_MS: 0 })).toThrow(ValidationError);
     });
   });
 

@@ -19,6 +19,7 @@
     "roundDelay": "Retry Delay (sec)",
     "requestTimeout": "Request Timeout (sec)",
     "streamTimeout": "Stream Read Timeout (sec)",
+    "firstTokenTimeout": "First Token Timeout (sec)",
     "testTimeout": "Test Timeout (sec)",
     "modelCooldown": "Model Failure Cooldown (sec)",
     "keyConcurrencyDelay": "Key Concurrency Delay (sec)",

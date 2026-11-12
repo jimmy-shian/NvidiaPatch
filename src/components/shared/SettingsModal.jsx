@@ -5,13 +5,14 @@ import { X } from 'lucide-react';
 const DEFAULT_SETTINGS = {
   NVIDIA_API_URL: 'https://integrate.api.nvidia.com/v1',
   PORT: 4000,
-  MAX_ROUNDS_PER_MODEL: 2,
-  ROUND_DELAY_MS: 15000,
-  REQUEST_TIMEOUT_MS: 120000,
-  STREAM_READ_TIMEOUT_MS: 120000,
-  TEST_TIMEOUT_MS: 60000,
-  MODEL_FAILURE_COOLDOWN_MS: 60000,
-  KEY_CONCURRENCY_DELAY_MS: 5000,
+  MAX_ROUNDS_PER_MODEL: 10,
+  ROUND_DELAY_MS: 3,
+  REQUEST_TIMEOUT_MS: 120,
+  STREAM_READ_TIMEOUT_MS: 120,
+  FIRST_TOKEN_TIMEOUT_MS: 20,
+  TEST_TIMEOUT_MS: 60,
+  MODEL_FAILURE_COOLDOWN_MS: 60,
+  KEY_CONCURRENCY_DELAY_MS: 5,
   ENABLE_CONTENT_VALIDATION: true,
   PRICE_PER_MILLION_PROMPT_TOKENS: 0.30,
   PRICE_PER_MILLION_COMPLETION_TOKENS: 0.60,
@@ -156,6 +157,18 @@ export default function SettingsModal({
                 type="number"
                 value={tempSettings.TEST_TIMEOUT_MS || ''}
                 onChange={(e) => setTempSettings({ ...tempSettings, TEST_TIMEOUT_MS: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>{t('settings.firstTokenTimeout')}</label>
+              <input
+                className="input"
+                type="number"
+                value={tempSettings.FIRST_TOKEN_TIMEOUT_MS || ''}
+                onChange={(e) => setTempSettings({ ...tempSettings, FIRST_TOKEN_TIMEOUT_MS: Number(e.target.value) })}
               />
             </div>
           </div>

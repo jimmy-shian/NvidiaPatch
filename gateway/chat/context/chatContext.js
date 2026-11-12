@@ -75,11 +75,14 @@ function createChatContext({ req, res, originalBody, activeConfig }) {
  *  - MAX_ROUNDS_PER_MODEL：每個模型最多輪詢幾次
  *  - MAX_EMPTY_RESPONSE_RETRIES：同一模型最多允許連續空回傳次數
  *
- * 兩者皆限制在 1~10 之間，否則使用預設值（2 / 3）。
+ * 兩者皆限制在 1~10 之間，否則使用預設值（10 / 3）。
+ *
+ * 預設 MAX_ROUNDS_PER_MODEL = 10：NVIDIA NIM 常見「HTTP 200 假成功」或節點過載，
+ * 讓同一模型有機會在短時間內重試成功，而非立刻切換到下一個模型。
  */
 function resolveRetryLimits(activeConfig) {
   const dbMaxRounds = Number(activeConfig.MAX_ROUNDS_PER_MODEL);
-  const MAX_ROUNDS_PER_MODEL = (Number.isFinite(dbMaxRounds) && dbMaxRounds >= 1 && dbMaxRounds <= 10) ? dbMaxRounds : 2;
+  const MAX_ROUNDS_PER_MODEL = (Number.isFinite(dbMaxRounds) && dbMaxRounds >= 1 && dbMaxRounds <= 10) ? dbMaxRounds : 10;
 
   const dbMaxEmptyRetries = Number(activeConfig.MAX_EMPTY_RESPONSE_RETRIES);
   const MAX_EMPTY_RESPONSE_RETRIES = (Number.isFinite(dbMaxEmptyRetries) && dbMaxEmptyRetries >= 1 && dbMaxEmptyRetries <= 10) ? dbMaxEmptyRetries : 3;

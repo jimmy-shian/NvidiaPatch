@@ -19,6 +19,7 @@
     "roundDelay": "リトライ間隔 (秒)",
     "requestTimeout": "リクエストタイムアウト (秒)",
     "streamTimeout": "ストリームタイムアウト (秒)",
+    "firstTokenTimeout": "初回トークンタイムアウト (秒)",
     "testTimeout": "テストタイムアウト (秒)",
     "modelCooldown": "モデル失敗時冷却時間 (秒)",
     "keyConcurrencyDelay": "キー防護併発遅延 (秒)",
