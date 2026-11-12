@@ -9,3 +9,6 @@ release/
 .DS_Store
 scratch/
 android/
+
+# 本機執行期快取檔（避免切換分支時被視為未追蹤變更）
+cloudflare-search-worker/.wrangler/

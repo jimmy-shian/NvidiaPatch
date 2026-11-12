@@ -6,6 +6,9 @@ const fs = require('fs');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 
+// 本 App 為系統匣常駐的輕量 HTTP 服務 + React UI，停用硬體加速可省下整個 GPU 程序
+app.disableHardwareAcceleration();
+
 // 單一實例鎖定（Single Instance Lock），防止重複啟動造成 Port 或系統匣衝突
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -14,7 +17,7 @@ if (!gotTheLock) {
   process.exit(0);
 }
 
-const { initDatabase, closeDatabase, rules, settings } = require('./database');
+const { initDatabase, ensureDatabase, isDatabaseReady, closeDatabase, rules, settings } = require('./database');
 const { createGatewayApp, closeGatewayResources, startGatewayResources } = require('./gateway');
 
 // Gateway 狀態定義
@@ -41,8 +44,14 @@ const iconPath = path.join(__dirname, 'icon.png');
 const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : fallbackIcon;
 
 // 2. 初始化資料庫 (存放在 AppData/Roaming 目錄下)
+// 註：開機偶發抓不到資料庫（多為前一次實例尚未完全釋放 SQLite 鎖）。
+// 這裡不讓 App 因啟動競態直接崩潰，改由後續 ensureDatabase 帶重試補救。
 const dbPath = path.join(app.getPath('userData'), 'gateway.db');
-initDatabase(dbPath);
+try {
+  initDatabase(dbPath);
+} catch (err) {
+  console.error('[Database] 啟動時初始化失敗，將延後重試：', err.message);
+}
 
 // 3. Gateway 監聽與連線追蹤
 let currentPort = 4000;
@@ -150,6 +159,27 @@ async function startGatewayServer() {
   lastGatewayError = null;
   broadcastGatewayState();
   updateTrayMenu();
+
+  // 重新啟動 Gateway 時一併確認資料庫可用（修復「重啟後仍抓不到資料庫」）
+  const dbReady = await ensureDatabase(dbPath);
+  if (!dbReady) {
+    console.error('[Gateway] 資料庫尚未就緒，放棄本次啟動。');
+    gatewayState = GatewayState.ERROR;
+    lastGatewayError = '資料庫尚未就緒（可能前一次實例仍在佔用），請稍候重試或重新啟動整個應用程式。';
+    closeGatewayResources();
+    broadcastGatewayState();
+    updateTrayMenu();
+
+    if (tray) {
+      tray.displayBalloon({
+        title: 'NVIDIA NIM Gateway 啟動失敗',
+        content: lastGatewayError,
+        icon: appIcon
+      });
+    }
+
+    return { success: false, state: GatewayState.ERROR, error: lastGatewayError };
+  }
 
   const portToUse = loadPortFromDb();
 
@@ -348,6 +378,17 @@ function setAutoStart(enable) {
   }
 }
 
+/**
+ * 確保主視窗存在（延遲建立）：
+ * 背景常駐時不建立任何 BrowserWindow，只有在使用者要顯示畫面時才建立，
+ * 使背景待命僅剩 main process 一個程序，省下 renderer 程序。
+ */
+function ensureMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+  createMainWindow(false);
+  return mainWindow;
+}
+
 function createMainWindow(isHiddenStartup = false) {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -457,10 +498,9 @@ function updateTrayMenu() {
       { 
         label: '🖥️ 開啟主畫面', 
         click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
+          const win = ensureMainWindow();
+          win.show();
+          win.focus();
         } 
       },
       { type: 'separator' },
@@ -536,10 +576,9 @@ function createTray() {
   updateTrayMenu();
 
   tray.on('double-click', () => {
-    if (mainWindow) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    const win = ensureMainWindow();
+    win.show();
+    win.focus();
   });
 }
 
@@ -549,6 +588,11 @@ app.on('second-instance', () => {
     if (mainWindow.isMinimized()) mainWindow.restore();
     if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
+  } else {
+    // 背景常駐時視窗尚未建立：直接建立並顯示，回應用戶再次啟動的意圖
+    const win = ensureMainWindow();
+    win.show();
+    win.focus();
   }
 });
 
@@ -642,32 +686,42 @@ ipcMain.on('send-notification', (event, { title, body }) => {
 });
 
 // App 生命週期
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   loadPortFromDb();
 
   const isHiddenStartup = process.argv.includes('--hidden') || 
                           process.argv.includes('--autostart') || 
                           Boolean(app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAtLogin);
 
+  // 開機競態補救：若啟動時 DB 初始化失敗（前一次實例未釋放鎖），這裡帶重試重建
+  if (!isDatabaseReady()) {
+    console.log('[Startup] 資料庫尚未就緒，開始帶重試的後續初始化...');
+    const healed = await ensureDatabase(dbPath);
+    console.log(healed ? '[Startup] 資料庫就緒。' : '[Startup] 資料庫仍無法就緒，請稍後再試。');
+    if (healed) loadPortFromDb();
+  }
+
   createTray();
-  createMainWindow(isHiddenStartup);
 
   if (isHiddenStartup) {
-    console.log('[Startup] Launched in hidden background mode. Gateway server remains STOPPED.');
+    // 背景常駐：不建立視窗，只留 main process + 系統匣，程式數降到最少。
+    // 視窗改由托盤「開啟主畫面」/ 雙擊 / second-instance 延遲建立。
+    console.log('[Startup] Launched in hidden background mode. No window created (process-lite). Gateway server remains STOPPED.');
     gatewayState = GatewayState.STOPPED;
     updateTrayMenu();
   } else {
     console.log('[Startup] Launched in normal mode. Starting Gateway server...');
+    ensureMainWindow();
     startGatewayServer().catch((err) => {
       console.error('[Startup] Failed to start gateway:', err.message);
     });
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow(false);
-    }
+    ensureMainWindow();
   });
+}).catch((err) => {
+  console.error('[Startup] 應用程式啟動時發生未捕獲異常：', err);
 });
 
 app.on('window-all-closed', () => {
