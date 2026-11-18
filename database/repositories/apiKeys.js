@@ -14,9 +14,18 @@ function ensureCacheLoaded() {
 }
 
 function refreshCache() {
+  let db = null;
   try {
-    const db = getDb();
-    if (!db) return;
+    db = getDb();
+  } catch (_) {
+    isCacheLoaded = false;
+    return;
+  }
+  if (!db) {
+    isCacheLoaded = false;
+    return;
+  }
+  try {
     const rows = db.prepare("SELECT id, key_value, status FROM api_keys ORDER BY id DESC").all();
     cachedKeys.clear();
     for (const row of rows) {
@@ -27,8 +36,9 @@ function refreshCache() {
       });
     }
     isCacheLoaded = true;
-  } catch (_) {
-    // ignore
+  } catch (err) {
+    isCacheLoaded = false;
+    console.error('[apiKeys] Failed to refresh cache:', err.message);
   }
 }
 

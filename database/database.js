@@ -67,11 +67,11 @@ function initDatabase(dbPath, options = {}) {
   setDb(db);
 
   try {
-    // 1. 配置 SQLite 效能與硬體保護 PRAGMA
+    // 1. 配置 SQLite 效能與硬體保護 PRAGMA（busy_timeout 必須先於 journal_mode = WAL，避免瞬時鎖定直接失敗）
     db.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
-      PRAGMA busy_timeout = 5000;
       PRAGMA temp_store = MEMORY;
       PRAGMA cache_size = -16384;
     `);

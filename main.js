@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, clipboard, Notification: ElectronNotification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 // 解決 Windows 上 Electron 視窗拖曳卡頓與 GPU 相關的黑屏/閃爍問題
 app.commandLine.appendSwitch('disable-gpu-sandbox');
@@ -308,8 +309,26 @@ async function restartApp() {
     } catch (_) {}
   }
   closeDatabase();
-  app.relaunch();
+  const relaunchArgs = process.argv.slice(1).filter(
+    (arg) => arg !== '--hidden' && arg !== '--autostart'
+  );
+  if (!relaunchArgs.includes('--relaunch')) {
+    relaunchArgs.push('--relaunch');
+  }
+  app.releaseSingleInstanceLock();
+  app.relaunch({ args: relaunchArgs });
   app.exit(0);
+}
+
+// 清理舊版 installer.nsh 寫入的重複 Windows 開機啟動機碼，避免開機同時拉起多個實例
+function cleanupDuplicateAutoStartRegistry() {
+  if (process.platform !== 'win32') return;
+  const runKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+  for (const duplicateName of ['NvidiaGateway', 'nvidia-gateway-app']) {
+    execFile('reg.exe', ['delete', runKey, '/v', duplicateName, '/f'], { windowsHide: true }, () => {
+      // 機碼不存在時略過
+    });
+  }
 }
 
 // Windows 開機自動啟動設定
@@ -501,6 +520,11 @@ function updateTrayMenu() {
           const win = ensureMainWindow();
           win.show();
           win.focus();
+          if (gatewayState === GatewayState.STOPPED || gatewayState === GatewayState.ERROR) {
+            startGatewayServer().catch((err) => {
+              console.error('[Tray] Failed to start gateway:', err.message);
+            });
+          }
         } 
       },
       { type: 'separator' },
@@ -579,6 +603,11 @@ function createTray() {
     const win = ensureMainWindow();
     win.show();
     win.focus();
+    if (gatewayState === GatewayState.STOPPED || gatewayState === GatewayState.ERROR) {
+      startGatewayServer().catch((err) => {
+        console.error('[Tray] Failed to start gateway:', err.message);
+      });
+    }
   });
 }
 
@@ -593,6 +622,11 @@ app.on('second-instance', () => {
     const win = ensureMainWindow();
     win.show();
     win.focus();
+  }
+  if (gatewayState === GatewayState.STOPPED || gatewayState === GatewayState.ERROR) {
+    startGatewayServer().catch((err) => {
+      console.error('[SecondInstance] Failed to start gateway:', err.message);
+    });
   }
 });
 
@@ -688,10 +722,14 @@ ipcMain.on('send-notification', (event, { title, body }) => {
 // App 生命週期
 app.whenReady().then(async () => {
   loadPortFromDb();
+  cleanupDuplicateAutoStartRegistry();
 
-  const isHiddenStartup = process.argv.includes('--hidden') || 
-                          process.argv.includes('--autostart') || 
-                          Boolean(app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAtLogin);
+  const isRelaunch = process.argv.includes('--relaunch');
+  const isHiddenStartup = !isRelaunch && (
+    process.argv.includes('--hidden') ||
+    process.argv.includes('--autostart') ||
+    Boolean(app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAtLogin)
+  );
 
   // 開機競態補救：若啟動時 DB 初始化失敗（前一次實例未釋放鎖），這裡帶重試重建
   if (!isDatabaseReady()) {
@@ -704,18 +742,17 @@ app.whenReady().then(async () => {
   createTray();
 
   if (isHiddenStartup) {
-    // 背景常駐：不建立視窗，只留 main process + 系統匣，程式數降到最少。
+    // 背景常駐：不建立視窗，只留 main process + 系統匣，並正常啟動 Gateway 與資料庫連線。
     // 視窗改由托盤「開啟主畫面」/ 雙擊 / second-instance 延遲建立。
-    console.log('[Startup] Launched in hidden background mode. No window created (process-lite). Gateway server remains STOPPED.');
-    gatewayState = GatewayState.STOPPED;
-    updateTrayMenu();
+    console.log('[Startup] Launched in hidden background mode. No window created (process-lite). Starting Gateway server...');
   } else {
     console.log('[Startup] Launched in normal mode. Starting Gateway server...');
     ensureMainWindow();
-    startGatewayServer().catch((err) => {
-      console.error('[Startup] Failed to start gateway:', err.message);
-    });
   }
+
+  startGatewayServer().catch((err) => {
+    console.error('[Startup] Failed to start gateway:', err.message);
+  });
 
   app.on('activate', () => {
     ensureMainWindow();

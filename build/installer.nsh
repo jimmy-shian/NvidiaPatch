@@ -109,15 +109,15 @@
   ${EndIf}
   System::Call 'Shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
 
+  # 先清除舊版寫入的重複開機啟動機碼，統一改由 APP_ID 單一機碼管理
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_FILENAME}"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "nvidia-gateway-app"
+
   # 處理開機自動啟動 (登入註冊表) 設定
   ${If} $Option_AutoStartOnBoot == "1"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_ID}" '"$appExe" --hidden'
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_FILENAME}" '"$appExe" --hidden'
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "nvidia-gateway-app" '"$appExe" --hidden'
   ${Else}
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_ID}"
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_FILENAME}"
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "nvidia-gateway-app"
   ${EndIf}
 !macroend
 

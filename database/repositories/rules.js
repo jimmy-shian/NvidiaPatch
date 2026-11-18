@@ -3,13 +3,23 @@ const { getDb } = require('../connection');
 let cachedRules = null;
 
 function refreshCache() {
+  let db = null;
   try {
-    const db = getDb();
-    if (!db) return;
+    db = getDb();
+  } catch (_) {
+    cachedRules = null;
+    return;
+  }
+  if (!db) {
+    cachedRules = null;
+    return;
+  }
+  try {
     const rows = db.prepare("SELECT * FROM rules ORDER BY is_preset DESC, id DESC").all();
     cachedRules = rows || [];
-  } catch (_) {
-    // ignore
+  } catch (err) {
+    cachedRules = null;
+    console.error('[rules] Failed to refresh cache:', err.message);
   }
 }
 

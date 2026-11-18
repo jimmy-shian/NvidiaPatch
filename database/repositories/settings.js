@@ -30,13 +30,23 @@ function parseMetadataRows(rows) {
 }
 
 function refreshCache() {
+  let db = null;
   try {
-    const db = getDb();
-    if (!db) return;
+    db = getDb();
+  } catch (_) {
+    cachedSettings = null;
+    return;
+  }
+  if (!db) {
+    cachedSettings = null;
+    return;
+  }
+  try {
     const rows = db.prepare("SELECT key, value FROM metadata").all();
     cachedSettings = parseMetadataRows(rows);
-  } catch (_) {
-    // fallback if db not ready
+  } catch (err) {
+    cachedSettings = null;
+    console.error('[settings] Failed to refresh cache:', err.message);
   }
 }
 

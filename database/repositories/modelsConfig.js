@@ -29,10 +29,18 @@ function ensureCacheLoaded() {
 }
 
 function refreshCache() {
+  let db = null;
   try {
-    const db = getDb();
-    if (!db) return;
-
+    db = getDb();
+  } catch (_) {
+    isModelsCacheLoaded = false;
+    return;
+  }
+  if (!db) {
+    isModelsCacheLoaded = false;
+    return;
+  }
+  try {
     // 1. 載入 active_model_group
     try {
       const row = db.prepare("SELECT value FROM metadata WHERE key = 'active_model_group'").get();
@@ -69,8 +77,9 @@ function refreshCache() {
     };
 
     isModelsCacheLoaded = true;
-  } catch (_) {
-    // ignore
+  } catch (err) {
+    isModelsCacheLoaded = false;
+    console.error('[modelsConfig] Failed to refresh cache:', err.message);
   }
 }
 

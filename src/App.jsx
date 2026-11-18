@@ -58,6 +58,8 @@ export default function App() {
   const [apiError, setApiError] = useState('');
   const [gatewayHealth, setGatewayHealth] = useState(null);
   const [gatewayState, setGatewayState] = useState('STOPPED');
+  const gatewayStateRef = useRef(gatewayState);
+  gatewayStateRef.current = gatewayState;
   const [isOperatingGateway, setIsOperatingGateway] = useState(false);
   const [restartNotice, setRestartNotice] = useState(null);
   const restartNoticeTimerRef = useRef(null);
@@ -109,10 +111,15 @@ export default function App() {
 
   const fetchDataPromiseRef = useRef(null);
   const lastFetchStartedAtRef = useRef(0);
+  const pendingForceFetchRef = useRef(false);
+  const retryFetchTimerRef = useRef(null);
   const FETCH_DATA_DEDUPE_MS = 1500;
 
   const fetchData = useCallback(async (options = {}) => {
     if (fetchDataPromiseRef.current) {
+      if (options.force) {
+        pendingForceFetchRef.current = true;
+      }
       return fetchDataPromiseRef.current;
     }
 
@@ -123,14 +130,20 @@ export default function App() {
     lastFetchStartedAtRef.current = now;
 
     const runFetch = async () => {
+      let hasCriticalFailure = false;
+      const trackError = (label) => (err) => {
+        hasCriticalFailure = true;
+        console.error(`${label}:`, err);
+      };
+
       try {
         const promises = [
-          api.fetchKeys().then(data => keysState.setKeys(data || [])).catch(err => console.error('keys:', err)),
-          api.fetchModels().then(data => modelsState.setModels(data || [])).catch(err => console.error('models:', err)),
+          api.fetchKeys().then(data => keysState.setKeys(data || [])).catch(trackError('keys')),
+          api.fetchModels().then(data => modelsState.setModels(data || [])).catch(trackError('models')),
           api.fetchModelGroups().then(data => {
             modelsState.setActiveModelGroup(data.activeGroup || 1);
             modelsState.setModelGroups(data.groups || []);
-          }).catch(err => console.error('modelGroups:', err)),
+          }).catch(trackError('modelGroups')),
           api.fetchAvailableModels().then(data => {
             modelsState.setAvailableModels(data.models || []);
             modelsState.setLastSyncTime(data.lastSyncTime || null);
@@ -139,29 +152,48 @@ export default function App() {
             modelsState.setLastParsedModelCount(data.parsedCount ?? null);
             modelsState.setLastSavedModelCount(data.savedCount ?? null);
             if (data.models?.length > 0) setSelectedTestModel(prev => prev || data.models[0].id);
-          }).catch(err => console.error('availModels:', err)),
-          api.fetchRules().then(data => rulesState.setRules(data || [])).catch(err => console.error('rules:', err)),
-          api.fetchSettings().then(data => settingsState.setSettingsData(data)).catch(err => console.error('settings:', err)),
+          }).catch(trackError('availModels')),
+          api.fetchRules().then(data => rulesState.setRules(data || [])).catch(trackError('rules')),
+          api.fetchSettings().then(data => settingsState.setSettingsData(data)).catch(trackError('settings')),
           api.fetchTokenUsage().then(data => statsState.setTokenUsageData(data)).catch(err => console.error('tokenUsage:', err)),
           api.fetchLogs().then(data => logsState.setLogs(data || [])).catch(err => console.error('logs:', err)),
-          api.fetchStats().then(data => statsState.setStats(data)).catch(err => console.error('stats:', err)),
+          api.fetchStats().then(data => statsState.setStats(data)).catch(trackError('stats')),
         ];
         await Promise.all(promises);
-        setApiError('');
+
+        if (hasCriticalFailure && gatewayStateRef.current === 'RUNNING') {
+          setApiError('Unable to connect to Gateway.');
+          if (!options.isRetry && !retryFetchTimerRef.current) {
+            retryFetchTimerRef.current = setTimeout(() => {
+              retryFetchTimerRef.current = null;
+              if (gatewayStateRef.current === 'RUNNING') {
+                fetchData({ force: true, isRetry: true });
+              }
+            }, 1000);
+          }
+        } else {
+          setApiError('');
+        }
       } catch (err) {
-        if (gatewayState === 'RUNNING') {
+        if (gatewayStateRef.current === 'RUNNING') {
           setApiError('Unable to connect to Gateway.');
         } else {
           setApiError('');
         }
       } finally {
         fetchDataPromiseRef.current = null;
+        if (pendingForceFetchRef.current) {
+          pendingForceFetchRef.current = false;
+          if (gatewayStateRef.current === 'RUNNING' || !window.electronAPI) {
+            fetchData({ force: true });
+          }
+        }
       }
     };
 
     fetchDataPromiseRef.current = runFetch();
     return fetchDataPromiseRef.current;
-  }, [api, setSelectedTestModel, gatewayState]);
+  }, [api, setSelectedTestModel]);
 
 
   // Dedicated modular state hooks
@@ -182,14 +214,15 @@ export default function App() {
   useEffect(() => {
     return () => {
       if (restartNoticeTimerRef.current) clearTimeout(restartNoticeTimerRef.current);
+      if (retryFetchTimerRef.current) clearTimeout(retryFetchTimerRef.current);
     };
   }, []);
 
   useEffect(() => {
-    if (adminToken) {
+    if (adminToken && (gatewayState === 'RUNNING' || !window.electronAPI)) {
       fetchData();
     }
-  }, [adminToken, fetchData]);
+  }, [adminToken, gatewayState, fetchData]);
 
   useEffect(() => {
     if (activeTab === 'keys') {
@@ -221,6 +254,7 @@ export default function App() {
     if (window.electronAPI.getGatewayState) {
       window.electronAPI.getGatewayState().then(res => {
         if (res && res.state) {
+          gatewayStateRef.current = res.state;
           setGatewayState(res.state);
           if (res.state === 'RUNNING') {
             checkGatewayHealth();
@@ -234,6 +268,7 @@ export default function App() {
     if (window.electronAPI.onGatewayStateChanged) {
       unsubs.push(window.electronAPI.onGatewayStateChanged((data) => {
         if (data && data.state) {
+          gatewayStateRef.current = data.state;
           setGatewayState(data.state);
           if (data.state === 'RUNNING') {
             checkGatewayHealth();
@@ -248,6 +283,7 @@ export default function App() {
 
     if (window.electronAPI.onGatewayRestarted) {
       unsubs.push(window.electronAPI.onGatewayRestarted(() => {
+        gatewayStateRef.current = 'RUNNING';
         setGatewayState('RUNNING');
         checkGatewayHealth();
         fetchData({ force: true });
@@ -279,7 +315,7 @@ export default function App() {
     },
     onTokenUsage: () => { statsState.loadTokenUsage(); },
     onHealth: (data) => { setGatewayHealth(data); },
-    onReconnect: () => { fetchData(); }
+    onReconnect: () => { fetchData({ force: true }); }
   });
 
   useEffect(() => {

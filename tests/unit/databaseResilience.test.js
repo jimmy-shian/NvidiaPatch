@@ -86,4 +86,25 @@ describe('Database resilience (initDatabase / ensureDatabase)', () => {
     // 路徑恢復後可立即自癒
     expect(await ensureDatabase(TEST_DB)).toBe(true);
   }, 20000);
+
+  it('should configure busy_timeout before WAL journal_mode and allow repository cache recovery after db reset', () => {
+    const dbSrc = fs.readFileSync(path.join(__dirname, '../../database/database.js'), 'utf8');
+    const busyIdx = dbSrc.indexOf('PRAGMA busy_timeout');
+    const walIdx = dbSrc.indexOf('PRAGMA journal_mode = WAL');
+    expect(busyIdx).toBeGreaterThan(-1);
+    expect(walIdx).toBeGreaterThan(-1);
+    expect(busyIdx).toBeLessThan(walIdx);
+
+    // 關閉資料庫後 refreshCache 不應永久鎖死為空快取，重連後應恢復資料
+    initDatabase(TEST_DB);
+    rootDb.rules.add('Resilience Cache Rule', 'test content');
+    closeDatabase();
+    rootDb.apiKeys.refreshCache();
+    rootDb.modelsConfig.refreshCache();
+    rootDb.rules.refreshCache();
+    rootDb.settings.refreshCache();
+
+    initDatabase(TEST_DB);
+    expect(rootDb.rules.getAll().some(r => r.title === 'Resilience Cache Rule')).toBe(true);
+  });
 });
