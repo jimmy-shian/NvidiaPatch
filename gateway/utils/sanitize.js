@@ -21,10 +21,143 @@ const NVIDIA_UNSUPPORTED_PARAMS = [
   'logprobs',
   'top_logprobs',
   'seed',
-  'stop',
-  'stream_options',
   'ignore_eos'
 ];
+
+function hasNonEmptyMessageContent(content) {
+  if (typeof content === 'string') {
+    return content.trim().length > 0;
+  }
+  if (Array.isArray(content)) {
+    return content.length > 0;
+  }
+  return false;
+}
+
+function toContentParts(content) {
+  if (typeof content === 'string') {
+    return content ? [{ type: 'text', text: content }] : [];
+  }
+  if (Array.isArray(content)) {
+    return content.slice();
+  }
+  if (content == null) return [];
+  return [{ type: 'text', text: String(content) }];
+}
+
+function mergeMessageContents(baseContent, extraContent, separator = '\n\n---\n\n') {
+  if (!hasNonEmptyMessageContent(extraContent)) return baseContent;
+  if (!hasNonEmptyMessageContent(baseContent)) return extraContent;
+  if (typeof baseContent === 'string' && typeof extraContent === 'string') {
+    return `${baseContent}${separator}${extraContent}`;
+  }
+  return [
+    ...toContentParts(baseContent),
+    { type: 'text', text: separator },
+    ...toContentParts(extraContent)
+  ];
+}
+
+function prependSystemNoticePrefix(content) {
+  const prefix = '[System Notice]\n';
+  if (typeof content === 'string') {
+    if (!content) return '[System Notice]';
+    return content.startsWith('[System Notice]') ? content : `${prefix}${content}`;
+  }
+  if (Array.isArray(content)) {
+    return [{ type: 'text', text: prefix }, ...content];
+  }
+  return content == null ? '[System Notice]' : `${prefix}${String(content)}`;
+}
+
+/**
+ * 正規化對話訊息結構以相容 NVIDIA NIM vLLM Jinja 模板：
+ *  1. 開頭連續 system 合併為單一 system 訊息；非開頭的中段 system 轉為 user（加 [System Notice] 前綴）
+ *  2. 清理含 tool_calls 且 content 為空字串的 assistant 訊息（轉為 null）
+ *  3. NVIDIA 端點移除歷史 assistant 訊息上的 reasoning_content / reasoning / thought / thinking 與 refusal: null
+ *  4. 剔除歷史中既無有效 content 也無 tool_calls / function_call 的空白 assistant 訊息（保留最後一則 prefill）
+ */
+function normalizeChatMessages(messages, { nvidiaEndpoint = false } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+  const systemNormalized = [];
+  let seenNonSystem = false;
+
+  for (const rawMsg of messages) {
+    if (!rawMsg || typeof rawMsg !== 'object') {
+      seenNonSystem = true;
+      systemNormalized.push(rawMsg);
+      continue;
+    }
+
+    const msg = { ...rawMsg };
+    if (msg.role === 'system') {
+      if (!seenNonSystem) {
+        if (systemNormalized.length > 0 && systemNormalized[0]?.role === 'system') {
+          systemNormalized[0] = {
+            ...systemNormalized[0],
+            content: mergeMessageContents(systemNormalized[0].content, msg.content)
+          };
+        } else {
+          systemNormalized.push(msg);
+        }
+      } else {
+        systemNormalized.push({
+          ...msg,
+          role: 'user',
+          content: prependSystemNoticePrefix(msg.content)
+        });
+      }
+    } else {
+      seenNonSystem = true;
+      systemNormalized.push(msg);
+    }
+  }
+
+  const finalMessages = [];
+  for (let i = 0; i < systemNormalized.length; i += 1) {
+    const item = systemNormalized[i];
+    if (!item || typeof item !== 'object') {
+      finalMessages.push(item);
+      continue;
+    }
+
+    const msg = { ...item };
+    if (msg.role === 'assistant') {
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length === 0) {
+        delete msg.tool_calls;
+      }
+
+      const hasToolCalls = Boolean(
+        (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) ||
+        msg.function_call
+      );
+
+      if (hasToolCalls && msg.content === '') {
+        msg.content = null;
+      }
+
+      if (nvidiaEndpoint) {
+        delete msg.reasoning_content;
+        delete msg.reasoning;
+        delete msg.thought;
+        delete msg.thinking;
+        if (msg.refusal === null) {
+          delete msg.refusal;
+        }
+      }
+
+      const isLastMessage = i === systemNormalized.length - 1;
+      if (!hasToolCalls && !hasNonEmptyMessageContent(msg.content) && !isLastMessage) {
+        continue;
+      }
+    }
+
+    finalMessages.push(msg);
+  }
+
+  return finalMessages;
+}
 
 function sanitizeChatCompletionBody(body, options = {}) {
   if (!body || typeof body !== 'object') return body;
@@ -82,38 +215,53 @@ function sanitizeChatCompletionBody(body, options = {}) {
         delete sanitized[key];
       }
     }
+    if (sanitized.max_completion_tokens !== undefined) {
+      if (sanitized.max_tokens === undefined) {
+        sanitized.max_tokens = sanitized.max_completion_tokens;
+      }
+      delete sanitized.max_completion_tokens;
+    }
+    if (Array.isArray(sanitized.tools) && sanitized.tools.length === 0) {
+      delete sanitized.tools;
+      delete sanitized.tool_choice;
+      delete sanitized.parallel_tool_calls;
+    }
   }
 
   if (sanitized.messages && Array.isArray(sanitized.messages)) {
-    // 1. 過濾假串流字元 \uE000（支援 string 與 multimodal Array 格式）
+    // 1. 過濾假串流字元 \uE000（支援 string 與 multimodal Array 格式），並將 developer 轉為 system
     // 2. 注入預設 skills 到 system message
-    sanitized.messages = injectDefaultSkills(
-      sanitized.messages.map((msg) => {
-        if (msg && typeof msg === 'object') {
-          const cleaned = { ...msg };
-          if (typeof cleaned.content === 'string' && /\uE000/.test(cleaned.content)) {
-            cleaned.content = stripFakeStreamChars(cleaned.content);
-          } else if (Array.isArray(cleaned.content)) {
-            // Multimodal content array (e.g. OpenAI / NVIDIA Vision format: [{ type: "text", text: "..." }, { type: "image_url", image_url: { url: "..." } }])
-            cleaned.content = cleaned.content.map(part => {
-              if (part && typeof part === 'object') {
-                const cleanPart = { ...part };
-                if (typeof cleanPart.text === 'string' && /\uE000/.test(cleanPart.text)) {
-                  cleanPart.text = stripFakeStreamChars(cleanPart.text);
-                }
-                return cleanPart;
-              }
-              return part;
-            });
-          }
-          if (typeof cleaned.reasoning_content === 'string' && /\uE000/.test(cleaned.reasoning_content)) {
-            cleaned.reasoning_content = stripFakeStreamChars(cleaned.reasoning_content);
-          }
-          return cleaned;
+    // 3. 正規化多筆/中段 system 與歷史 assistant 訊息
+    const normalizedInputMessages = sanitized.messages.map((msg) => {
+      if (msg && typeof msg === 'object') {
+        const cleaned = { ...msg };
+        if (cleaned.role === 'developer') {
+          cleaned.role = 'system';
         }
-        return msg;
-      })
-    ).map(msg => {
+        if (typeof cleaned.content === 'string' && /\uE000/.test(cleaned.content)) {
+          cleaned.content = stripFakeStreamChars(cleaned.content);
+        } else if (Array.isArray(cleaned.content)) {
+          // Multimodal content array (e.g. OpenAI / NVIDIA Vision format: [{ type: "text", text: "..." }, { type: "image_url", image_url: { url: "..." } }])
+          cleaned.content = cleaned.content.map(part => {
+            if (part && typeof part === 'object') {
+              const cleanPart = { ...part };
+              if (typeof cleanPart.text === 'string' && /\uE000/.test(cleanPart.text)) {
+                cleanPart.text = stripFakeStreamChars(cleanPart.text);
+              }
+              return cleanPart;
+            }
+            return part;
+          });
+        }
+        if (typeof cleaned.reasoning_content === 'string' && /\uE000/.test(cleaned.reasoning_content)) {
+          cleaned.reasoning_content = stripFakeStreamChars(cleaned.reasoning_content);
+        }
+        return cleaned;
+      }
+      return msg;
+    });
+
+    const injectedMessages = injectDefaultSkills(normalizedInputMessages).map(msg => {
       if (msg && typeof msg === 'object') {
         const cleanMsg = {};
         const standardMsgKeys = ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'function_call', 'refusal', 'reasoning_content', 'audio'];
@@ -131,6 +279,10 @@ function sanitizeChatCompletionBody(body, options = {}) {
         return cleanMsg;
       }
       return msg;
+    });
+
+    sanitized.messages = normalizeChatMessages(injectedMessages, {
+      nvidiaEndpoint: Boolean(options && options.nvidiaEndpoint)
     });
   }
 
@@ -189,5 +341,6 @@ function applyGlmReasoningConversion(body, modelId) {
 
 module.exports = {
   sanitizeChatCompletionBody,
-  applyGlmReasoningConversion
+  applyGlmReasoningConversion,
+  normalizeChatMessages
 };

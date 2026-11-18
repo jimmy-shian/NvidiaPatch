@@ -481,7 +481,9 @@ describe('Upstream Request & Dispatch Mock Tests', () => {
     expect(sanitized.temperature).toBe(0.5);
     expect(sanitized.top_p).toBe(0.9);
     expect(sanitized.max_tokens).toBe(1024);
-    for (const key of ['frequency_penalty', 'presence_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'seed', 'stop', 'stream_options', 'ignore_eos']) {
+    expect(sanitized.stop).toEqual(['END']);
+    expect(sanitized.stream_options).toEqual({ include_usage: true });
+    for (const key of ['frequency_penalty', 'presence_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'seed', 'ignore_eos']) {
       expect(sanitized[key]).toBeUndefined();
     }
     // reasoning_effort 保留到 sendSingleRequest 依模型轉換或移除
@@ -492,6 +494,60 @@ describe('Upstream Request & Dispatch Mock Tests', () => {
     expect(untouched.seed).toBe(42);
     expect(untouched.reasoning_effort).toBe('high');
     expect(untouched.ignore_eos).toBe(false);
+  });
+
+  it('should normalize developer/system messages, empty tools, max_completion_tokens and historical assistant messages for NVIDIA NIM', () => {
+    const { sanitizeChatCompletionBody } = require('../../gateway/utils/sanitize');
+
+    const payload = {
+      model: 'mistralai/mistral-large-4-1t-a52b',
+      max_completion_tokens: 4096,
+      tools: [],
+      tool_choice: 'auto',
+      parallel_tool_calls: true,
+      messages: [
+        { role: 'developer', content: 'Follow rules.' },
+        { role: 'system', content: 'Extra system prompt.' },
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: '   ' },
+        {
+          role: 'assistant',
+          content: '',
+          reasoning_content: 'hidden chain <unclosed>',
+          refusal: null,
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'ls', arguments: '{}' } }]
+        },
+        { role: 'tool', tool_call_id: 'c1', content: 'file.js' },
+        { role: 'system', content: 'Tool catalog updated.' }
+      ]
+    };
+
+    const sanitized = sanitizeChatCompletionBody(payload, { nvidiaEndpoint: true });
+    expect(sanitized.max_tokens).toBe(4096);
+    expect(sanitized.max_completion_tokens).toBeUndefined();
+    expect(sanitized.tools).toBeUndefined();
+    expect(sanitized.tool_choice).toBeUndefined();
+    expect(sanitized.parallel_tool_calls).toBeUndefined();
+
+    // 開頭 developer + system 應合併為單一 system（含預設 skill 注入）
+    expect(sanitized.messages[0].role).toBe('system');
+    expect(sanitized.messages[0].content).toContain('Follow rules.');
+    expect(sanitized.messages[0].content).toContain('Extra system prompt.');
+
+    // 歷史空白 assistant 應被移除
+    expect(sanitized.messages.some(m => m.role === 'assistant' && m.content === '   ')).toBe(false);
+
+    // 含 tool_calls 且 content 為 "" 的 assistant 應轉為 null 並移除 reasoning_content / refusal: null
+    const toolAssistant = sanitized.messages.find(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolAssistant).toBeDefined();
+    expect(toolAssistant.content).toBeNull();
+    expect(toolAssistant.reasoning_content).toBeUndefined();
+    expect(toolAssistant.refusal).toBeUndefined();
+
+    // 中段 system 應轉為 user 且加 [System Notice] 前綴
+    const midSystem = sanitized.messages[sanitized.messages.length - 1];
+    expect(midSystem.role).toBe('user');
+    expect(midSystem.content).toBe('[System Notice]\nTool catalog updated.');
   });
 
   it('should convert GLM reasoning params to chat_template_kwargs and drop reasoning_effort for other models', () => {
@@ -738,5 +794,130 @@ describe('Upstream Request & Dispatch Mock Tests', () => {
     expect(resolveRetryLimits({ MAX_ROUNDS_PER_MODEL: 99 }).MAX_ROUNDS_PER_MODEL).toBe(10);
     expect(resolveRetryLimits({ MAX_ROUNDS_PER_MODEL: 4 }).MAX_ROUNDS_PER_MODEL).toBe(4);
     expect(resolveRetryLimits({}).MAX_EMPTY_RESPONSE_RETRIES).toBe(3);
+  });
+
+  it('should treat reasoning_content-only stream without formal content or tool_calls as empty response retry', async () => {
+    const { validateSuccessfulResponse } = require('../../gateway/chat/upstream/responseValidator');
+
+    const sseChunks = [
+      'data: {"id":"chatcmpl-reason-only","object":"chat.completion.chunk","created":123,"model":"z-ai/glm-5.3-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Thinking internally only..."},"finish_reason":null}]}\n\n',
+      'data: {"id":"chatcmpl-reason-only","object":"chat.completion.chunk","created":123,"model":"z-ai/glm-5.3-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n'
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of sseChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+
+    const mockRes = createMockRes();
+    const context = createChatContext({
+      req: { body: { model: 'z-ai/glm-5.3-flash', stream: true } },
+      res: mockRes,
+      originalBody: { model: 'z-ai/glm-5.3-flash', stream: true },
+      activeConfig: { STREAM_READ_TIMEOUT_MS: 5000, ENABLE_CONTENT_VALIDATION: true }
+    });
+
+    const result = await validateSuccessfulResponse({
+      context,
+      model: { model_id: 'z-ai/glm-5.3-flash' },
+      selectedKey: { id: 1 },
+      result: { response: { body: stream } }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.emptyResponse).toBe(true);
+    expect(result.forceRetrySameModelOnEmpty).toBe(true);
+  });
+
+  it('should not fail tag validation when unclosed tags appear only inside reasoning_content', async () => {
+    const { validateSuccessfulResponse } = require('../../gateway/chat/upstream/responseValidator');
+
+    const sseChunks = [
+      'data: {"id":"chatcmpl-reason-tag","object":"chat.completion.chunk","created":123,"model":"z-ai/glm-5.3-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Maybe <thinking> draft without closing tag"},"finish_reason":null}]}\n\n',
+      'data: {"id":"chatcmpl-reason-tag","object":"chat.completion.chunk","created":123,"model":"z-ai/glm-5.3-flash","choices":[{"index":0,"delta":{"content":"Final clean answer."},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n'
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of sseChunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      }
+    });
+
+    const mockRes = createMockRes();
+    const context = createChatContext({
+      req: { body: { model: 'z-ai/glm-5.3-flash', stream: true } },
+      res: mockRes,
+      originalBody: { model: 'z-ai/glm-5.3-flash', stream: true },
+      activeConfig: { STREAM_READ_TIMEOUT_MS: 5000, ENABLE_CONTENT_VALIDATION: true }
+    });
+
+    const result = await validateSuccessfulResponse({
+      context,
+      model: { model_id: 'z-ai/glm-5.3-flash' },
+      selectedKey: { id: 1 },
+      result: { response: { body: stream } }
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.streamContent).toContain('Final clean answer.');
+  });
+
+  it('should reject empty passthrough stream as emptyResponse instead of returning HTTP 200 empty', async () => {
+    const { validateSuccessfulResponse } = require('../../gateway/chat/upstream/responseValidator');
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+        controller.close();
+      }
+    });
+
+    const mockRes = createMockRes();
+    const context = createChatContext({
+      req: { body: { model: 'z-ai/glm-5.3-flash', stream: true } },
+      res: mockRes,
+      originalBody: { model: 'z-ai/glm-5.3-flash', stream: true },
+      activeConfig: { STREAM_READ_TIMEOUT_MS: 5000, ENABLE_CONTENT_VALIDATION: false }
+    });
+
+    const result = await validateSuccessfulResponse({
+      context,
+      model: { model_id: 'z-ai/glm-5.3-flash' },
+      selectedKey: { id: 1 },
+      result: { passthrough: true, response: { body: stream } }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.emptyResponse).toBe(true);
+    expect(result.forceRetrySameModelOnEmpty).toBe(true);
+  });
+
+  it('should synthesize finish_reason before trailing usage chunk when upstream stream omits finish_reason', () => {
+    const { buildSafeSsePayload } = require('../../gateway/chat/response/ssePayloadBuilder');
+
+    const sseLines = [
+      'data: {"id":"chatcmpl-nofinish","object":"chat.completion.chunk","created":123,"model":"z-ai/glm-5.3-flash","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}',
+      'data: {"id":"chatcmpl-nofinish","object":"chat.completion.chunk","created":123,"model":"z-ai/glm-5.3-flash","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}'
+    ];
+
+    const payload = buildSafeSsePayload({
+      requestId: 'test-nofinish',
+      sseLines,
+      clientModelId: 'patcher-main'
+    });
+
+    expect(payload).toContain('"finish_reason":"stop"');
+    expect(payload).toContain('"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}');
+    expect(payload.indexOf('"finish_reason":"stop"')).toBeLessThan(payload.indexOf('"usage":'));
+    expect(payload.trim().endsWith('data: [DONE]')).toBe(true);
   });
 });

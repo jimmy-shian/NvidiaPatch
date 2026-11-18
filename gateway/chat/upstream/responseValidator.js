@@ -42,7 +42,7 @@ function readStreamChunkWithTimeout(reader, timeoutMs, timeoutMessage) {
   });
 }
 
-function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMetaRef = { dataChunkCount: 0, lastError: null, refusal: null }) {
+function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasToolCallsRef, streamMetaRef = { dataChunkCount: 0, lastError: null, refusal: null, answerContent: '', reasoningContent: '' }) {
   const cleanLine = String(rawLine || '').endsWith('\r')
     ? String(rawLine || '').slice(0, -1)
     : String(rawLine || '');
@@ -55,7 +55,11 @@ function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasT
   try {
     const dataStr = trimmed.slice(5).trim();
     const chunk = JSON.parse(dataStr);
-    if (streamMetaRef) streamMetaRef.dataChunkCount = (streamMetaRef.dataChunkCount || 0) + 1;
+    if (streamMetaRef) {
+      streamMetaRef.dataChunkCount = (streamMetaRef.dataChunkCount || 0) + 1;
+      if (typeof streamMetaRef.answerContent !== 'string') streamMetaRef.answerContent = '';
+      if (typeof streamMetaRef.reasoningContent !== 'string') streamMetaRef.reasoningContent = '';
+    }
 
     // 檢查上游是否在 SSE chunk 中夾帶錯誤資訊
     if (chunk?.error) {
@@ -104,43 +108,33 @@ function consumeSseLine(rawLine, sseLines, fullContentRef, finishReasonRef, hasT
       return chunk?.usage || null;
     }
 
-    // 支援多種可能欄位（含思考過程 reasoning / thinking / thought 等）
-    if (delta?.content) {
-      fullContentRef.value += delta.content;
-    }
-    if (delta?.reasoning_content) {
-      fullContentRef.value += delta.reasoning_content;
-    }
-    if (delta?.reasoning) {
-      fullContentRef.value += delta.reasoning;
-    }
-    if (delta?.thought) {
-      fullContentRef.value += delta.thought;
-    }
-    if (delta?.thinking) {
-      fullContentRef.value += delta.thinking;
-    }
-    if (msg?.content) {
-      fullContentRef.value += msg.content;
-    }
-    if (msg?.reasoning_content) {
-      fullContentRef.value += msg.reasoning_content;
-    }
-    if (msg?.reasoning) {
-      fullContentRef.value += msg.reasoning;
-    }
-    if (msg?.thought) {
-      fullContentRef.value += msg.thought;
-    }
-    if (msg?.thinking) {
-      fullContentRef.value += msg.thinking;
-    }
-    if (chunk?.choices?.[0]?.text) {
-      fullContentRef.value += chunk.choices[0].text;
-    }
-    if (chunk?.choices?.[0]?.content) {
-      fullContentRef.value += chunk.choices[0].content;
-    }
+    const appendAnswer = (val) => {
+      if (typeof val === 'string' && val.length > 0) {
+        fullContentRef.value += val;
+        if (streamMetaRef) streamMetaRef.answerContent += val;
+      }
+    };
+    const appendReasoning = (val) => {
+      if (typeof val === 'string' && val.length > 0) {
+        fullContentRef.value += val;
+        if (streamMetaRef) streamMetaRef.reasoningContent += val;
+      }
+    };
+
+    // 支援多種可能欄位，並將正式回答 (answerContent) 與思考過程 (reasoningContent) 分開累計
+    appendAnswer(delta?.content);
+    appendReasoning(delta?.reasoning_content);
+    appendReasoning(delta?.reasoning);
+    appendReasoning(delta?.thought);
+    appendReasoning(delta?.thinking);
+    appendAnswer(msg?.content);
+    appendReasoning(msg?.reasoning_content);
+    appendReasoning(msg?.reasoning);
+    appendReasoning(msg?.thought);
+    appendReasoning(msg?.thinking);
+    appendAnswer(chunk?.choices?.[0]?.text);
+    appendAnswer(chunk?.choices?.[0]?.content);
+
     return chunk?.usage || null;
   } catch (e) {
     return null;
@@ -166,7 +160,7 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
   const fullContentRef = { value: '' };
   const finishReasonRef = { value: null };
   const hasToolCallsRef = { value: false };
-  const streamMeta = { dataChunkCount: 0, lastError: null, refusal: null };
+  const streamMeta = { dataChunkCount: 0, lastError: null, refusal: null, answerContent: '', reasoningContent: '' };
   let streamUsage = null;
   let hasReceivedFirstChunk = false;
 
@@ -209,6 +203,8 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
     }
 
     const fullContent = fullContentRef.value;
+    const answerContent = streamMeta.answerContent || '';
+    const reasoningContent = streamMeta.reasoningContent || '';
     const hasToolCalls = hasToolCallsRef.value || finishReasonRef.value === 'tool_calls' || finishReasonRef.value === 'function_call';
 
     // 1. 檢查上游 SSE chunk 是否夾帶明確錯誤物件
@@ -245,11 +241,13 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸出長度截斷] 輸出因達到 max_tokens 上限被截斷（finish_reason="length"）` };
     }
 
-    // 4. 檢查空內容（若有 tool_calls 或 function_call 則為正常的工具調用，不判定為空內容）
-    if (!hasToolCalls && !String(fullContent || '').trim()) {
+    // 4. 檢查空內容（僅檢驗正式回覆 answerContent 或工具呼叫；只有 reasoning_content 無正式輸出也視為空回傳）
+    if (!hasToolCalls && !String(answerContent || '').trim()) {
       let emptyDetail = '';
       if (streamMeta.dataChunkCount === 0) {
         emptyDetail = `[API 端異常] 上游建立 HTTP 200 連線但未發送任何 Chunk（接收 0 個 Chunk）即結束連線`;
+      } else if (String(reasoningContent || '').trim()) {
+        emptyDetail = `[模型回傳為空] 上游僅輸出思考過程（reasoning_content）但未產出任何正式回覆內容（content）或工具呼叫（接收 ${streamMeta.dataChunkCount} 個 Chunk，finish_reason="${finishReasonRef.value || 'none'}"）`;
       } else if (finishReasonRef.value === 'stop') {
         emptyDetail = `[模型回傳為空] 上游完成推論（finish_reason="stop"，接收 ${streamMeta.dataChunkCount} 個 Chunk）但未輸出任何內容 Token（可能是輸入格式或 Prompt 導致模型無輸出）`;
       } else {
@@ -275,8 +273,9 @@ async function validateStreamResponse({ context, model, selectedKey, result }) {
       return { success: true, response: result.response, sseLines, streamContent: fullContent, usage: streamUsage };
     }
 
-    if (fullContent && fullContent.trim()) {
-      const validation = smartValidate(fullContent, { maxLength: 10000 });
+    // 標記結構校驗僅針對正式回覆 answerContent，避免思考草稿中的未閉合標記誤殺正常回應
+    if (answerContent && answerContent.trim()) {
+      const validation = smartValidate(answerContent, { maxLength: 10000 });
       if (!validation.valid) {
         const validationIssue = formatValidationIssue(validation);
         addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] 串流內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
@@ -349,7 +348,9 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       finishReason === 'tool_calls' ||
       finishReason === 'function_call'
     );
-    const contentToCheck = targetMsg?.content || targetMsg?.reasoning_content || targetMsg?.reasoning || targetMsg?.thought || targetMsg?.thinking || '';
+    const answerContent = typeof targetMsg?.content === 'string' ? targetMsg.content : '';
+    const reasoningContent = targetMsg?.reasoning_content || targetMsg?.reasoning || targetMsg?.thought || targetMsg?.thinking || '';
+    const contentToCheck = answerContent || reasoningContent || '';
 
     // 1. 檢查上游 JSON 或內容是否為伺服器錯誤結構
     if (isUpstreamErrorContent(json) || (contentToCheck && isUpstreamErrorContent(contentToCheck))) {
@@ -385,10 +386,12 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[輸出長度截斷] 輸出因達到 max_tokens 上限被截斷（finish_reason="length"）` };
     }
 
-    // 4. 檢查空內容（若有 tool_calls 或 function_call 則為正常工具調用，不判定為空內容）
-    if (!hasToolCalls && contentToCheck === '') {
+    // 4. 檢查空內容（僅檢驗正式回覆 answerContent 或工具呼叫；只有 reasoning_content 無正式輸出也視為空回傳）
+    if (!hasToolCalls && !String(answerContent || '').trim()) {
       let emptyDetail = '';
-      if (finishReason === 'stop') {
+      if (String(reasoningContent || '').trim()) {
+        emptyDetail = `[模型回傳為空] 上游僅輸出思考過程（reasoning_content）但未產出任何正式回覆內容（content）或工具呼叫（finish_reason="${finishReason || 'none'}"）`;
+      } else if (finishReason === 'stop') {
         emptyDetail = `[模型回傳為空] 上游模型完成推論（finish_reason="stop"）但 JSON 內容為空（可能是輸入格式或 Prompt 導致模型無輸出）`;
       } else {
         emptyDetail = `[模型回傳為空] 上游 JSON 內容為空（finish_reason="${finishReason || 'none'}"）`;
@@ -414,13 +417,15 @@ async function validateJsonResponse({ context, model, selectedKey, result }) {
       return { success: true, response: result.response, jsonData: json, usage };
     }
 
-    const validation = smartValidate(contentToCheck, { maxLength: 10000 });
-    if (!validation.valid) {
-      const validationIssue = formatValidationIssue(validation);
-      addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] JSON 內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
-      apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
-      stats.recordRequest(false, requestId);
-      return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[模型生成標記校驗失敗] ${validationIssue}` };
+    if (answerContent && answerContent.trim()) {
+      const validation = smartValidate(answerContent, { maxLength: 10000 });
+      if (!validation.valid) {
+        const validationIssue = formatValidationIssue(validation);
+        addLog('warning', `請求 #${requestId}：模型「${modelId}」[模型生成標記校驗失敗] JSON 內容包含異常或未閉合標記（${validationIssue}），判定為模型層級失敗，立即切換下一個模型。`);
+        apiKeys.recordFailure(selectedKey.id, `ContentValidation: ${validationIssue}`);
+        stats.recordRequest(false, requestId);
+        return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[模型生成標記校驗失敗] ${validationIssue}` };
+      }
     }
 
     let usage = json?.usage;
@@ -487,12 +492,68 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
   let streamBuffer = '';
   let upstreamUsage = null;
   let contentLength = 0;
+  let answerLength = 0;
+  let hasToolCalls = false;
   let lastChunkBytes = null;
   let rawLines = [];
   let hasUpstreamError = false;
   let upstreamErrorDetail = '';
   let chunkCount = 0;
   let hasReceivedFirstChunk = false;
+
+  const inspectPassthroughLine = (rawLine) => {
+    const cleanLine = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    const trimmed = cleanLine.trim();
+    if (!trimmed.startsWith('data:') || trimmed.includes('[DONE]')) return;
+
+    try {
+      const chunk = JSON.parse(trimmed.slice(5).trim());
+      if (chunk?.usage) upstreamUsage = chunk.usage;
+
+      const delta = chunk?.choices?.[0]?.delta;
+      const msg = chunk?.choices?.[0]?.message;
+      const finishReason = chunk?.choices?.[0]?.finish_reason;
+      if (
+        delta?.tool_calls ||
+        delta?.function_call ||
+        msg?.tool_calls ||
+        msg?.function_call ||
+        finishReason === 'tool_calls' ||
+        finishReason === 'function_call'
+      ) {
+        hasToolCalls = true;
+      }
+
+      const answerPart = delta?.content || msg?.content || chunk?.choices?.[0]?.text || chunk?.choices?.[0]?.content || '';
+      if (typeof answerPart === 'string' && answerPart.trim().length > 0 && !isFakeStreamContent(answerPart)) {
+        answerLength += answerPart.trim().length;
+      }
+
+      const c = answerPart
+        || delta?.reasoning_content
+        || delta?.reasoning
+        || delta?.thought
+        || delta?.thinking
+        || msg?.reasoning_content
+        || msg?.reasoning
+        || msg?.thought
+        || msg?.thinking
+        || '';
+      if (typeof c === 'string') {
+        contentLength += c.length;
+        if (contentLength <= 500 && isUpstreamErrorContent(c)) {
+          hasUpstreamError = true;
+          upstreamErrorDetail = extractUpstreamErrorDetail(c) || c;
+        }
+      }
+      if (chunk?.error || (chunk?.message && isUpstreamErrorContent(chunk.message))) {
+        hasUpstreamError = true;
+        upstreamErrorDetail = extractUpstreamErrorDetail(chunk.error || chunk.message);
+      }
+    } catch (e) {
+      // 解析失敗不影響透傳
+    }
+  };
 
   try {
     while (true) {
@@ -518,37 +579,17 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
       while ((newlineIdx = streamBuffer.indexOf('\n')) !== -1) {
         const rawLine = streamBuffer.slice(0, newlineIdx);
         streamBuffer = streamBuffer.slice(newlineIdx + 1);
-
-        const cleanLine = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-        const trimmed = cleanLine.trim();
-        if (!trimmed.startsWith('data:') || trimmed.includes('[DONE]')) continue;
-
-        try {
-          const chunk = JSON.parse(trimmed.slice(5).trim());
-          if (chunk?.usage) upstreamUsage = chunk.usage;
-
-          const c = chunk?.choices?.[0]?.delta?.content
-            || chunk?.choices?.[0]?.delta?.reasoning_content
-            || chunk?.choices?.[0]?.message?.content
-            || chunk?.choices?.[0]?.message?.reasoning_content
-            || chunk?.choices?.[0]?.text
-            || chunk?.choices?.[0]?.content
-            || '';
-          if (typeof c === 'string') {
-            contentLength += c.length;
-            if (contentLength <= 500 && isUpstreamErrorContent(c)) {
-              hasUpstreamError = true;
-              upstreamErrorDetail = extractUpstreamErrorDetail(c) || c;
-            }
-          }
-          if (chunk?.error || (chunk?.message && isUpstreamErrorContent(chunk.message))) {
-            hasUpstreamError = true;
-            upstreamErrorDetail = extractUpstreamErrorDetail(chunk.error || chunk.message);
-          }
-        } catch (e) {
-          // 解析失敗不影響透傳
-        }
+        inspectPassthroughLine(rawLine);
       }
+    }
+
+    const decoderTail = decoder.decode();
+    if (decoderTail) streamBuffer += decoderTail;
+    if (streamBuffer) {
+      for (const trailingLine of streamBuffer.split('\n')) {
+        inspectPassthroughLine(trailingLine);
+      }
+      streamBuffer = '';
     }
 
     if (hasUpstreamError) {
@@ -564,6 +605,23 @@ async function passthroughStreamResponse({ context, model, selectedKey, result }
         return { success: false, retryScope: 'model', forceRetrySameModel: true, transientFailure: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
       }
       return { success: false, retryScope: 'model', forceFallbackModel: true, statusCode: 0, errorText: `[API 端伺服器錯誤] 透傳串流中包含上游錯誤：${String(upstreamErrorDetail).substring(0, 120)}` };
+    }
+
+    if (!hasToolCalls && (contentLength === 0 || answerLength === 0)) {
+      const emptyDetail = chunkCount === 0
+        ? '[API 端異常] 透傳串流收到 0 個 Chunk 即結束連線'
+        : '[模型回傳為空] 透傳串流未包含任何正式回覆內容（content）或工具呼叫';
+      addLog('warning', `請求 #${requestId}：模型「${modelId}」${emptyDetail}，將依空回傳重試策略重試同一模型。`);
+      apiKeys.recordFailure(selectedKey.id, `Passthrough: Empty content (${chunkCount} chunks)`);
+      stats.recordRequest(false, requestId);
+      return {
+        success: false,
+        retryScope: 'model',
+        forceRetrySameModelOnEmpty: true,
+        emptyResponse: true,
+        statusCode: 0,
+        errorText: `透傳串流回傳內容為空（0 content）`
+      };
     }
 
     let usage = upstreamUsage;
