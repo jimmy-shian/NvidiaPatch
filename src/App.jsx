@@ -1,4 +1,5 @@
 import SplashAd from './components/Common/SplashAd';
+import StudioAnnouncementOverlay from './components/Common/StudioAnnouncementOverlay';
 import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -278,6 +279,7 @@ export default function App() {
 
       {/* yesolve studio 開場廣告覆蓋層（翡翠綠神經運算主題） */}
       {showSplashAd && <SplashAd onFinish={() => setShowSplashAd(false)} appName="NvidiaPatch AI" />}
+      <StudioAnnouncementOverlay appId="nvidiapatch" blocked={showSplashAd} />
     </div>
   );
 }
