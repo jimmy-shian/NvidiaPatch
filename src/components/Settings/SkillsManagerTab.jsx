@@ -348,7 +348,7 @@ export default function SkillsManagerTab({
                   </div>
                 </div>
 
-                {/* Actions: Edit + Restore/Delete with Confirmation */}
+                {/* Actions: Edit + Restore/Delete */}
                 <div className="flex items-center gap-1 shrink-0 pt-0.5">
                   <button
                     onClick={() => handleStartEdit(skill)}
@@ -358,65 +358,68 @@ export default function SkillsManagerTab({
                     <Edit3 size={14} />
                   </button>
 
-                  {/* Restore Overridden Skill with Confirmation */}
                   {skill.isOverridden && (
-                    confirmingSkillId === skill.id ? (
-                      <div className="flex items-center gap-1 bg-amber-950/80 border border-amber-500/50 rounded-lg p-1 animate-fade-in">
-                        <span className="text-[10px] text-amber-300">還原？</span>
-                        <button
-                          onClick={() => handleConfirmAction(skill.id, 'restore')}
-                          className="px-1.5 py-0.5 rounded bg-amber-500 text-black text-[10px] font-bold hover:bg-amber-400"
-                        >
-                          確定
-                        </button>
-                        <button
-                          onClick={() => setConfirmingSkillId(null)}
-                          className="px-1 py-0.5 text-slate-400 hover:text-white text-[10px]"
-                        >
-                          取消
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmingSkillId(skill.id)}
-                        className="p-1.5 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 transition-colors"
-                        title={t('settings.skills.restore', '還原為內建預設手冊')}
-                      >
-                        <RotateCcw size={14} />
-                      </button>
-                    )
+                    <button
+                      onClick={() => setConfirmingSkillId(prev => prev === skill.id ? null : skill.id)}
+                      className="p-1.5 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 transition-colors"
+                      title={t('settings.skills.restore', '還原為內建預設手冊')}
+                    >
+                      <RotateCcw size={14} />
+                    </button>
                   )}
 
-                  {/* Delete Custom Skill with Confirmation */}
                   {skill.isCustom && !skill.isBuiltin && (
-                    confirmingSkillId === skill.id ? (
-                      <div className="flex items-center gap-1 bg-rose-950/90 border border-rose-500/50 rounded-lg p-1 animate-fade-in">
-                        <span className="text-[10px] text-rose-300">確定刪除？</span>
-                        <button
-                          onClick={() => handleConfirmAction(skill.id, 'delete')}
-                          className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-500"
-                        >
-                          確定
-                        </button>
-                        <button
-                          onClick={() => setConfirmingSkillId(null)}
-                          className="px-1 py-0.5 text-slate-400 hover:text-white text-[10px]"
-                        >
-                          取消
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmingSkillId(skill.id)}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
-                        title={t('settings.skills.delete', '刪除技能')}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )
+                    <button
+                      onClick={() => setConfirmingSkillId(prev => prev === skill.id ? null : skill.id)}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                      title={t('settings.skills.delete', '刪除技能')}
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   )}
                 </div>
               </div>
+
+              {/* Full-width confirmation bar below card header */}
+              {confirmingSkillId === skill.id && skill.isOverridden && (
+                <div className="mt-1 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2 bg-amber-950/50 border border-amber-500/40 rounded-lg px-2.5 py-1.5 animate-fade-in">
+                  <span className="text-[11px] text-amber-300 font-medium">還原？</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleConfirmAction(skill.id, 'restore')}
+                      className="px-2 py-0.5 rounded bg-amber-500 text-black text-[11px] font-bold hover:bg-amber-400"
+                    >
+                      確定
+                    </button>
+                    <button
+                      onClick={() => setConfirmingSkillId(null)}
+                      className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white text-[11px]"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {confirmingSkillId === skill.id && skill.isCustom && !skill.isBuiltin && (
+                <div className="mt-1 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2 bg-rose-950/60 border border-rose-500/40 rounded-lg px-2.5 py-1.5 animate-fade-in">
+                  <span className="text-[11px] text-rose-300 font-medium">確定刪除？</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleConfirmAction(skill.id, 'delete')}
+                      className="px-2 py-0.5 rounded bg-rose-600 text-white text-[11px] font-bold hover:bg-rose-500"
+                    >
+                      確定
+                    </button>
+                    <button
+                      onClick={() => setConfirmingSkillId(null)}
+                      className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white text-[11px]"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

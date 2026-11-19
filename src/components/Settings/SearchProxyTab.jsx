@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Cloud, Globe, Shield, Key, RefreshCw, CheckCircle2, XCircle, Info, ExternalLink, Eye, EyeOff } from 'lucide-react';
+import { DEFAULT_WORKER_SEARCH_URL } from '../../core/tools/search/WorkerSearchProvider';
 
 export default function SearchProxyTab({
   config = {},
@@ -88,7 +89,7 @@ export default function SearchProxyTab({
             type="url"
             value={config.url || ''}
             onChange={(e) => handleUrlChange(e.target.value)}
-            placeholder="例如: https://nvidiapatch-search-proxy.xxxx.workers.dev"
+            placeholder={`例如: ${DEFAULT_WORKER_SEARCH_URL}`}
             className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
           />
           <p className="text-[10px] text-slate-500">

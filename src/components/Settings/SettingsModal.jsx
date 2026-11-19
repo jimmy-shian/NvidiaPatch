@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Server, User, Sparkles, Plug, Info, ShieldCheck, Cloud } from 'lucide-react';
 import { APP_VERSION } from '../../version';
@@ -7,6 +7,8 @@ import PersonalContextTab from './PersonalContextTab';
 import SkillsManagerTab from './SkillsManagerTab';
 import MCPManagerTab from './MCPManagerTab';
 import SearchProxyTab from './SearchProxyTab';
+
+const TAB_ORDER = ['providers', 'context', 'skills', 'mcp', 'searchProxy', 'about'];
 
 export default function SettingsModal({
   isOpen,
@@ -37,7 +39,49 @@ export default function SettingsModal({
 }) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('providers');
+  const tabRefs = useRef({});
+  const swipeStartRef = useRef(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    tabRefs.current[activeTab]?.scrollIntoView?.({
+      behavior: 'smooth',
+      inline: 'center',
+      block: 'nearest'
+    });
+  }, [activeTab, isOpen]);
+
+  const handleContentTouchStart = (e) => {
+    const touch = e.touches?.[0];
+    if (!touch) return;
+    const tagName = e.target?.tagName;
+    const isEditable = tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+    swipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      skip: isEditable
+    };
+  };
+
+  const handleContentTouchEnd = (e) => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!start || start.skip) return;
+    const touch = e.changedTouches?.[0];
+    if (!touch) return;
+
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+
+    const currentIdx = TAB_ORDER.indexOf(activeTab);
+    if (currentIdx === -1) return;
+    if (dx < 0 && currentIdx < TAB_ORDER.length - 1) {
+      setActiveTab(TAB_ORDER[currentIdx + 1]);
+    } else if (dx > 0 && currentIdx > 0) {
+      setActiveTab(TAB_ORDER[currentIdx - 1]);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -59,10 +103,11 @@ export default function SettingsModal({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-800/80 bg-slate-900/60 overflow-x-auto scrollbar-none px-2 pt-1">
+        <div className="flex border-b border-slate-800/80 bg-slate-900/60 overflow-x-auto scrollbar-none px-2 pt-1 shrink-0">
           <button
+            ref={(el) => { tabRefs.current.providers = el; }}
             onClick={() => setActiveTab('providers')}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 whitespace-nowrap ${
               activeTab === 'providers'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -73,8 +118,9 @@ export default function SettingsModal({
           </button>
 
           <button
+            ref={(el) => { tabRefs.current.context = el; }}
             onClick={() => setActiveTab('context')}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 whitespace-nowrap ${
               activeTab === 'context'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -85,8 +131,9 @@ export default function SettingsModal({
           </button>
 
           <button
+            ref={(el) => { tabRefs.current.skills = el; }}
             onClick={() => setActiveTab('skills')}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 whitespace-nowrap ${
               activeTab === 'skills'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -97,8 +144,9 @@ export default function SettingsModal({
           </button>
 
           <button
+            ref={(el) => { tabRefs.current.mcp = el; }}
             onClick={() => setActiveTab('mcp')}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 whitespace-nowrap ${
               activeTab === 'mcp'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -109,8 +157,9 @@ export default function SettingsModal({
           </button>
 
           <button
+            ref={(el) => { tabRefs.current.searchProxy = el; }}
             onClick={() => setActiveTab('searchProxy')}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 whitespace-nowrap ${
               activeTab === 'searchProxy'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -121,9 +170,9 @@ export default function SettingsModal({
           </button>
 
           <button
+            ref={(el) => { tabRefs.current.about = el; }}
             onClick={() => setActiveTab('about')}
-
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-all shrink-0 whitespace-nowrap ${
               activeTab === 'about'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10 rounded-t-lg'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -134,8 +183,13 @@ export default function SettingsModal({
           </button>
         </div>
 
-        {/* Tab Content */}
-        <div className="flex-1 overflow-y-auto p-5">
+        {/* Tab Content (supports left/right horizontal swipe to switch tabs) */}
+        <div
+          className="flex-1 overflow-y-auto p-4 sm:p-5"
+          style={{ touchAction: 'pan-y' }}
+          onTouchStart={handleContentTouchStart}
+          onTouchEnd={handleContentTouchEnd}
+        >
           {activeTab === 'providers' && (
             <ProviderConfigTab
               providerConfigs={providerConfigs}

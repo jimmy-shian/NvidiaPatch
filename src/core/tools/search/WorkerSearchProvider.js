@@ -8,6 +8,8 @@ import { HttpClient } from '../../network/httpClient';
 import { LocalDB } from '../../storage/localDatabase';
 import { SecureStorage } from '../../security/secureStorage';
 
+export const DEFAULT_WORKER_SEARCH_URL = 'https://your-search-proxy.xxx.workers.dev';
+
 export const WORKER_SEARCH_CONFIG_KEYS = {
   URL: 'cloudflare_worker_search_url',
   ENABLED: 'cloudflare_worker_search_enabled',
