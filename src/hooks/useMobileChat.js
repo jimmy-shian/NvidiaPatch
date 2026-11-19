@@ -780,13 +780,18 @@ export function useMobileChat({
           status: 'calling',
           args: tc.function.arguments
         }));
-        liveToolExecutions = [...initialToolExecutions, ...newToolCalls];
+        const existingIds = new Set(liveToolExecutions.map(te => te.toolCallId));
+        liveToolExecutions = [
+          ...liveToolExecutions,
+          ...newToolCalls.filter(tc => !existingIds.has(tc.toolCallId))
+        ];
         updateLiveRunState();
         if (currentConversationIdRef.current === streamConvId) {
           setIsReasoningActive(false);
           const currentMsgState = {
             ...assistantMsg,
             content: '',
+            thinkingContent: accumulatedThinking,
             tool_calls: toolCalls,
             toolExecutions: [...liveToolExecutions]
           };
@@ -879,6 +884,12 @@ export function useMobileChat({
 
         const finalNormalizedUsage = doneData?.usage ? normalizeApiUsage(doneData.usage) : latestReportedUsage;
         let finalContentToDisplay = (doneData?.content || accumulatedContent || '').trim();
+        let finalThinkingToDisplay = accumulatedThinking;
+
+        if (!finalContentToDisplay && accumulatedThinking.trim()) {
+          finalContentToDisplay = accumulatedThinking.replace(/<\/?think>/gi, '').trim();
+          finalThinkingToDisplay = '';
+        }
 
         // If content is merely raw JSON tool arguments, fallback to empty
         if (
@@ -902,7 +913,7 @@ export function useMobileChat({
           ...assistantMsg,
           content: storedContent,
           ...(widgetSummary ? { widgetSummary } : {}),
-          thinkingContent: accumulatedThinking,
+          thinkingContent: finalThinkingToDisplay,
           tool_calls: assistantMsg.tool_calls || null,
           toolExecutions: liveToolExecutions,
           usage: finalNormalizedUsage,

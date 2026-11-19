@@ -102,3 +102,44 @@ export function sanitizeMessagesForApi(messages = []) {
     };
   });
 }
+
+/**
+ * Check whether message history contains native tool-calling frames (role: 'tool' or assistant tool_calls)
+ */
+export function hasToolProtocolMessages(messages = []) {
+  return Array.isArray(messages) && messages.some(
+    (m) => m && (m.role === 'tool' || (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0))
+  );
+}
+
+/**
+ * Convert native tool_calls / role: 'tool' messages into plain user/assistant observation messages
+ * for models or providers that reject role: 'tool' on Round 2+ follow-ups.
+ */
+export function convertToolHistoryToObservationMessages(messages = []) {
+  if (!Array.isArray(messages)) return [];
+  const observations = [];
+  const base = [];
+
+  for (const m of messages) {
+    if (!m) continue;
+    if (m.role === 'tool') {
+      const contentStr = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+      if (contentStr) observations.push(contentStr);
+    } else if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      continue;
+    } else {
+      base.push(m);
+    }
+  }
+
+  if (observations.length > 0) {
+    base.push({ role: 'assistant', content: '我已執行搜尋與資料檢索。' });
+    base.push({
+      role: 'user',
+      content: `【檢索資料事實如下】:\n${observations.join('\n\n')}\n\n請根據以上檢索結果，直接向使用者產出完整、詳盡的正式 Markdown 回覆，並在結尾附上 <options title="延伸探索">...</options> 提供後續可選按鈕。`
+    });
+  }
+
+  return base;
+}

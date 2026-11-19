@@ -3,22 +3,22 @@
  * Features full model catalog crawling, normalization, filtering, NativeStreamBridge SSE streaming,
  * unified multi-field SSE parser, usage normalization, and 3x auto-retry with exponential backoff.
  */
-import { OpenAICompatibleProvider } from './OpenAICompatibleProvider';
+import { OpenAICompatibleProvider, getNextTokenTier, isMaxTokensRejection } from './OpenAICompatibleProvider';
 import { HttpClient } from '../network/httpClient';
 import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { fetchNvidiaCatalog, sortNvidiaModels } from './nvidiaModelCatalog';
 import { resolveUpstreamModelId } from './modelResolver';
-import { sanitizeMessagesForApi } from '../network/messageSanitizer';
+import { sanitizeMessagesForApi, hasToolProtocolMessages, convertToolHistoryToObservationMessages } from '../network/messageSanitizer';
 
 export const DEFAULT_NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1';
-export const DEFAULT_NVIDIA_MODEL = 'nvidia/llama-3.1-nemotron-120b-instruct';
+export const DEFAULT_NVIDIA_MODEL = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 
 export const CURATED_NVIDIA_MODELS = [
-  { id: 'nvidia/llama-3.1-nemotron-120b-instruct', name: 'Llama 3.1 Nemotron 120B Instruct', vendor: 'NVIDIA' },
-  { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Llama 3.1 Nemotron 70B Instruct', vendor: 'NVIDIA' },
-  { id: 'nvidia/nemotron-4-340b-instruct', name: 'Nemotron-4 340B Instruct', vendor: 'NVIDIA' },
+  { id: 'nvidia/nemotron-3.5-super-vl-120b-a12b', name: 'Nemotron 3.5 Super VL 120B', vendor: 'NVIDIA' },
   { id: 'nvidia/nemotron-3-ultra-550b-a55b', name: 'Nemotron 3 Ultra 550B Reasoning', vendor: 'NVIDIA' },
+  { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', name: 'Nemotron 3.5 Lightning 30B', vendor: 'NVIDIA' },
+  { id: 'nvidia/llama-3.1-nemotron-120b-instruct', name: 'Llama 3.1 Nemotron 120B Instruct', vendor: 'NVIDIA' },
   { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B Reasoning', vendor: 'OpenAI' },
   { id: 'minimaxai/minimax-m3', name: 'MiniMax M3', vendor: 'MiniMax' },
   { id: 'deepseek-ai/deepseek-v4-flash-0731', name: 'DeepSeek V4 Flash', vendor: 'DeepSeek' },
@@ -110,7 +110,7 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
     return 'unknown';
   }
 
-  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 8192, signal, tools = null }) {
+  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 32768, signal, tools = null }) {
     if (!this.apiKey) {
       yield { type: 'error', delta: '請先在設定中填寫 NVIDIA API Key (nvapi-...)' };
       return;
@@ -119,11 +119,11 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
     const targetModel = resolveUpstreamModelId(model || DEFAULT_NVIDIA_MODEL);
     let activeTools = (tools && tools.length > 0 && this.supportsToolCalling(targetModel)) ? tools : null;
 
-    const buildPayload = (includeTools, includeUsage) => ({
+    const buildPayload = (includeTools, includeUsage, targetMessages = messages, maxTokensLimit = max_tokens) => ({
       model: targetModel,
-      messages: sanitizeMessagesForApi(messages),
+      messages: sanitizeMessagesForApi(targetMessages),
       temperature,
-      max_tokens,
+      max_tokens: maxTokensLimit,
       stream: true,
       ...(includeTools && activeTools ? { tools: activeTools, tool_choice: 'auto' } : {}),
       ...(includeUsage && this.supportsStreamOptions ? { stream_options: { include_usage: true } } : {})
@@ -199,10 +199,11 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
     }.bind(this);
 
     let contentChunksCount = 0;
+    let currentMaxTokens = max_tokens;
 
     while (true) {
       try {
-        const payload = buildPayload(Boolean(activeTools), true);
+        const payload = buildPayload(Boolean(activeTools), true, messages, currentMaxTokens);
         for await (const chunk of executeStream(payload)) {
           if (chunk.content || chunk.delta) {
             contentChunksCount++;
@@ -217,22 +218,32 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
         }
 
         const errMsg = (err.message || '').toLowerCase();
+        const status = err.status || Number((err.message || '').match(/\bHTTP\s+(\d{3})\b/i)?.[1]) || 0;
         const isTransient = errMsg.includes('abort') || errMsg.includes('reset') || errMsg.includes('closed') || errMsg.includes('broken pipe') || errMsg.includes('eof') || errMsg.includes('timeout') || errMsg.includes('network') || errMsg.includes('連線');
-        const isTemporary = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504 || (isTransient && contentChunksCount === 0);
+        const isTemporary = status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || (isTransient && contentChunksCount === 0);
         if (isTemporary && retryCount < MAX_RETRIES) {
           retryCount++;
           const backoffMs = 1000 * Math.pow(2, retryCount - 1);
           yield {
             type: 'chunk',
-            reasoning: `\n[暫時性連線異常 (${err.status ? 'HTTP ' + err.status : '網路中斷'}) - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
+            reasoning: `\n[暫時性連線異常 (${status ? 'HTTP ' + status : '網路中斷'}) - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
           };
           await new Promise(r => setTimeout(r, backoffMs));
           continue;
         }
 
-        // Capability Fallback check for tools or stream_options
-        const isToolError = activeTools && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || err.status === 400);
-        const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || err.status === 400);
+        const nextTokenTier = (contentChunksCount === 0 && isMaxTokensRejection(status, errMsg))
+          ? getNextTokenTier(currentMaxTokens)
+          : null;
+        if (nextTokenTier !== null) {
+          currentMaxTokens = nextTokenTier;
+          continue;
+        }
+
+        // Capability Fallback check for tools, role: 'tool' rejections (Round 2+), or stream_options
+        const hasToolHistory = hasToolProtocolMessages(messages);
+        const isToolError = (activeTools || hasToolHistory) && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || status === 400 || status === 422);
+        const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || status === 400);
 
         if (isToolError || isStreamOptionError) {
           if (isToolError) {
@@ -244,12 +255,22 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
           }
 
           try {
-            const fallbackPayload = buildPayload(false, false);
+            const fallbackMessages = (isToolError && hasToolHistory)
+              ? convertToolHistoryToObservationMessages(messages)
+              : messages;
+            const fallbackPayload = buildPayload(false, false, fallbackMessages, currentMaxTokens);
             for await (const chunk of executeStream(fallbackPayload)) {
               yield chunk;
             }
             return;
           } catch (retryErr) {
+            const retryErrMsg = (retryErr.message || '').toLowerCase();
+            const retryStatus = retryErr.status || Number((retryErr.message || '').match(/\bHTTP\s+(\d{3})\b/i)?.[1]) || 0;
+            const retryTier = isMaxTokensRejection(retryStatus, retryErrMsg) ? getNextTokenTier(currentMaxTokens) : null;
+            if (retryTier !== null) {
+              currentMaxTokens = retryTier;
+              continue;
+            }
             yield { type: 'error', delta: `連線失敗: ${sanitizeLog(retryErr.message)}` };
             return;
           }

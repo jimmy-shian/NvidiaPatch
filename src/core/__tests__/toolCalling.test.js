@@ -243,4 +243,54 @@ describe('Universal Web Search & AgentCore Integration', () => {
     expect(capturedContent.length).toBeGreaterThan(0);
     expect(doneResult?.content).toContain('NVIDIA Blackwell architecture');
   });
+
+  it('AgentCore recovers via observation injection when Round 2 throws HTTP 400 error', async () => {
+    vi.spyOn(HttpClient, 'request')
+      .mockResolvedValueOnce({ ok: true, status: 200, data: MOCK_BING_HTML })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: MOCK_WEBPAGE_HTML });
+
+    let callCount = 0;
+    const mockProvider = {
+      chatStream({ messages }) {
+        callCount++;
+        const currentCount = callCount;
+        return (async function* () {
+          if (currentCount === 1) {
+            yield {
+              type: 'chunk',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_throw_1',
+                  type: 'function',
+                  function: { name: 'web_search', arguments: '{"query": "NVIDIA Blackwell news"}' }
+                }
+              ]
+            };
+            yield { type: 'done' };
+          } else if (currentCount === 2) {
+            throw new Error('HTTP 400: role tool rejected');
+          } else {
+            const lastMsg = messages[messages.length - 1];
+            expect(lastMsg.role).toBe('user');
+            expect(lastMsg.content).toContain('【檢索資料事實如下】');
+            yield { type: 'chunk', content: '已透過拋錯恢復路徑完整產出回覆。' };
+            yield { type: 'done' };
+          }
+        })();
+      }
+    };
+
+    const agent = new AgentCore(mockProvider);
+    let doneResult = null;
+
+    await agent.runChat({
+      messages: [{ role: 'user', content: '搜尋最新消息' }],
+      model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      onDone: (res) => { doneResult = res; }
+    });
+
+    expect(callCount).toBe(3);
+    expect(doneResult?.content).toContain('已透過拋錯恢復路徑完整產出回覆。');
+  });
 });

@@ -48,8 +48,10 @@ export class AgentCore {
     messages,
     model,
     selectedSkillIds = [],
+    extraSystemPrompt = '',
+    includeOptionsDirective = true,
     temperature = 0.7,
-    max_tokens = 8192,
+    max_tokens = 32768,
     onThinking,
     onContent,
     onToolStart,
@@ -88,6 +90,8 @@ export class AgentCore {
       let currentMessages = await buildCompleteMessages({
         messages,
         selectedSkillIds,
+        extraSystemPrompt,
+        includeOptionsDirective,
         model
       });
 
@@ -152,64 +156,98 @@ export class AgentCore {
 
         let shouldFallbackObservation = false;
 
-        for await (const chunk of stream) {
-          if (!chunk || signal.aborted || this.activeRunId !== runId) break;
+        const canRecoverRoundWithObservation = (rawErrMsg) => {
+          if (round <= 1 || allExecutedToolMessages.length === 0) return false;
+          const errMsg = (rawErrMsg || '').toLowerCase();
+          return (
+            errMsg.includes('tool') ||
+            errMsg.includes('400') ||
+            errMsg.includes('422') ||
+            errMsg.includes('role') ||
+            errMsg.includes('schema') ||
+            errMsg.includes('連線') ||
+            errMsg.includes('fail') ||
+            errMsg.includes('abort') ||
+            errMsg.includes('reset') ||
+            errMsg.includes('closed')
+          );
+        };
 
-          // 1. Capture Usage
-          if (chunk.usage) {
-            latestUsage = chunk.usage;
-            onUsage?.(chunk.usage, { runId });
-          }
+        const applyObservationFallback = () => {
+          const toolResults = allExecutedToolMessages.filter(
+            (m) => m.role === 'tool' || (m.role === 'user' && typeof m.content === 'string' && m.content.includes('【工具執行結果'))
+          );
+          const observationText = toolResults.map((t) => (typeof t.content === 'string' ? t.content : JSON.stringify(t.content))).join('\n\n');
+          currentMessages = currentMessages.filter((m) => m.role !== 'tool' && !(m.role === 'assistant' && m.tool_calls));
+          currentMessages.push({
+            role: 'assistant',
+            content: '我已執行搜尋與資料檢索。'
+          });
+          currentMessages.push({
+            role: 'user',
+            content: `【檢索資料事實如下】:\n${observationText}\n\n請根據以上檢索結果向使用者產出完整回答。`
+          });
+          totalToolCalls = AGENT_SAFETY_LIMITS.MAX_TOOL_CALLS_PER_RUN; // Prevent further tool calls
+          shouldFallbackObservation = true;
+        };
 
-          // 2. Capture Tool Calls
-          const rawToolCalls = chunk.tool_calls || (chunk.type === 'tool_call' ? chunk.data : null);
-          if (rawToolCalls && Array.isArray(rawToolCalls)) {
-            for (const tc of rawToolCalls) {
-              const idx = tc.index ?? 0;
-              if (!accumulatedToolCalls[idx]) {
-                accumulatedToolCalls[idx] = {
-                  id: tc.id || `call_${Date.now()}_${idx}`,
-                  type: 'function',
-                  function: { name: '', arguments: '' }
-                };
-              }
-              if (tc.id) accumulatedToolCalls[idx].id = tc.id;
-              if (tc.function?.name) accumulatedToolCalls[idx].function.name += tc.function.name;
-              if (tc.function?.arguments) accumulatedToolCalls[idx].function.arguments += tc.function.arguments;
+        try {
+          for await (const chunk of stream) {
+            if (!chunk || signal.aborted || this.activeRunId !== runId) break;
+
+            // 1. Capture Usage
+            if (chunk.usage) {
+              latestUsage = chunk.usage;
+              onUsage?.(chunk.usage, { runId });
             }
-          }
 
-          // 3. Process Reasoning & Content
-          reasoningParser.processChunk(chunk);
+            // 2. Capture Tool Calls
+            const rawToolCalls = chunk.tool_calls || (chunk.type === 'tool_call' ? chunk.data : null);
+            if (rawToolCalls && Array.isArray(rawToolCalls)) {
+              for (const tc of rawToolCalls) {
+                const idx = tc.index ?? 0;
+                if (!accumulatedToolCalls[idx]) {
+                  accumulatedToolCalls[idx] = {
+                    id: tc.id || `call_${Date.now()}_${idx}`,
+                    type: 'function',
+                    function: { name: '', arguments: '' }
+                  };
+                }
+                if (tc.id) accumulatedToolCalls[idx].id = tc.id;
+                if (tc.function?.name) accumulatedToolCalls[idx].function.name += tc.function.name;
+                if (tc.function?.arguments) accumulatedToolCalls[idx].function.arguments += tc.function.arguments;
+              }
+            }
 
-          // 4. Handle Error
-          if (chunk.type === 'error') {
-            if (round > 1 && allExecutedToolMessages.length > 0) {
-              const errMsg = (chunk.delta || '').toLowerCase();
-              if (errMsg.includes('tool') || errMsg.includes('400') || errMsg.includes('422') || errMsg.includes('role') || errMsg.includes('schema') || errMsg.includes('連線') || errMsg.includes('fail') || errMsg.includes('abort') || errMsg.includes('reset') || errMsg.includes('closed')) {
-                console.warn('[AgentCore] Upstream model rejected native tool schema or connection failed in Round 2, falling back to observation injection...', errMsg);
-                const toolResults = allExecutedToolMessages.filter(m => m.role === 'tool');
-                const observationText = toolResults.map(t => typeof t.content === 'string' ? t.content : JSON.stringify(t.content)).join('\n\n');
-                currentMessages = currentMessages.filter(m => m.role !== 'tool' && !(m.role === 'assistant' && m.tool_calls));
-                currentMessages.push({
-                  role: 'assistant',
-                  content: '我已執行搜尋與資料檢索。'
-                });
-                currentMessages.push({
-                  role: 'user',
-                  content: `【檢索資料事實如下】:\n${observationText}\n\n請根據以上檢索結果向使用者產出完整回答。`
-                });
-                totalToolCalls = AGENT_SAFETY_LIMITS.MAX_TOOL_CALLS_PER_RUN; // Prevent further tool calls
-                shouldFallbackObservation = true;
+            // 3. Process Reasoning & Content
+            reasoningParser.processChunk(chunk);
+
+            // 4. Handle Error
+            if (chunk.type === 'error') {
+              if (canRecoverRoundWithObservation(chunk.delta)) {
+                console.warn('[AgentCore] Upstream model rejected native tool schema or connection failed in Round 2, falling back to observation injection...', (chunk.delta || '').toLowerCase());
+                applyObservationFallback();
                 break;
               }
+              await safeError(new Error(chunk.delta || 'Stream error'));
+              return;
             }
-            await safeError(new Error(chunk.delta || 'Stream error'));
+          }
+        } catch (streamErr) {
+          if (streamErr?.name === 'AbortError' || signal.aborted || this.activeRunId !== runId) {
+            await safeDone({ aborted: true });
             return;
+          }
+          if (canRecoverRoundWithObservation(streamErr?.message)) {
+            console.warn('[AgentCore] Stream threw during Round 2 tool synthesis, falling back to observation injection...', streamErr?.message);
+            applyObservationFallback();
+          } else {
+            throw streamErr;
           }
         }
 
         if (shouldFallbackObservation) {
+          onStatusChange?.({ phase: 'generating', runId });
           continue;
         }
 
@@ -295,6 +333,13 @@ export class AgentCore {
               finalContent = `⚠️ 當前模型「${(model || '').split('/').pop()}」不支援圖片解析，且未產生回覆。建議切換至視覺辨識模型（如 Llama 3.2 Vision、GPT-4o、Gemini 等）後再試。`;
               onContent?.(finalContent, { runId });
             }
+          }
+
+          // If reasoning model exhausted tokens inside <think>/reasoning before emitting main content, promote thinking to content
+          if (!finalContent.trim() && finalThinking.trim()) {
+            finalContent = finalThinking.replace(/<\/?think>/gi, '').trim();
+            finalThinking = '';
+            onContent?.(finalContent, { runId });
           }
 
           // Generation complete!
@@ -404,7 +449,7 @@ export class AgentCore {
           }
 
           const cleanToolContent = resultPayload?.formattedText
-            ? `${resultPayload.instruction || ''}\n\n${resultPayload.formattedText}`
+            ? `${resultPayload.instruction || ''}\n\n${resultPayload.formattedText}\n\n請根據以上檢索結果直接向使用者產出完整、詳盡的正式 Markdown 回覆，並在結尾附上 <options title="延伸探索">...</options> 提供 2 至 3 個後續可選按鈕。請勿重複搜尋相同關鍵字。`
             : (typeof resultPayload === 'string' ? resultPayload : JSON.stringify(resultPayload));
 
           if (!isInBandCall) {
@@ -443,6 +488,8 @@ export class AgentCore {
 
           onStatusChange?.({ phase: 'organizing', runId });
         }
+
+        onStatusChange?.({ phase: 'generating', runId });
       }
 
       // If max rounds reached without final answer, synthesize fallback from tool evidence
@@ -488,6 +535,12 @@ export class AgentCore {
             }
           } catch (_) {}
         }
+      }
+
+      if (!finalContent.trim() && finalThinking.trim()) {
+        finalContent = finalThinking.replace(/<\/?think>/gi, '').trim();
+        finalThinking = '';
+        onContent?.(finalContent, { runId });
       }
 
       onStatusChange?.({ phase: 'completed', runId });

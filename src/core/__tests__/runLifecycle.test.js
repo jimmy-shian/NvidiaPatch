@@ -91,4 +91,31 @@ describe('Run Lifecycle & RunId Isolation Protection', () => {
 
     expect(capturedRun2Content).toBe('Response');
   });
+
+  it('promotes reasoning to formal content when model ends stream with empty content', async () => {
+    const mockProvider = {
+      chatStream() {
+        return (async function* () {
+          yield { type: 'chunk', reasoning: '完整分析結論：今日宜穩健推進。' };
+          yield { type: 'done' };
+        })();
+      }
+    };
+
+    const agent = new AgentCore(mockProvider);
+    let donePayload = null;
+    let streamedContent = '';
+
+    await agent.runChat({
+      runId: 'run_reasoning_fallback',
+      messages: [{ role: 'user', content: '測試推理轉內文' }],
+      model: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      onContent: (c) => { streamedContent += c; },
+      onDone: (payload) => { donePayload = payload; }
+    });
+
+    expect(streamedContent).toBe('完整分析結論：今日宜穩健推進。');
+    expect(donePayload.content).toBe('完整分析結論：今日宜穩健推進。');
+    expect(donePayload.thinking).toBe('');
+  });
 });

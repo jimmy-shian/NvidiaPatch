@@ -14,7 +14,31 @@ import { NativeStreamClient } from '../network/nativeStreamClient';
 import { sanitizeLog } from '../security/secureStorage';
 import { resolveUpstreamModelId } from './modelResolver';
 import { hasImagesInMessages, isImageRejectionError, repackageMessagesWithoutImages } from './visionCapabilities';
-import { sanitizeMessagesForApi } from '../network/messageSanitizer';
+import { sanitizeMessagesForApi, hasToolProtocolMessages, convertToolHistoryToObservationMessages } from '../network/messageSanitizer';
+
+export const TOKEN_FALLBACK_TIERS = [32768, 16384, 8192, 4096];
+
+export function getNextTokenTier(currentMaxTokens) {
+  return TOKEN_FALLBACK_TIERS.find(tier => tier < currentMaxTokens) ?? null;
+}
+
+export function isMaxTokensRejection(status, errMsg = '') {
+  const lower = String(errMsg).toLowerCase();
+  if (status !== 400 && status !== 422 && !lower.includes('max_tokens') && !lower.includes('max_completion_tokens')) {
+    return false;
+  }
+  return (
+    lower.includes('max_tokens') ||
+    lower.includes('max_completion_tokens') ||
+    lower.includes('context_length') ||
+    lower.includes('context length') ||
+    lower.includes('context window') ||
+    lower.includes('token limit') ||
+    lower.includes('too large') ||
+    lower.includes('less than or equal') ||
+    lower.includes('exceed')
+  );
+}
 
 export class OpenAICompatibleProvider extends ProviderAdapter {
   constructor(config = {}) {
@@ -191,15 +215,15 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
     this.toolCapabilities.set(modelId, capability);
   }
 
-  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 8192, signal, tools = null }) {
+  async *chatStream({ model, messages, temperature = 0.7, max_tokens = 32768, signal, tools = null }) {
     const targetModel = resolveUpstreamModelId(model);
     let activeTools = (tools && tools.length > 0 && this.supportsToolCalling(targetModel)) ? tools : null;
 
-    const buildPayload = (includeTools, includeUsage) => ({
+    const buildPayload = (includeTools, includeUsage, maxTokensLimit = max_tokens) => ({
       model: targetModel,
       messages: sanitizeMessagesForApi(messages),
       temperature,
-      max_tokens,
+      max_tokens: maxTokensLimit,
       stream: true,
       ...(includeTools && activeTools ? { tools: activeTools, tool_choice: 'auto' } : {}),
       ...(includeUsage && this.supportsStreamOptions ? { stream_options: { include_usage: true } } : {})
@@ -276,10 +300,11 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
     const MAX_RETRIES = 2;
     let retryCount = 0;
     let contentChunksCount = 0;
+    let currentMaxTokens = max_tokens;
 
     while (true) {
       try {
-        const payload = buildPayload(Boolean(activeTools), true);
+        const payload = buildPayload(Boolean(activeTools), true, currentMaxTokens);
         for await (const chunk of executeStream(payload)) {
           if (chunk.content || chunk.delta) {
             contentChunksCount++;
@@ -294,17 +319,26 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
         }
 
         const errMsg = (err.message || '').toLowerCase();
+        const status = err.status || Number((err.message || '').match(/\bHTTP\s+(\d{3})\b/i)?.[1]) || 0;
         const isTransient = errMsg.includes('abort') || errMsg.includes('reset') || errMsg.includes('closed') || errMsg.includes('broken pipe') || errMsg.includes('eof') || errMsg.includes('timeout') || errMsg.includes('network') || errMsg.includes('連線');
-        const isTemporary = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504 || (isTransient && contentChunksCount === 0);
+        const isTemporary = status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || (isTransient && contentChunksCount === 0);
 
         if (isTemporary && retryCount < MAX_RETRIES) {
           retryCount++;
           const backoffMs = 1000 * Math.pow(2, retryCount - 1);
           yield {
             type: 'chunk',
-            reasoning: `\n[暫時性連線異常 (${err.status ? 'HTTP ' + err.status : '網路中斷'}) - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
+            reasoning: `\n[暫時性連線異常 (${status ? 'HTTP ' + status : '網路中斷'}) - 正在進行第 ${retryCount}/${MAX_RETRIES} 次自動重試 (${backoffMs / 1000}s)...]\n`
           };
           await new Promise(r => setTimeout(r, backoffMs));
+          continue;
+        }
+
+        const nextTokenTier = (contentChunksCount === 0 && isMaxTokensRejection(status, errMsg))
+          ? getNextTokenTier(currentMaxTokens)
+          : null;
+        if (nextTokenTier !== null) {
+          currentMaxTokens = nextTokenTier;
           continue;
         }
 
@@ -313,7 +347,7 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
         console.warn(`[OpenAICompatibleProvider] 模型「${targetModel}」拒絕圖片輸入或報錯，自動重發純文字包裝訊息...`);
         const repackagedMessages = repackageMessagesWithoutImages(messages, targetModel);
         const imageFallbackPayload = {
-          ...buildPayload(Boolean(activeTools), false),
+          ...buildPayload(Boolean(activeTools), false, currentMaxTokens),
           messages: repackagedMessages
         };
 
@@ -327,9 +361,10 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
         }
       }
 
-      // 2. Check if error was caused by stream_options or tools rejecting in unknown model
-      const isToolError = activeTools && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || err.status === 400);
-      const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || err.status === 400);
+      // 2. Check if error was caused by stream_options or tools / role: 'tool'
+      const hasToolHistory = hasToolProtocolMessages(messages);
+      const isToolError = (activeTools || hasToolHistory) && (errMsg.includes('tool') || errMsg.includes('function') || errMsg.includes('extra') || status === 400 || status === 422);
+      const isStreamOptionError = this.supportsStreamOptions && (errMsg.includes('stream_options') || status === 400);
 
       if (isToolError || isStreamOptionError) {
         if (isToolError) {
@@ -340,20 +375,30 @@ export class OpenAICompatibleProvider extends ProviderAdapter {
           this.supportsStreamOptions = false;
         }
 
-        // Retry without unsupported options (if messages had images, use repackaged messages)
+        // Retry without unsupported options (convert role:'tool' to observation messages if needed)
         try {
-          const finalMessages = hasImagesInMessages(messages)
+          let finalMessages = hasImagesInMessages(messages)
             ? repackageMessagesWithoutImages(messages, targetModel)
             : messages;
+          if (isToolError && hasToolProtocolMessages(finalMessages)) {
+            finalMessages = convertToolHistoryToObservationMessages(finalMessages);
+          }
           const fallbackPayload = {
-            ...buildPayload(false, false),
-            messages: finalMessages
+            ...buildPayload(false, false, currentMaxTokens),
+            messages: sanitizeMessagesForApi(finalMessages)
           };
           for await (const chunk of executeStream(fallbackPayload)) {
             yield chunk;
           }
           return;
         } catch (retryErr) {
+          const retryErrMsg = (retryErr.message || '').toLowerCase();
+          const retryStatus = retryErr.status || Number((retryErr.message || '').match(/\bHTTP\s+(\d{3})\b/i)?.[1]) || 0;
+          const retryTier = isMaxTokensRejection(retryStatus, retryErrMsg) ? getNextTokenTier(currentMaxTokens) : null;
+          if (retryTier !== null) {
+            currentMaxTokens = retryTier;
+            continue;
+          }
           yield { type: 'error', delta: `連線失敗: ${sanitizeLog(retryErr.message)}` };
           return;
         }

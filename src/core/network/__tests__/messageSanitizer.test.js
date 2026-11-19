@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeMessagesForApi } from '../messageSanitizer';
+import {
+  sanitizeMessagesForApi,
+  hasToolProtocolMessages,
+  convertToolHistoryToObservationMessages
+} from '../messageSanitizer';
 
 describe('Message Sanitizer for OpenAI & NVIDIA NIM Compliance', () => {
   it('strips unauthorized fields such as name and metadata from role: tool messages', () => {
@@ -90,5 +94,22 @@ describe('Message Sanitizer for OpenAI & NVIDIA NIM Compliance', () => {
 
     const sanitized = sanitizeMessagesForApi(raw);
     expect(sanitized[0].content).toBeNull();
+  });
+
+  it('detects tool protocol messages and converts them cleanly to observation messages', () => {
+    const history = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'query weather' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'web_search', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'Sunny 25C' }
+    ];
+
+    expect(hasToolProtocolMessages(history)).toBe(true);
+    expect(hasToolProtocolMessages([{ role: 'user', content: 'hi' }])).toBe(false);
+
+    const converted = convertToolHistoryToObservationMessages(history);
+    expect(converted.some(m => m.role === 'tool' || m.tool_calls)).toBe(false);
+    expect(converted[converted.length - 1].role).toBe('user');
+    expect(converted[converted.length - 1].content).toContain('Sunny 25C');
   });
 });
