@@ -473,10 +473,30 @@ export const LocalDB = {
     await db.delete('scheduled_tasks', id);
   },
 
-  async toggleScheduledTask(id, enabled) {
+  async toggleScheduledTask(id, enabled, nextRunAt = undefined) {
     const task = await this.getScheduledTask(id);
     if (!task) return null;
     task.enabled = Boolean(enabled);
+    if (task.enabled) {
+      if (nextRunAt !== undefined) {
+        task.nextRunAt = nextRunAt;
+      } else if (!task.nextRunAt || task.nextRunAt <= Date.now()) {
+        const [hourStr, minuteStr] = (task.time || '08:00').split(':');
+        const candidate = new Date();
+        candidate.setHours(parseInt(hourStr, 10) || 0, parseInt(minuteStr, 10) || 0, 0, 0);
+        if (candidate.getTime() <= Date.now()) {
+          candidate.setDate(candidate.getDate() + 1);
+        }
+        if (task.repeat && task.repeat.startsWith('weekly:')) {
+          const allowedDays = task.repeat.replace('weekly:', '').split(',').map(d => parseInt(d.trim(), 10));
+          for (let i = 0; i < 7; i++) {
+            if (allowedDays.includes(candidate.getDay())) break;
+            candidate.setDate(candidate.getDate() + 1);
+          }
+        }
+        task.nextRunAt = candidate.getTime();
+      }
+    }
     return this.saveScheduledTask(task);
   }
 };

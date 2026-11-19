@@ -1,23 +1,34 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Clock, Plus, Trash2, Check, X, Bell, Play, Calendar, Sparkles, AlertCircle, Loader2 } from 'lucide-react';
+import { Clock, Plus, Trash2, Check, X, Play, Sparkles, Loader2, Pin, MessageSquare, History, ChevronDown, ChevronRight } from 'lucide-react';
 import { useScheduledTasks } from '../../hooks/useScheduledTasks';
 import { getSkillDisplayName } from '../Chat/ChatInput';
+import { formatScheduleRunTitle } from '../../core/schedule/scheduleEngine';
 
 export default function ScheduleTasksPanel({
   providerConfigs,
   skills = [],
   currentProviderId,
   currentModelId,
-  scheduledTasks: passedScheduledTasks
+  scheduledTasks: passedScheduledTasks,
+  conversations = [],
+  onSelectConversation,
+  onCloseDrawer,
+  highlightedTaskId = null
 }) {
   const { t } = useTranslation();
   
   // Use passed scheduledTasks from App root if provided, otherwise fallback to local hook
-  const localScheduledTasks = useScheduledTasks({ providerConfigs, skills });
+  const localScheduledTasks = useScheduledTasks({
+    providerConfigs,
+    skills,
+    isReady: !passedScheduledTasks
+  });
   const {
     tasks,
     isLoading,
+    selectedWidgetTaskId,
+    selectTaskForWidget,
     saveTask,
     deleteTask,
     toggleTask,
@@ -30,9 +41,54 @@ export default function ScheduleTasksPanel({
   const [time, setTime] = useState('08:00');
   const [repeat, setRepeat] = useState('daily');
   const [selectedSkills, setSelectedSkills] = useState(['daily-fortune']);
+  const [pinToWidget, setPinToWidget] = useState(true);
+  const [includeHistoryContext, setIncludeHistoryContext] = useState(false);
+  const [expandedHistoryTaskIds, setExpandedHistoryTaskIds] = useState({});
   const [deletingTaskId, setDeletingTaskId] = useState(null);
   const [executingTaskId, setExecutingTaskId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  const effectiveWidgetTaskId = selectedWidgetTaskId || tasks[0]?.id || null;
+
+  const toggleHistoryExpanded = (taskId, e) => {
+    e?.stopPropagation?.();
+    setExpandedHistoryTaskIds(prev => ({
+      ...prev,
+      [taskId]: !prev[taskId]
+    }));
+  };
+
+  const getMergedRunHistory = (task) => {
+    const historyList = Array.isArray(task.runHistory) ? [...task.runHistory] : [];
+    const seenConvIds = new Set(historyList.map(r => r?.conversationId).filter(Boolean));
+    const seenRunIds = new Set(historyList.map(r => r?.runId).filter(Boolean));
+
+    for (const conv of conversations) {
+      if (!conv) continue;
+      const belongsToTask =
+        conv.scheduleId === task.id ||
+        conv.taskId === task.id ||
+        (task.conversationId && conv.id === task.conversationId);
+      if (!belongsToTask) continue;
+      if (seenConvIds.has(conv.id)) continue;
+      if (conv.runId && seenRunIds.has(conv.runId)) continue;
+
+      const execTime = conv.executedAt || conv.createdAt || conv.updatedAt || Date.now();
+      historyList.push({
+        scheduleId: task.id,
+        runId: conv.runId || `legacy_${conv.id}`,
+        conversationId: conv.id,
+        title: conv.historyTitle || formatScheduleRunTitle(task.name, execTime),
+        executedAt: execTime,
+        completedAt: conv.completedAt || conv.updatedAt || execTime,
+        status: conv.status || 'success',
+        summary: conv.summary || ''
+      });
+      seenConvIds.add(conv.id);
+    }
+
+    return historyList.sort((a, b) => (b.executedAt || 0) - (a.executedAt || 0));
+  };
 
   const handleOpenNew = () => {
     setEditingTask('new');
@@ -41,6 +97,8 @@ export default function ScheduleTasksPanel({
     setTime('07:30');
     setRepeat('daily');
     setSelectedSkills(['daily-fortune']);
+    setPinToWidget(true);
+    setIncludeHistoryContext(false);
   };
 
   const handleOpenEdit = (task) => {
@@ -50,6 +108,8 @@ export default function ScheduleTasksPanel({
     setTime(task.time || '08:00');
     setRepeat(task.repeat || 'daily');
     setSelectedSkills(task.skillIds || ['daily-fortune']);
+    setPinToWidget(effectiveWidgetTaskId === task.id);
+    setIncludeHistoryContext(Boolean(task.includeHistoryContext));
   };
 
   const handleSave = async (e) => {
@@ -66,7 +126,9 @@ export default function ScheduleTasksPanel({
         repeat,
         skillIds: selectedSkills,
         providerId: currentProviderId || 'nvidia',
-        modelId: currentModelId || ''
+        modelId: currentModelId || '',
+        pinToWidget,
+        includeHistoryContext
       });
       setEditingTask(null);
     } catch (err) {
@@ -166,30 +228,38 @@ export default function ScheduleTasksPanel({
               );
             }
 
+            const isPinnedWidget = effectiveWidgetTaskId === task.id;
+            const isHighlighted = highlightedTaskId === task.id;
+            const latestResult = task.latestResult || null;
+            const latestConvId = latestResult?.conversationId || task.conversationId || null;
+            const latestSummary = latestResult?.summary || task.lastRunSummary || '';
+            const latestStatus = latestResult?.status || task.lastRunStatus || null;
+            const runHistoryList = getMergedRunHistory(task);
+            const isHistoryExpanded = Boolean(expandedHistoryTaskIds[task.id]);
+
             return (
               <div
                 key={task.id}
                 className={`p-3 rounded-2xl border transition-all ${
+                  isHighlighted ? 'ring-2 ring-amber-400/80 ' : ''
+                }${
                   task.enabled
                     ? 'bg-slate-900/90 border-slate-800 hover:border-slate-700 shadow-sm'
                     : 'bg-slate-950/40 border-slate-900 opacity-60'
                 }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div
-                    className="flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer group"
+                    className="flex-1 min-w-0 cursor-pointer group"
                     onClick={() => handleOpenEdit(task)}
                     title="點擊編輯此任務"
                   >
-                    <span className="font-mono text-amber-400 font-bold text-xs bg-amber-950/60 border border-amber-800/50 px-2 py-0.5 rounded-lg shrink-0 group-hover:border-amber-600 transition-colors">
-                      ⏰ {task.time}
-                    </span>
-                    <span className="font-semibold text-slate-200 truncate group-hover:text-emerald-300 transition-colors">
+                    <span className="font-semibold text-slate-200 break-words block group-hover:text-emerald-300 transition-colors">
                       {task.name}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     {/* Manual Run Now Button */}
                     <button
                       type="button"
@@ -229,16 +299,134 @@ export default function ScheduleTasksPanel({
                   </div>
                 </div>
 
-                <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
-                  <span className="truncate max-w-[150px] text-slate-400">
-                    {task.repeat === 'daily' ? '每天' : task.repeat === 'once' ? '僅一次' : '工作日'} · 下次: {formatNextRun(task.nextRunAt)}
-                  </span>
-                  {task.skillIds && task.skillIds.length > 0 && (
-                    <span className="px-1.5 py-0.2 rounded bg-slate-800/80 text-slate-300 border border-slate-700/50">
-                      {task.skillIds[0]}
+                <div className="mt-1.5 flex items-center justify-between flex-wrap text-[10px] text-slate-500 pt-1.5 border-t border-slate-800/60 gap-x-2 gap-y-1">
+                  <div className="flex items-center flex-wrap gap-1.5 min-w-0">
+                    <span className="font-mono text-amber-400 font-bold bg-amber-950/60 border border-amber-800/50 px-1.5 py-0.5 rounded-md shrink-0">
+                      ⏰ {task.time}
                     </span>
+                    <span className="text-slate-400">
+{task.repeat === 'daily' ? '每天' : task.repeat === 'once' ? '僅一次' : '工作日'} · 下次: {formatNextRun(task.nextRunAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {task.lastRunStatus === 'success' && (
+                      <span className="text-emerald-400">✅ {t('schedule.statusDone', '完成')}</span>
+                    )}
+                    {task.lastRunStatus === 'failed' && (
+                      <span className="text-rose-400">⚠️ {t('schedule.statusFailed', '失敗')}</span>
+                    )}
+                    {task.skillIds && task.skillIds.length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded bg-slate-800/80 text-slate-300 border border-slate-700/50">
+                        {task.skillIds[0]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Latest Result Summary Preview */}
+                {(latestSummary || latestStatus) && (
+                  <div
+                    className={`mt-2 px-2.5 py-1.5 rounded-xl border text-[11px] leading-snug ${
+                      latestStatus === 'failed'
+                        ? 'bg-rose-950/30 border-rose-800/40 text-rose-200'
+                        : 'bg-slate-950/70 border-slate-800/70 text-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400 mb-0.5">
+                      <span>{t('schedule.latestSummaryLabel', '最新結果')}</span>
+                      {task.lastRunAt && (
+                        <span className="font-mono">{formatNextRun(task.lastRunAt)}</span>
+                      )}
+                    </div>
+                    <p className="break-words line-clamp-2">
+                      {latestSummary || (latestStatus === 'failed' ? '⚠️ 排程執行失敗' : '排程任務已完成')}
+                    </p>
+                  </div>
+                )}
+
+                {/* Widget Bind, View Latest Result & History Actions */}
+                <div className="mt-2 flex items-center justify-between flex-wrap gap-1.5 pt-1.5 border-t border-slate-800/40">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectTaskForWidget?.(task.id);
+                      }}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer ${
+                        isPinnedWidget
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-slate-800/70 text-slate-400 hover:text-slate-200 border border-slate-700/50'
+                      }`}
+                    >
+                      <Pin size={10} />
+                      <span>{isPinnedWidget ? t('schedule.widgetPinned', '小工具顯示中') : t('schedule.pinToWidget', '設為小工具')}</span>
+                    </button>
+
+                    {runHistoryList.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => toggleHistoryExpanded(task.id, e)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-slate-800/70 text-slate-300 hover:text-white border border-slate-700/50 transition-colors cursor-pointer"
+                      >
+                        <History size={10} />
+                        <span>{t('schedule.historyRecords', '歷史紀錄')} ({runHistoryList.length})</span>
+                        {isHistoryExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                      </button>
+                    )}
+                  </div>
+
+                  {latestConvId && onSelectConversation && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectConversation(latestConvId, { forceReload: true });
+                        onCloseDrawer?.();
+                      }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 transition-colors cursor-pointer"
+                    >
+                      <MessageSquare size={10} />
+                      <span>{t('schedule.viewLatestResult', '查看最新結果')}</span>
+                    </button>
                   )}
                 </div>
+
+                {/* Expandable Run History List (Dated Records) */}
+                {isHistoryExpanded && runHistoryList.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-slate-800/60 space-y-1.5">
+                    {runHistoryList.map((run, rIdx) => {
+                      const runConvId = run.conversationId;
+                      const displayTitle = run.title || formatScheduleRunTitle(task.name, run.executedAt);
+                      const isRunFailed = run.status === 'failed';
+                      return (
+                        <button
+                          key={run.runId || runConvId || rIdx}
+                          type="button"
+                          disabled={!runConvId || !onSelectConversation}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (runConvId && onSelectConversation) {
+                              onSelectConversation(runConvId, { forceReload: true });
+                              onCloseDrawer?.();
+                            }
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-xl bg-slate-950/80 hover:bg-slate-800/80 border border-slate-800/80 transition-colors disabled:opacity-60 cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[10px]">
+                            <span className="font-medium text-slate-200 truncate">{displayTitle}</span>
+                            <span className={isRunFailed ? 'text-rose-400 shrink-0' : 'text-emerald-400 shrink-0'}>
+                              {isRunFailed ? '⚠️ 失敗' : '✅ 完成'}
+                            </span>
+                          </div>
+                          {run.summary && (
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">{run.summary}</p>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })
@@ -374,6 +562,30 @@ export default function ScheduleTasksPanel({
                 </div>
               </div>
 
+              <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={pinToWidget}
+                  onChange={e => setPinToWidget(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-500 rounded"
+                />
+                <span className="text-xs text-slate-200 font-medium">
+                  {t('schedule.pinWidgetCheckbox', '同步至桌面小工具')}
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={includeHistoryContext}
+                  onChange={e => setIncludeHistoryContext(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-500 rounded"
+                />
+                <span className="text-xs text-slate-200 font-medium">
+                  {t('schedule.includeHistoryCheckbox', '引用前次排程摘要作為上下文（預設關閉）')}
+                </span>
+              </label>
+
               {/* Modal Action Buttons */}
               <div className="flex items-center justify-between pt-3 border-t border-slate-800">
                 {!isNew && (
@@ -389,7 +601,7 @@ export default function ScheduleTasksPanel({
                     className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/40 text-xs font-semibold transition-colors flex items-center gap-1.5"
                   >
                     <Play size={13} />
-                    <span>立即測試執行</span>
+                    <span>立即測試</span>
                   </button>
                 )}
 
@@ -414,7 +626,7 @@ export default function ScheduleTasksPanel({
                     ) : (
                       <>
                         <Check size={14} />
-                        <span>{isNew ? '確認新增排程' : '儲存修改'}</span>
+                        <span>{isNew ? '確認新增' : '儲存'}</span>
                       </>
                     )}
                   </button>

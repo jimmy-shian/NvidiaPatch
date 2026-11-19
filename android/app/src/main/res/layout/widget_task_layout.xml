@@ -38,9 +38,40 @@
             android:id="@+id/widget_task_time"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="剛剛"
+            android:layout_marginEnd="6dp"
+            android:text="待排程"
             android:textColor="#94A3B8"
             android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/widget_btn_prev"
+            android:layout_width="24dp"
+            android:layout_height="22dp"
+            android:gravity="center"
+            android:text="◀"
+            android:textColor="#CBD5E1"
+            android:textSize="11sp"
+            android:background="#1E293B" />
+
+        <TextView
+            android:id="@+id/widget_task_index"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:text="1/1"
+            android:textColor="#94A3B8"
+            android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/widget_btn_next"
+            android:layout_width="24dp"
+            android:layout_height="22dp"
+            android:gravity="center"
+            android:text="▶"
+            android:textColor="#CBD5E1"
+            android:textSize="11sp"
+            android:background="#1E293B" />
     </LinearLayout>
 
     <!-- Summary Content -->
@@ -51,9 +82,9 @@
         android:layout_weight="1"
         android:text="點擊開啟 NvidiaPatch 查看最新排程分析與今日運勢簡報。"
         android:textColor="#E2E8F0"
-        android:textSize="11sp"
+        android:textSize="12sp"
         android:lineSpacingExtra="2dp"
-        android:maxLines="4"
+        android:maxLines="6"
         android:ellipsize="end" />
 
     <!-- Footer -->

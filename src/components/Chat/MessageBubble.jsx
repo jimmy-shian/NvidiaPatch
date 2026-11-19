@@ -720,9 +720,12 @@ export default function MessageBubble({
             {message.content ? (
               <div className="relative">
                 {(() => {
-                  const parsedBlocks = parseOptionsBlocks(message.content);
+                  const displayContent = (message.content || '')
+                    .replace(/<widget-summary\b[^>]*>[\s\S]*?(?:<\/widget-summary>|$)/gi, '')
+                    .trim();
+                  const parsedBlocks = parseOptionsBlocks(displayContent);
                   if (parsedBlocks.length === 1 && parsedBlocks[0].type === 'markdown') {
-                    return <MarkdownRenderer content={message.content} />;
+                    return <MarkdownRenderer content={displayContent} />;
                   }
                   return parsedBlocks.map((blk, bIdx) => {
                     if (blk.type === 'options') {

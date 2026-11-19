@@ -1,11 +1,17 @@
 package com.yesolve.nvidiapatch.mobile;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+import androidx.activity.OnBackPressedCallback;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -34,17 +40,87 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "NvidiaPatch";
+    private static final String PREFS_NAME = "CapacitorStorage";
+    private static final int REQ_POST_NOTIFICATIONS = 1002;
+
+    private static volatile MainActivity activeInstance = null;
+    private static volatile boolean isActivityResumed = false;
+
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, HttpURLConnection> activeConnections = new ConcurrentHashMap<>();
     private final Set<String> explicitlyAbortedStreams = ConcurrentHashMap.newKeySet();
     private volatile String pendingSharedText = null;
     private volatile String pendingConversationId = null;
+    private volatile String pendingTaskId = null;
+    private volatile String pendingNavSource = null;
+
+    public static boolean isWebViewActive() {
+        MainActivity inst = activeInstance;
+        return inst != null
+                && isActivityResumed
+                && !inst.isFinishing()
+                && !inst.isDestroyed()
+                && inst.getBridge() != null
+                && inst.getBridge().getWebView() != null;
+    }
+
+    public static void notifyAlarmTriggeredToWebView() {
+        MainActivity inst = activeInstance;
+        if (inst == null || inst.getBridge() == null || inst.getBridge().getWebView() == null) return;
+        WebView wv = inst.getBridge().getWebView();
+        wv.post(() -> wv.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('nativeAlarmTriggered'));", null));
+    }
+
+    public static void notifyNativeTaskCompletedToWebView() {
+        MainActivity inst = activeInstance;
+        if (inst == null || inst.getBridge() == null || inst.getBridge().getWebView() == null) return;
+        WebView wv = inst.getBridge().getWebView();
+        wv.post(() -> wv.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('nativeTaskCompleted'));", null));
+    }
+
+    private static String cleanExtraString(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || "null".equalsIgnoreCase(trimmed) || "undefined".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         setTheme(R.style.AppTheme_NoActionBar);
         registerPlugin(StartupAdPlugin.class);
         super.onCreate(savedInstanceState);
+        activeInstance = this;
+
+        // Register NativeStreamBridge synchronously so window.NativeStreamBridge is available immediately
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().addJavascriptInterface(
+                    new NativeStreamBridge(getBridge().getWebView()), "NativeStreamBridge");
+        }
+
+        // Request Android 13+ notification permission upfront
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                        this,
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                        REQ_POST_NOTIFICATIONS
+                );
+            }
+        }
+
+        // Move app to background instead of destroying Activity when pressing Back
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                moveTaskToBack(true);
+            }
+        });
 
         // Ensure edge-to-edge window compatibility (Android 15+ targetSdk 35)
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
@@ -77,17 +153,17 @@ public class MainActivity extends BridgeActivity {
             });
         }
 
-        handleIncomingIntent(getIntent());
+        handleIncomingIntent(getIntent(), false);
     }
 
     @Override
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        handleIncomingIntent(intent);
+        handleIncomingIntent(intent, true);
     }
 
-    private void handleIncomingIntent(android.content.Intent intent) {
+    private void handleIncomingIntent(android.content.Intent intent, boolean notifyWebView) {
         if (intent == null) return;
         if (android.content.Intent.ACTION_SEND.equals(intent.getAction())) {
             String type = intent.getType();
@@ -99,17 +175,45 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         }
-        if (intent.hasExtra("conversationId")) {
-            String convId = intent.getStringExtra("conversationId");
-            if (convId != null && !convId.trim().isEmpty()) {
-                this.pendingConversationId = convId.trim();
-                Log.d(TAG, "Received widget conversationId: " + this.pendingConversationId);
+
+        String convId = cleanExtraString(intent.getStringExtra("conversationId"));
+        String taskId = cleanExtraString(intent.getStringExtra("taskId"));
+        String navSource = cleanExtraString(intent.getStringExtra("navSource"));
+
+        // Fallback parse Capacitor LocalNotificationObject extra if present
+        if (convId == null && taskId == null && intent.hasExtra("LocalNotificationObject")) {
+            try {
+                String notifJson = intent.getStringExtra("LocalNotificationObject");
+                if (notifJson != null && !notifJson.trim().isEmpty()) {
+                    JSONObject obj = new JSONObject(notifJson);
+                    JSONObject extra = obj.optJSONObject("extra");
+                    if (extra != null) {
+                        convId = cleanExtraString(extra.optString("conversationId", null));
+                        taskId = cleanExtraString(extra.optString("taskId", null));
+                        if (navSource == null) navSource = "notification";
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        boolean hasNav = convId != null || taskId != null || navSource != null;
+        if (hasNav) {
+            this.pendingConversationId = convId;
+            this.pendingTaskId = taskId;
+            this.pendingNavSource = navSource;
+            Log.d(TAG, "Received nav intent convId=" + convId + " taskId=" + taskId + " source=" + navSource);
+
+            if (notifyWebView && getBridge() != null && getBridge().getWebView() != null) {
+                WebView wv = getBridge().getWebView();
+                wv.post(() -> wv.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('nativeNavigationIntent'));", null));
             }
         }
     }
 
     @Override
     public void onPause() {
+        isActivityResumed = false;
         super.onPause();
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().resumeTimers();
@@ -118,6 +222,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onStop() {
+        isActivityResumed = false;
         super.onStop();
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().resumeTimers();
@@ -127,13 +232,25 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
+        activeInstance = this;
         registerNativeStreamBridge();
     }
 
     @Override
     public void onResume() {
         super.onResume();
+        activeInstance = this;
+        isActivityResumed = true;
         registerNativeStreamBridge();
+    }
+
+    @Override
+    public void onDestroy() {
+        isActivityResumed = false;
+        if (activeInstance == this) {
+            activeInstance = null;
+        }
+        super.onDestroy();
     }
 
     private void registerNativeStreamBridge() {
@@ -162,10 +279,61 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void showCompletionNotification(String title, String body, String conversationId, String taskId, boolean isError) {
+            StreamForegroundService.showTaskCompletionNotification(
+                    MainActivity.this,
+                    title,
+                    body,
+                    conversationId,
+                    taskId,
+                    isError
+            );
+        }
+
+        @JavascriptInterface
+        public void syncScheduledTasks(String tasksJson) {
+            try {
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit().putString(
+                        ScheduleAlarmReceiver.KEY_NATIVE_TASKS_SYNC,
+                        tasksJson != null ? tasksJson : "[]"
+                ).commit();
+                ScheduleAlarmReceiver.scheduleNextAlarm(MainActivity.this);
+            } catch (Exception e) {
+                Log.w(TAG, "syncScheduledTasks failed: " + e.getMessage());
+            }
+        }
+
+        @JavascriptInterface
+        public void markTaskRunningInJs(String taskId, long advancedNextRunAt) {
+            StreamForegroundService.markTaskClaimedByJs(MainActivity.this, taskId, advancedNextRunAt);
+        }
+
+        @JavascriptInterface
+        public String getNativeTaskStateJson(String taskId) {
+            return StreamForegroundService.getNativeTaskStateJson(MainActivity.this, taskId);
+        }
+
+        @JavascriptInterface
+        public String consumePendingNativeTaskResults() {
+            try {
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                String raw = prefs.getString("pending_native_task_results", "[]");
+                if (raw != null && !raw.trim().isEmpty() && !"[]".equals(raw.trim())) {
+                    prefs.edit().remove("pending_native_task_results").commit();
+                    return raw;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "consumePendingNativeTaskResults failed: " + e.getMessage());
+            }
+            return "[]";
+        }
+
+        @JavascriptInterface
         public void updateWidget(String jsonStr) {
             try {
                 if (jsonStr != null && !jsonStr.trim().isEmpty()) {
-                    SharedPreferences prefs = getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE);
+                    SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
                     prefs.edit().putString("widget_latest_task", jsonStr).commit();
                 }
                 TaskWidgetProvider.refreshAllWidgets(MainActivity.this);
@@ -182,6 +350,29 @@ public class MainActivity extends BridgeActivity {
                 Log.d(TAG, "Home Screen Widget updated successfully");
             } catch (Exception e) {
                 Log.w(TAG, "updateWidget failed: " + e.getMessage());
+            }
+        }
+
+        @JavascriptInterface
+        public String getPendingNavigationTarget() {
+            String convId = pendingConversationId;
+            String taskId = pendingTaskId;
+            String source = pendingNavSource;
+            pendingConversationId = null;
+            pendingTaskId = null;
+            pendingNavSource = null;
+
+            if (convId == null && taskId == null && source == null) {
+                return "{}";
+            }
+            try {
+                JSONObject obj = new JSONObject();
+                obj.put("conversationId", convId != null ? convId : JSONObject.NULL);
+                obj.put("taskId", taskId != null ? taskId : JSONObject.NULL);
+                obj.put("source", source != null ? source : JSONObject.NULL);
+                return obj.toString();
+            } catch (Exception e) {
+                return "{}";
             }
         }
 

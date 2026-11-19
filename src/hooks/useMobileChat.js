@@ -8,7 +8,13 @@ import { getModelContextLimit, getCompressionThreshold, getModelContextInfo } fr
 import { generateTitleFromPrompt, cleanFallbackTitle } from '../core/agent/titleGenerator';
 import { runMeihuaPipeline } from '../core/meihua';
 import { NotificationService } from '../core/notifications/notificationService';
-import { writeWidgetLatestTask } from '../core/schedule/scheduleEngine';
+import {
+  syncPendingNativeTaskResults,
+  isScheduleConversation,
+  formatScheduleRunTitle,
+  extractScheduleResultAndSummary,
+  SCHEDULE_SUMMARY_DIRECTIVE
+} from '../core/schedule/scheduleEngine';
 import { NativeStreamClient } from '../core/network/nativeStreamClient';
 
 export function useMobileChat({
@@ -21,6 +27,8 @@ export function useMobileChat({
 }) {
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
+  const [isConversationsLoaded, setIsConversationsLoaded] = useState(false);
+  const [convReloadToken, setConvReloadToken] = useState(0);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [activeSummary, setActiveSummary] = useState(null);
@@ -54,29 +62,64 @@ export function useMobileChat({
   const loadMessagesGenRef = useRef(0); // Anti-race condition generation counter
   const queuedFollowUpRef = useRef(null); // Follow-up messages queued while streaming
 
-  // Load conversations on mount
-  useEffect(() => {
-    async function loadConversations() {
+  // Load conversations on mount and whenever native background execution updates LocalDB
+  const loadConversations = useCallback(async ({ preserveSelection = true } = {}) => {
+    try {
+      await syncPendingNativeTaskResults();
       const rawList = await LocalDB.getConversations();
+      let scheduledTasks = [];
+      try {
+        scheduledTasks = await LocalDB.getScheduledTasks();
+      } catch (_) {}
+      const knownScheduleConvIds = new Set();
+      const convIdToTaskId = new Map();
+      for (const t of scheduledTasks) {
+        if (!t) continue;
+        if (t.conversationId) {
+          knownScheduleConvIds.add(t.conversationId);
+          convIdToTaskId.set(t.conversationId, t.id);
+        }
+        if (t.latestResult?.conversationId) {
+          knownScheduleConvIds.add(t.latestResult.conversationId);
+          convIdToTaskId.set(t.latestResult.conversationId, t.id);
+        }
+        if (Array.isArray(t.runHistory)) {
+          for (const r of t.runHistory) {
+            if (r?.conversationId) {
+              knownScheduleConvIds.add(r.conversationId);
+              convIdToTaskId.set(r.conversationId, t.id);
+            }
+          }
+        }
+      }
+
       const validList = [];
       for (const conv of rawList) {
         const msgs = await LocalDB.getMessages(conv.id);
         if (msgs && msgs.length > 0) {
-          const hasMeihuaFeature = conv.type === 'meihua' ||
-            (Array.isArray(conv.skillIds) && conv.skillIds.includes('meihua'));
+          const isSched = isScheduleConversation(conv) || knownScheduleConvIds.has(conv.id);
+          const hasMeihuaFeature = !isSched && (conv.type === 'meihua' ||
+            (Array.isArray(conv.skillIds) && conv.skillIds.includes('meihua')));
 
           let cleanTitle = conv.title || '';
           if (cleanTitle.includes('<meihua-numbers')) {
             cleanTitle = cleanTitle.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '').replace(/<meihua-numbers[^>]*\/>/gi, '').trim();
           }
 
+          const inferredScheduleId = isSched ? (conv.scheduleId || conv.taskId || convIdToTaskId.get(conv.id) || null) : null;
           const normalizedConv = {
             ...conv,
-            ...(hasMeihuaFeature ? { type: 'meihua' } : {}),
+            ...(isSched
+              ? { type: 'schedule', ...(inferredScheduleId ? { scheduleId: inferredScheduleId } : {}) }
+              : (hasMeihuaFeature ? { type: 'meihua' } : {})),
             title: cleanTitle || conv.title || '新對話'
           };
 
-          if (normalizedConv.type !== conv.type || normalizedConv.title !== conv.title) {
+          if (
+            normalizedConv.type !== conv.type ||
+            normalizedConv.title !== conv.title ||
+            normalizedConv.scheduleId !== conv.scheduleId
+          ) {
             await LocalDB.saveConversation(normalizedConv);
           }
 
@@ -87,20 +130,28 @@ export function useMobileChat({
         }
       }
 
-      if (validList.length > 0) {
-        setConversations(validList);
-        let targetId = validList[0].id;
-        const pendingWidgetConv = (typeof window !== 'undefined' && window.NativeStreamBridge && typeof window.NativeStreamBridge.getPendingConversationId === 'function')
-          ? window.NativeStreamBridge.getPendingConversationId()
-          : null;
-        if (pendingWidgetConv && validList.some(c => c.id === pendingWidgetConv)) {
-          targetId = pendingWidgetConv;
-        } else if (currentConversationIdRef.current && validList.some(c => c.id === currentConversationIdRef.current)) {
+      const generalConvs = validList.filter(c => !isScheduleConversation(c));
+
+      if (generalConvs.length > 0) {
+        setConversations(prev => {
+          // Preserve any current unsaved draft conversation if it's currently selected
+          const currId = currentConversationIdRef.current;
+          const draftCurr = currId && !validList.some(c => c.id === currId)
+            ? prev.find(c => c.id === currId)
+            : null;
+          return draftCurr ? [draftCurr, ...validList] : validList;
+        });
+        let targetId = generalConvs[0].id;
+        if (preserveSelection && currentConversationIdRef.current && validList.some(c => c.id === currentConversationIdRef.current)) {
           targetId = currentConversationIdRef.current;
         }
-        currentConversationIdRef.current = targetId;
-        setCurrentConversationId(targetId);
-      } else {
+        if (!currentConversationIdRef.current || (!preserveSelection && targetId !== currentConversationIdRef.current)) {
+          currentConversationIdRef.current = targetId;
+          setCurrentConversationId(targetId);
+        } else if (currentConversationIdRef.current === targetId) {
+          setConvReloadToken(t => t + 1);
+        }
+      } else if (!currentConversationIdRef.current) {
         const draftConv = {
           id: `conv_${Date.now()}`,
           title: '新對話',
@@ -108,13 +159,37 @@ export function useMobileChat({
           modelId: currentModelId,
           skillIds: (selectedSkillIds || []).filter(id => id !== 'meihua')
         };
-        setConversations([draftConv]);
+        setConversations([draftConv, ...validList]);
         currentConversationIdRef.current = draftConv.id;
         setCurrentConversationId(draftConv.id);
+      } else if (validList.length > 0) {
+        setConversations(prev => {
+          const currId = currentConversationIdRef.current;
+          const draftCurr = currId && !validList.some(c => c.id === currId)
+            ? prev.find(c => c.id === currId)
+            : null;
+          return draftCurr ? [draftCurr, ...validList] : validList;
+        });
       }
+    } finally {
+      setIsConversationsLoaded(true);
     }
-    loadConversations();
   }, []);
+
+  useEffect(() => {
+    loadConversations();
+    const handleDbUpdated = () => {
+      loadConversations({ preserveSelection: true });
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('localDbConversationsUpdated', handleDbUpdated);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('localDbConversationsUpdated', handleDbUpdated);
+      }
+    };
+  }, [loadConversations]);
 
   // Load messages, summary, and skill settings with Anti-Race Condition Generation Protection
   const cleanedConvsRef = useRef(new Set());
@@ -180,7 +255,7 @@ export function useMobileChat({
       }
     }
     loadMessagesAndSummary();
-  }, [currentConversationId]);
+  }, [currentConversationId, convReloadToken]);
 
   // Calculate live Context Token usage & Model limit (accounting for active compressed summary)
   const contextStats = useMemo(() => {
@@ -334,10 +409,29 @@ export function useMobileChat({
   }, [currentProviderId, currentModelId, messages.length, setSelectedSkillIds]);
 
   // Select conversation WITHOUT aborting ongoing background streams
-  const selectConversation = useCallback(async (convId) => {
-    if (convId === currentConversationId) return;
-
+  const selectConversation = useCallback(async (convId, options = {}) => {
+    if (!convId) return;
+    const { forceReload = false } = options || {};
     const currId = currentConversationIdRef.current;
+
+    // Ensure conversation exists in local conversations state if generated in background
+    const dbConv = await LocalDB.getConversation(convId);
+    if (dbConv) {
+      setConversations(prev => {
+        if (prev.some(c => c.id === convId)) {
+          return prev.map(c => c.id === convId ? { ...c, ...dbConv } : c);
+        }
+        return [dbConv, ...prev];
+      });
+    }
+
+    if (convId === currId) {
+      if (forceReload) {
+        setConvReloadToken(t => t + 1);
+      }
+      return;
+    }
+
     // Clean up current conversation if it is completely empty and not streaming
     if (currId && messages.length === 0 && !isStreaming) {
       const currMsgs = await LocalDB.getMessages(currId);
@@ -356,22 +450,11 @@ export function useMobileChat({
     // If input contains leftover meihua numbers, clean it up when switching conversations
     setInput(prev => prev.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>|<meihua-numbers[^>]*\/>/gi, '').trimStart());
 
-    // Ensure conversation exists in local conversations state if generated in background
-    setConversations(prev => {
-      if (!prev.some(c => c.id === convId)) {
-        LocalDB.getConversation(convId).then(dbConv => {
-          if (dbConv) {
-            setConversations(current => current.some(c => c.id === convId) ? current : [dbConv, ...current]);
-          }
-        });
-      }
-      return prev;
-    });
-
     // Switch active conversation ID (background generation continues untouched)
     currentConversationIdRef.current = convId;
     setCurrentConversationId(convId);
-  }, [currentConversationId, messages.length, isStreaming]);
+    setConvReloadToken(t => t + 1);
+  }, [messages.length, isStreaming]);
 
   // Rename conversation
   const renameConversation = useCallback(async (convId, newTitle) => {
@@ -400,9 +483,10 @@ export function useMobileChat({
 
     setConversations(prev => {
       const updated = prev.filter(c => c.id !== convId);
+      const updatedGeneral = updated.filter(c => !isScheduleConversation(c));
       if (currentConversationId === convId) {
-        if (updated.length > 0) {
-          setCurrentConversationId(updated[0].id);
+        if (updatedGeneral.length > 0) {
+          setCurrentConversationId(updatedGeneral[0].id);
         } else {
           const draftConv = {
             id: `conv_${Date.now()}`,
@@ -412,7 +496,7 @@ export function useMobileChat({
             skillIds: selectedSkillIds || []
           };
           setCurrentConversationId(draftConv.id);
-          return [draftConv];
+          return [draftConv, ...updated];
         }
       }
       return updated;
@@ -468,7 +552,7 @@ export function useMobileChat({
     const targetProviderId = options.providerId || currentProviderId;
     const targetSkillIds = options.skillIds !== undefined ? options.skillIds : (selectedSkillIds || []);
 
-    if (!targetModelId || historyMessages.length === 0 || !streamConvId) return;
+    if (!targetModelId || historyMessages.length === 0 || !streamConvId) return { isError: true };
 
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const startedAt = Date.now();
@@ -652,11 +736,17 @@ export function useMobileChat({
       }
     };
 
+    let streamHadError = false;
+    let resolvedFinalContent = '';
+    let resolvedWidgetSummary = '';
+
     await agent.runChat({
       runId,
       messages: payloadForAgent,
       model: targetModelId,
       selectedSkillIds: targetSkillIds,
+      extraSystemPrompt: options.extraSystemPrompt || (options.isScheduledTask ? SCHEDULE_SUMMARY_DIRECTIVE : ''),
+      includeOptionsDirective: options.isScheduledTask ? false : true,
       onThinking: (delta) => {
         accumulatedThinking += delta;
         updateLiveRunState();
@@ -798,9 +888,20 @@ export function useMobileChat({
           finalContentToDisplay = '';
         }
 
+        let storedContent = finalContentToDisplay;
+        let widgetSummary = null;
+        if (options.isScheduledTask) {
+          const extracted = extractScheduleResultAndSummary(finalContentToDisplay, { isFailed: false });
+          storedContent = extracted.fullContent;
+          widgetSummary = extracted.summary;
+          resolvedWidgetSummary = widgetSummary;
+        }
+        resolvedFinalContent = storedContent;
+
         const finalAssistantMsg = {
           ...assistantMsg,
-          content: finalContentToDisplay,
+          content: storedContent,
+          ...(widgetSummary ? { widgetSummary } : {}),
           thinkingContent: accumulatedThinking,
           tool_calls: assistantMsg.tool_calls || null,
           toolExecutions: liveToolExecutions,
@@ -830,9 +931,9 @@ export function useMobileChat({
         // Stop background execution lock held for this stream
         safeStopBackgroundExecution();
 
-        // Smart Title generation for first turn via LLM
+        // Smart Title generation for first turn via LLM (skip for scheduled tasks to preserve task name)
         let resolvedTitle = null;
-        if (historyMessages.length === 1 && historyMessages[0].role === 'user') {
+        if (historyMessages.length === 1 && historyMessages[0].role === 'user' && !options.isScheduledTask) {
           try {
             const titleProvider = createProvider(currentProviderId, activeConfig);
             const generatedTitle = await generateTitleFromPrompt({
@@ -859,31 +960,22 @@ export function useMobileChat({
           } catch (_) {}
         }
 
-        // Sync latest conversation result to Android widget ONLY for scheduled tasks
-        if (options.isScheduledTask || options.taskId) {
-          let convTitle = resolvedTitle;
-          if (!convTitle) {
-            const currentConv = conversations.find(c => c.id === streamConvId);
-            convTitle = currentConv?.title;
-          }
-          if (!convTitle) {
-            try {
-              const dbConv = await LocalDB.getConversation(streamConvId);
-              convTitle = dbConv?.title;
-            } catch (_) {}
-          }
-
-          await writeWidgetLatestTask({
-            title: convTitle || '排程任務',
-            summary: finalContentToDisplay,
-            conversationId: streamConvId,
-            taskId: options.taskId || null
-          });
+        // Resolve conversation title for background notification
+        let convTitle = resolvedTitle;
+        if (!convTitle) {
+          const currentConv = conversations.find(c => c.id === streamConvId);
+          convTitle = currentConv?.title;
+        }
+        if (!convTitle) {
+          try {
+            const dbConv = await LocalDB.getConversation(streamConvId);
+            convTitle = dbConv?.title;
+          } catch (_) {}
         }
 
-        // Background stream completion notification (Plan §2.2)
+        // Background stream completion notification for regular chats (scheduled tasks notify in scheduleEngine)
         const isBackground = typeof document !== 'undefined' && (document.hidden || currentConversationIdRef.current !== streamConvId);
-        if (isBackground) {
+        if (isBackground && !options.isScheduledTask) {
           NotificationService.sendCompletionNotification({
             conversationId: streamConvId,
             title: convTitle || 'AI 解卦/對話已完成',
@@ -907,6 +999,7 @@ export function useMobileChat({
         }
       },
       onError: async (err) => {
+        streamHadError = true;
         if (renderTimer) {
           clearTimeout(renderTimer);
           renderTimer = null;
@@ -952,25 +1045,35 @@ export function useMobileChat({
           });
         }
 
-        // Background error notification (Plan §2.2)
+        // Background error notification for regular chats (scheduled tasks notify in scheduleEngine)
         const isBackground = typeof document !== 'undefined' && (document.hidden || currentConversationIdRef.current !== streamConvId);
-        if (isBackground) {
-          const currentConv = conversations.find(c => c.id === streamConvId);
-          const convTitle = currentConv?.title || 'AI 回答失敗';
+        if (isBackground && !options.isScheduledTask) {
+          let convTitle = conversations.find(c => c.id === streamConvId)?.title;
+          if (!convTitle) {
+            try {
+              convTitle = (await LocalDB.getConversation(streamConvId))?.title;
+            } catch (_) {}
+          }
           NotificationService.sendCompletionNotification({
             conversationId: streamConvId,
-            title: convTitle,
+            title: convTitle || 'AI 回答失敗',
             body: `錯誤: ${err.message}`,
             isError: true
           });
         }
       }
     });
+
+    return {
+      isError: streamHadError,
+      content: resolvedFinalContent,
+      widgetSummary: resolvedWidgetSummary
+    };
   }, [currentModelId, currentProviderId, providerConfigs, selectedSkillIds]);
 
   // Send new user message (supports queuing/sending while streaming)
   const sendMessage = useCallback(async (customText = null) => {
-    const textToSend = (customText !== null ? customText : input).trim();
+    const textToSend = (typeof customText === 'string' ? customText : input).trim();
     const hasImages = attachedImages.length > 0;
     if ((!textToSend && !hasImages) || !currentModelId) return;
 
@@ -1037,28 +1140,41 @@ export function useMobileChat({
     await executeChatStream([...messages, userMsg]);
   }, [input, attachedImages, currentModelId, isStreaming, currentConversationId, messages, conversations, currentProviderId, selectedSkillIds, executeChatStream]);
 
-  // Simulate user creating a new chat and streaming a prompt (e.g. for Scheduled Tasks)
+  // Execute an isolated scheduled task run (never mixed into normal user chat history)
   const simulateUserChat = useCallback(async ({
+    taskId = null,
+    runId = null,
+    startedAt: customStartedAt = null,
+    existingConversationId = null,
     title,
+    runTitle = null,
     prompt,
     skillIds,
     providerId,
     modelId,
-    shouldSwitchView = true
+    extraSystemPrompt = '',
+    shouldSwitchView = false
   }) => {
-    const startedAt = Date.now();
-    const convId = `conv_task_${startedAt}`;
+    const startedAt = typeof customStartedAt === 'number' ? customStartedAt : Date.now();
+    const resolvedRunId = runId || `run_${taskId || 'task'}_${startedAt}`;
+    const convId = `conv_task_${taskId ? `${taskId}_` : ''}${startedAt}`;
     const pId = providerId || currentProviderId;
-    const mId = modelId || currentModelId;
+    const mId = modelId || currentModelId || 'nvidia/nemotron-3.5-super-vl-120b-a12b';
     const skills = skillIds || ['daily-fortune'];
+    const formattedTitle = runTitle || formatScheduleRunTitle(title || '排程任務', startedAt);
 
     const newConv = {
       id: convId,
-      title: title || '排程任務',
+      title: formattedTitle,
+      historyTitle: formattedTitle,
+      taskName: title || '排程任務',
       providerId: pId,
       modelId: mId,
       skillIds: skills,
-      type: 'chat',
+      type: 'schedule',
+      scheduleId: taskId,
+      runId: resolvedRunId,
+      executedAt: startedAt,
       createdAt: startedAt,
       updatedAt: startedAt
     };
@@ -1084,16 +1200,25 @@ export function useMobileChat({
       setMessages([userMsg]);
     }
 
-    // Launch real-time streaming generation
-    await executeChatStream([userMsg], {
+    // Launch real-time streaming generation in isolated schedule context
+    const streamRes = await executeChatStream([userMsg], {
       targetConvId: convId,
       modelId: mId,
       providerId: pId,
       skillIds: skills,
-      isScheduledTask: true
+      isScheduledTask: true,
+      taskId,
+      runId: resolvedRunId,
+      extraSystemPrompt: extraSystemPrompt || SCHEDULE_SUMMARY_DIRECTIVE
     });
 
-    return { conversationId: convId };
+    return {
+      conversationId: convId,
+      runId: resolvedRunId,
+      isError: Boolean(streamRes?.isError),
+      content: streamRes?.content || '',
+      widgetSummary: streamRes?.widgetSummary || ''
+    };
   }, [currentProviderId, currentModelId, executeChatStream, setSelectedSkillIds]);
 
   // Stop Generation for current active conversation
@@ -1168,6 +1293,7 @@ export function useMobileChat({
   return {
     conversations,
     currentConversationId,
+    isConversationsLoaded,
     messages,
     input,
     setInput,

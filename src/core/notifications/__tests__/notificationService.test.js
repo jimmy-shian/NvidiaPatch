@@ -59,4 +59,59 @@ describe('NotificationService', () => {
     expect(n.title).toBe('AI 回答發生錯誤');
     expect(n.body).toBe('網路連線逾時');
   });
+
+  it('prefers NativeStreamBridge.showCompletionNotification and strips <think>/<options> tags', async () => {
+    const originalWindow = globalThis.window;
+    const showSpy = vi.fn();
+    globalThis.window = {
+      NativeStreamBridge: {
+        showCompletionNotification: showSpy
+      }
+    };
+
+    try {
+      await NotificationService.sendCompletionNotification({
+        conversationId: 'conv_bridge_1',
+        taskId: 'task_bridge_1',
+        title: '排程完成：運勢',
+        body: '<think>思考內容</think>今日諸事順遂。<options title="下一步"><option label="詳解" /></options>',
+        isError: false
+      });
+
+      expect(showSpy).toHaveBeenCalledTimes(1);
+      expect(showSpy).toHaveBeenCalledWith(
+        '排程完成：運勢',
+        '今日諸事順遂。',
+        'conv_bridge_1',
+        'task_bridge_1',
+        false
+      );
+      expect(LocalNotifications.schedule).not.toHaveBeenCalled();
+    } finally {
+      globalThis.window = originalWindow;
+    }
+  });
+
+  it('updates actionHandler on subsequent initActionListener calls without duplicate listeners', () => {
+    const originalWindow = globalThis.window;
+    globalThis.window = {};
+    NotificationService.isInitialized = false;
+
+    try {
+      const firstCb = vi.fn();
+      const secondCb = vi.fn();
+
+      NotificationService.initActionListener(firstCb);
+      NotificationService.initActionListener(secondCb);
+
+      expect(LocalNotifications.addListener).toHaveBeenCalledTimes(1);
+
+      globalThis.window.__onNotificationClick('conv_99', 'task_99');
+      expect(firstCb).not.toHaveBeenCalled();
+      expect(secondCb).toHaveBeenCalledWith('conv_99', 'task_99');
+    } finally {
+      globalThis.window = originalWindow;
+      NotificationService.isInitialized = false;
+    }
+  });
 });

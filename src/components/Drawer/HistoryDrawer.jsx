@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, MessageSquare, Trash2, Edit2, Check, X, Search, Settings, AlertTriangle, Clock } from 'lucide-react';
 import ScheduleTasksPanel from './ScheduleTasksPanel';
+import { isScheduleConversation } from '../../core/schedule/scheduleEngine';
 
 export default function HistoryDrawer({
   isOpen,
@@ -18,10 +19,15 @@ export default function HistoryDrawer({
   skills,
   currentProviderId,
   currentModelId,
-  scheduledTasks
+  scheduledTasks,
+  drawerTab: externalTab = null,
+  onDrawerTabChange = null,
+  highlightedTaskId = null
 }) {
   const { t } = useTranslation();
-  const [drawerTab, setDrawerTab] = useState('chats');
+  const [internalTab, setInternalTab] = useState('chats');
+  const drawerTab = externalTab || internalTab;
+  const setDrawerTab = onDrawerTabChange || setInternalTab;
   const [searchQuery, setSearchQuery] = useState('');
   const [editingConvId, setEditingConvId] = useState(null);
   const [editTitleText, setEditTitleText] = useState('');
@@ -30,6 +36,7 @@ export default function HistoryDrawer({
   if (!isOpen) return null;
 
   const filtered = conversations.filter(c =>
+    !isScheduleConversation(c) &&
     (c.title || '新對話').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -131,6 +138,10 @@ export default function HistoryDrawer({
             currentProviderId={currentProviderId}
             currentModelId={currentModelId}
             scheduledTasks={scheduledTasks}
+            conversations={conversations}
+            onSelectConversation={onSelectConversation}
+            onCloseDrawer={onClose}
+            highlightedTaskId={highlightedTaskId}
           />
         ) : (
           <>

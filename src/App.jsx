@@ -1,6 +1,6 @@
 import SplashAd from './components/Common/SplashAd';
 import StudioAnnouncementOverlay from './components/Common/StudioAnnouncementOverlay';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { useMobileSettings } from './hooks/useMobileSettings';
@@ -17,10 +17,13 @@ import { PROVIDER_TYPES } from './core/providers';
 import { NotificationService } from './core/notifications/notificationService';
 import { checkPendingSharedText } from './core/utils/shareTarget';
 import { useScheduledTasks } from './hooks/useScheduledTasks';
+import { syncPendingNativeTaskResults } from './core/schedule/scheduleEngine';
 
 export default function App() {
   const [showSplashAd, setShowSplashAd] = useState(true);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState('chats');
+  const [highlightedTaskId, setHighlightedTaskId] = useState(null);
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isMeihuaHelpModalOpen, setIsMeihuaHelpModalOpen] = useState(false);
@@ -40,8 +43,67 @@ export default function App() {
     providerConfigs: settings.providerConfigs,
     skills: settings.skills,
     onSimulateChat: chat.simulateUserChat,
-    onCloseDrawer: () => setIsDrawerOpen(false)
+    onCloseDrawer: () => setIsDrawerOpen(false),
+    isReady: !settings.isLoading
   });
+
+  const navigateToTarget = useCallback(async ({ conversationId = null, taskId = null, source = null } = {}) => {
+    let convId = (conversationId && conversationId !== 'null' && conversationId !== 'undefined')
+      ? String(conversationId).trim()
+      : null;
+    const tId = (taskId && taskId !== 'null' && taskId !== 'undefined')
+      ? String(taskId).trim()
+      : null;
+
+    if (!convId && !tId) {
+      if (source === 'widget') {
+        setShowSplashAd(false);
+        setIsModelModalOpen(false);
+        setIsSettingsModalOpen(false);
+        setIsMeihuaHelpModalOpen(false);
+        setDrawerTab('schedule');
+        setIsDrawerOpen(true);
+      }
+      return;
+    }
+
+    setShowSplashAd(false);
+    setIsModelModalOpen(false);
+    setIsSettingsModalOpen(false);
+    setIsMeihuaHelpModalOpen(false);
+
+    await syncPendingNativeTaskResults();
+    const refreshedTasks = await scheduledTasks.loadTasks();
+
+    if (tId) {
+      if (scheduledTasks.selectedWidgetTaskId !== tId) {
+        await scheduledTasks.selectTaskForWidget(tId);
+      }
+      if (!convId) {
+        const matchedTask = (refreshedTasks || []).find(t => t.id === tId) || (await LocalDB.getScheduledTask(tId));
+        if (matchedTask?.conversationId) {
+          convId = matchedTask.conversationId;
+        }
+      }
+    }
+
+    if (convId) {
+      const dbConv = await LocalDB.getConversation(convId);
+      if (dbConv && chat.selectConversation) {
+        setIsDrawerOpen(false);
+        setHighlightedTaskId(null);
+        await chat.selectConversation(convId, { forceReload: true });
+        return;
+      }
+    }
+
+    setHighlightedTaskId(tId);
+    setDrawerTab('schedule');
+    setIsDrawerOpen(true);
+  }, [chat.selectConversation, scheduledTasks.loadTasks, scheduledTasks.selectTaskForWidget, scheduledTasks.selectedWidgetTaskId]);
+
+  const navigateToTargetRef = useRef(navigateToTarget);
+  navigateToTargetRef.current = navigateToTarget;
 
   useEffect(() => {
     if (Capacitor.isNativePlatform()) {
@@ -59,12 +121,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    NotificationService.initActionListener((conversationId) => {
-      if (conversationId && chat.selectConversation) {
-        chat.selectConversation(conversationId);
-      }
+    NotificationService.initActionListener((conversationId, taskId) => {
+      navigateToTargetRef.current?.({ conversationId, taskId, source: 'notification' });
     });
-  }, [chat.selectConversation]);
+  }, []);
 
   // Handle external text shared into NvidiaPatch (Share Target)
   useEffect(() => {
@@ -97,13 +157,32 @@ export default function App() {
     };
   }, [chat.newChat, chat.setInput]);
 
-  // Handle desktop widget click to open specific conversation
+  // Handle desktop widget / native notification click to open specific conversation or schedule tab
   useEffect(() => {
+    if (settings.isLoading || !chat.isConversationsLoaded) return;
+
     const handleCheckWidgetConv = () => {
-      if (typeof window !== 'undefined' && window.NativeStreamBridge && typeof window.NativeStreamBridge.getPendingConversationId === 'function') {
+      if (typeof window === 'undefined' || !window.NativeStreamBridge) return;
+
+      if (typeof window.NativeStreamBridge.getPendingNavigationTarget === 'function') {
+        try {
+          const raw = window.NativeStreamBridge.getPendingNavigationTarget();
+          if (raw && raw.trim() && raw.trim() !== '{}') {
+            const parsed = JSON.parse(raw);
+            if (parsed.conversationId || parsed.taskId || parsed.source) {
+              navigateToTargetRef.current?.(parsed);
+              return;
+            }
+          }
+        } catch (e) {
+          console.warn('[App] Parse pending navigation target failed:', e);
+        }
+      }
+
+      if (typeof window.NativeStreamBridge.getPendingConversationId === 'function') {
         const convId = window.NativeStreamBridge.getPendingConversationId();
-        if (convId && chat.selectConversation) {
-          chat.selectConversation(convId);
+        if (convId && convId !== 'null' && convId !== 'undefined') {
+          navigateToTargetRef.current?.({ conversationId: convId, source: 'widget' });
         }
       }
     };
@@ -118,12 +197,14 @@ export default function App() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleCheckWidgetConv);
+    window.addEventListener('nativeNavigationIntent', handleCheckWidgetConv);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleCheckWidgetConv);
+      window.removeEventListener('nativeNavigationIntent', handleCheckWidgetConv);
     };
-  }, [chat.selectConversation]);
+  }, [settings.isLoading, chat.isConversationsLoaded]);
 
   const toggleSkill = (skillId) => {
     setSelectedSkillIds(prev => {
@@ -206,7 +287,10 @@ export default function App() {
       {/* History Slide-out Drawer */}
       <HistoryDrawer
         isOpen={isDrawerOpen}
-        onClose={() => setIsDrawerOpen(false)}
+        onClose={() => {
+          setIsDrawerOpen(false);
+          setHighlightedTaskId(null);
+        }}
         conversations={chat.conversations}
         currentConversationId={chat.currentConversationId}
         onSelectConversation={chat.selectConversation}
@@ -220,6 +304,9 @@ export default function App() {
         currentProviderId={settings.currentProviderId}
         currentModelId={settings.currentModelId}
         scheduledTasks={scheduledTasks}
+        drawerTab={drawerTab}
+        onDrawerTabChange={setDrawerTab}
+        highlightedTaskId={highlightedTaskId}
       />
 
       {/* Quick Model Selector Bottom Sheet */}
