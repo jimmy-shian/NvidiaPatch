@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import MessageBubble from '../MessageBubble';
+import InlineWaitingAd from '../InlineWaitingAd';
 
 // Mock react-i18next
 vi.mock('react-i18next', () => ({
@@ -61,4 +62,17 @@ describe('MessageBubble Options Rendering', () => {
     expect(html).toContain('這是一般的普通段落文字說明。');
     expect(html).not.toContain('個選項');
   });
+
+  it('InlineWaitingAd renders while streaming without any manual close button', () => {
+    const html = renderToString(
+      React.createElement(InlineWaitingAd, { isStreaming: true })
+    );
+
+    expect(html).toContain('NvidiaPatch AI');
+    expect(html).toContain('生成中…');
+    expect(html).toContain('回覆完成後自動收起');
+    expect(html).not.toContain('<button');
+    expect(html).not.toContain('關閉');
+  });
+
 });

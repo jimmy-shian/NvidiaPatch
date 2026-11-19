@@ -19,6 +19,7 @@ interface StartupAdPlugin {
     width: number;
     /** 緊湊卡（對話流內嵌用）：縮小媒體區與內文行數 */
     compact?: boolean;
+    visible?: boolean;
   }): Promise<NativeAdPlacementResult>;
   /** 重新對位原生廣告層（廣告槽位於對話流內時，會隨串流與捲動移動） */
   moveNativeAt(options: { x: number; y: number; visible: boolean }): Promise<void>;
@@ -68,7 +69,13 @@ export function showNativeAdInSlot(
   }
 
   const rect = slot.getBoundingClientRect();
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
   if (rect.width < 80 || rect.bottom < 0) return Promise.resolve(null);
+
+  const scroller = slot.closest('.chat-scroll-container');
+  const scrollerRect = scroller ? scroller.getBoundingClientRect() : null;
+  const inScroller = !scrollerRect || (rect.top >= scrollerRect.top && rect.bottom <= scrollerRect.bottom);
+  const visible = inScroller && rect.top < viewportHeight;
 
   activeSlot = slot;
   return StartupAd.showNativeAt({
@@ -77,6 +84,7 @@ export function showNativeAdInSlot(
     y: rect.top,
     width: rect.width,
     compact,
+    visible,
   })
     .then((result) => (activeSlot === slot ? result : null))
     .catch((error) => {
@@ -96,7 +104,14 @@ export function syncNativeAdInSlot(slot: HTMLElement | null): void {
   if (!Capacitor.isNativePlatform() || !slot) return;
   const rect = slot.getBoundingClientRect();
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
-  const visible = rect.width >= 80 && rect.bottom > 0 && rect.top < viewportHeight;
+  let visible = rect.width >= 80 && rect.bottom > 0 && rect.top < viewportHeight;
+  const scroller = slot.closest('.chat-scroll-container');
+  if (scroller) {
+    const scrollerRect = scroller.getBoundingClientRect();
+    if (rect.top < scrollerRect.top || rect.bottom > scrollerRect.bottom) {
+      visible = false;
+    }
+  }
   void StartupAd.moveNativeAt({ x: rect.left, y: rect.top, visible }).catch(() => undefined);
 }
 

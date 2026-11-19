@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -45,6 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @CapacitorPlugin(name = "StartupAd")
 public class StartupAdPlugin extends Plugin {
 
+    private static final String TAG = "StartupAd";
     private static final long LOAD_TIMEOUT_MS = 8000L;
 
     private FrameLayout overlayRoot;
@@ -64,6 +66,7 @@ public class StartupAdPlugin extends Plugin {
         double y = call.getDouble("y", 0d);
         double w = call.getDouble("width", 320d);
         boolean compact = call.getBoolean("compact", false);
+        boolean visible = call.getBoolean("visible", true);
         Activity activity = getActivity();
         if (adUnitId.isEmpty() || activity == null || activity.isFinishing()) {
             resolveLoaded(call, false);
@@ -90,7 +93,7 @@ public class StartupAdPlugin extends Plugin {
                     handler.removeCallbacks(timeout);
                     if (generation != loadGeneration.get()) { ad.destroy(); resolveLoaded(call, false); return; }
                     if (activity.isFinishing()) { ad.destroy(); resolveLoaded(call, false); return; }
-                    float widthDp = (float) Math.max(200f, w);
+                    float widthDp = (float) Math.max(240f, w);
                     NativeAdView adView = buildNativeAdView(activity, ad, widthDp, compact);
                     float density = activity.getResources().getDisplayMetrics().density;
                     // 量出卡片實際高度（dp）回傳給 WebView，讓廣告槽預留同樣高度
@@ -98,12 +101,14 @@ public class StartupAdPlugin extends Plugin {
                         View.MeasureSpec.makeMeasureSpec(Math.round(widthDp * density), View.MeasureSpec.EXACTLY),
                         View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
                     int heightDp = Math.round(adView.getMeasuredHeight() / density);
-                    boolean placed = attachOverlay(activity, ad, adView, (float) x, (float) y, widthDp);
+                    Log.i(TAG, "NativeAd loaded: widthDp=" + widthDp + " heightDp=" + heightDp + " headline=" + ad.getHeadline());
+                    boolean placed = attachOverlay(activity, ad, adView, (float) x, (float) y, widthDp, visible);
                     resolveLoaded(call, placed, placed ? heightDp : 0);
                 })
                 .withAdListener(new AdListener() {
                     @Override
                     public void onAdFailedToLoad(@NonNull LoadAdError error) {
+                        Log.w(TAG, "NativeAd failed: code=" + error.getCode() + " domain=" + error.getDomain() + " msg=" + error.getMessage());
                         if (settled.compareAndSet(false, true)) {
                             resolveLoaded(call, false);
                         }
@@ -155,7 +160,7 @@ public class StartupAdPlugin extends Plugin {
                 ((FrameLayout.LayoutParams) lp).topMargin = topMargin;
                 adView.setLayoutParams(lp);
             }
-            root.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+            root.setVisibility(visible ? View.VISIBLE : View.GONE);
             call.resolve();
         });
     }
@@ -168,7 +173,7 @@ public class StartupAdPlugin extends Plugin {
 
     // ------------------------------------------------------------------ //
 
-    private boolean attachOverlay(Activity activity, NativeAd ad, NativeAdView adView, float xDp, float yDp, float widthDp) {
+    private boolean attachOverlay(Activity activity, NativeAd ad, NativeAdView adView, float xDp, float yDp, float widthDp, boolean visible) {
         hideOverlayInternal();
         ViewGroup content = activity.findViewById(android.R.id.content);
         if (content == null || adView.getParent() != null) {
@@ -187,6 +192,7 @@ public class StartupAdPlugin extends Plugin {
         root.setLayoutParams(new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(adView);
+        root.setVisibility(visible ? View.VISIBLE : View.GONE);
         content.addView(root);
 
         overlayRoot = root;
@@ -248,6 +254,7 @@ public class StartupAdPlugin extends Plugin {
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         row.addView(badge);
 
+        TextView advertiserView = null;
         if (!TextUtils.isEmpty(ad.getAdvertiser())) {
             TextView advertiser = new TextView(activity);
             advertiser.setText(ad.getAdvertiser());
@@ -260,19 +267,20 @@ public class StartupAdPlugin extends Plugin {
             advLp.leftMargin = dp(density, 8);
             advertiser.setLayoutParams(advLp);
             row.addView(advertiser);
+            advertiserView = advertiser;
         }
         card.addView(row);
 
-        // 媒體視覺
+        // 媒體視覺：嚴格遵循 Google AdMob Native Advanced 規範 (MediaView 最小尺寸須 >= 120dp x 120dp)
         MediaView mediaView = null;
         TextView headlineView = null;
         TextView bodyView = null;
         MediaContent mediaContent = ad.getMediaContent();
         if (mediaContent != null) {
-            float inner = widthDp - 24f;
-            float ratio = mediaContent.getAspectRatio() > 0f ? mediaContent.getAspectRatio() : 1.2f;
-            int minHeight = dp(density, compact ? 90 : 120);
-            int maxHeight = dp(density, compact ? 130 : 220);
+            float inner = widthDp - (compact ? 20f : 24f);
+            float ratio = mediaContent.getAspectRatio() > 0f ? mediaContent.getAspectRatio() : 1.77f;
+            int minHeight = dp(density, compact ? 132 : 140);
+            int maxHeight = dp(density, compact ? 176 : 220);
             int mediaHeight = (int) Math.max(minHeight, Math.min(maxHeight, inner / ratio));
             mediaView = new MediaView(activity);
             LinearLayout.LayoutParams mediaLp = new LinearLayout.LayoutParams(
@@ -342,14 +350,17 @@ public class StartupAdPlugin extends Plugin {
         card.addView(cta);
 
         NativeAdView adView = new NativeAdView(activity);
-        card.setLayoutParams(new LinearLayout.LayoutParams(
-            Math.round(widthDp * density), ViewGroup.LayoutParams.WRAP_CONTENT));
+        adView.setLayoutParams(new FrameLayout.LayoutParams(
+            Math.round(widthDp * density), FrameLayout.LayoutParams.WRAP_CONTENT));
+        card.setLayoutParams(new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         adView.addView(card);
 
         // 註冊資產 views（曝光/點擊歸因必需），順序：先註冊後 setNativeAd
         if (mediaView != null) adView.setMediaView(mediaView);
         if (headlineView != null) adView.setHeadlineView(headlineView);
         if (bodyView != null) adView.setBodyView(bodyView);
+        if (advertiserView != null) adView.setAdvertiserView(advertiserView);
         adView.setCallToActionView(cta);
         adView.setNativeAd(ad);
         return adView;

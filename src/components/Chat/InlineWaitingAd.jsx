@@ -12,44 +12,47 @@ import {
 const BACKDOOR_WINDOW = 5000;
 const BACKDOOR_CLICKS = 5;
 
-/** 預設廣告載入中預留高度 */
-const INITIAL_PLACEHOLDER_HEIGHT = 160;
+/** 預設廣告載入中預留高度 (匹配 compact 原生卡含 132dp+ MediaView + 標題 + 按鈕之實測 ~285dp 尺寸) */
+const INITIAL_PLACEHOLDER_HEIGHT = 285;
 
 /**
  * 收起前的緩衝時間：廣告只在「最終完成」後收起。
  * 中間的搜尋／思考階段即使串流短暫換輪次，也不會立即關閉廣告。
  */
-const AD_CLOSE_GRACE_MS = 600;
+const AD_CLOSE_GRACE_MS = 800;
 
 /**
  * 對話等待廣告（N-AD01, N-AD02）：
  * - 只有在使用者發問生成期間展示，回覆「最終完成」時才消失
  * - 不在思考完、工具搜尋完或中間輪次提前消失
- * - 支援 AdMob 原生廣告與 Web 贊助卡槽，載入中或無填充時始終展示優質贊助佔位板
+ * - 支援 AdMob 原生廣告與 Web 贊助卡槽，確保符合 AdMob 120dp+ 最小媒體尺寸比例
  * - 獨立狀態，不干擾對話捲動
  */
 export default function InlineWaitingAd({ isStreaming }) {
   const isBypassed = typeof window !== 'undefined' && localStorage.getItem('yesolve_ad_bypass') === 'true';
-  const [adStatus, setAdStatus] = useState('idle'); // idle | loading | loaded | manual_closed
-  const [shouldRender, setShouldRender] = useState(false);
+  const [adStatus, setAdStatus] = useState(() => (isStreaming && !isBypassed ? 'loading' : 'idle')); // idle | loading | loaded | manual_closed
+  const [shouldRender, setShouldRender] = useState(() => Boolean(isStreaming && !isBypassed));
   const native = isNativeApp();
   const [reservedHeight, setReservedHeight] = useState(INITIAL_PLACEHOLDER_HEIGHT);
   const clickTimestampsRef = useRef([]);
   const adSlotRef = useRef(null);
+  const manualClosedForStreamRef = useRef(false);
 
   // 1. 生命週期：只要 isStreaming 為 true，廣告卡片必須持續展示直到「最終完成」
   useEffect(() => {
     if (isStreaming) {
-      if (!isBypassed) {
+      if (!isBypassed && !manualClosedForStreamRef.current) {
         setShouldRender(true);
-        if (adStatus === 'idle') {
-          setAdStatus('loading');
-        }
+        setAdStatus((prev) => (prev === 'idle' ? 'loading' : prev));
+        requestAnimationFrame(() => {
+          adSlotRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
       }
       return undefined;
     }
 
-    // 串流結束（最終完成／中斷）：緩衝後平滑收起
+    // 串流結束（最終完成／中斷）：緩衝後平滑收起，並重置手動關閉標記供下次對話使用
+    manualClosedForStreamRef.current = false;
     if (shouldRender) {
       const closeTimer = setTimeout(() => {
         setShouldRender(false);
@@ -57,36 +60,46 @@ export default function InlineWaitingAd({ isStreaming }) {
       }, AD_CLOSE_GRACE_MS);
       return () => clearTimeout(closeTimer);
     }
-  }, [isStreaming, isBypassed, shouldRender, adStatus]);
+  }, [isStreaming, isBypassed, shouldRender]);
 
-  // 2. 原生廣告載入處理
+  // 2. 原生廣告載入處理（待 DOM 排版完成後量測槽位寬高再請求 AdMob）
   useEffect(() => {
-    if (!shouldRender || !native || adStatus === 'manual_closed') return undefined;
+    if (!shouldRender || !native || adStatus !== 'loading') return undefined;
     let alive = true;
+    let inFlight = false;
+    let rafId = 0;
     const request = () => {
       const slot = adSlotRef.current;
-      if (!alive || !slot || !slot.isConnected) return;
+      if (!alive || !slot || !slot.isConnected || inFlight) return;
+      inFlight = true;
       showNativeAdInSlot(slot, 'floating', true).then((result) => {
         if (!alive) return;
         if (result?.loaded && result?.height) {
           setAdStatus('loaded');
-          setReservedHeight(result.height);
-          syncNativeAdInSlot(slot);
+          setReservedHeight(Math.max(INITIAL_PLACEHOLDER_HEIGHT, result.height));
+          requestAnimationFrame(() => {
+            if (alive && slot?.isConnected) {
+              syncNativeAdInSlot(slot);
+            }
+          });
         } else {
-          // 若無填充或載入中，維持展示贊助骨架卡，不提早消失
+          inFlight = false;
+          // 若無填充或載入中，維持展示符合比例的贊助骨架卡，不提早消失
           setReservedHeight(INITIAL_PLACEHOLDER_HEIGHT);
         }
       }).catch(() => {
         if (alive) {
+          inFlight = false;
           setReservedHeight(INITIAL_PLACEHOLDER_HEIGHT);
         }
       });
     };
 
-    request();
+    rafId = requestAnimationFrame(request);
     const offHidden = onNativeAdHidden(request);
     return () => {
       alive = false;
+      cancelAnimationFrame(rafId);
       offHidden();
     };
   }, [shouldRender, native, adStatus]);
@@ -139,6 +152,7 @@ export default function InlineWaitingAd({ isStreaming }) {
 
   // 使用者手動關閉
   const handleClose = () => {
+    manualClosedForStreamRef.current = true;
     setAdStatus('manual_closed');
     setShouldRender(false);
     hideNativeAdInSlot();
@@ -184,7 +198,7 @@ export default function InlineWaitingAd({ isStreaming }) {
             <span className="text-slate-300 font-semibold">NvidiaPatch AI</span>
             <span className="text-slate-600">·</span>
             <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono text-[9px] uppercase tracking-wider">
-              贊助內容
+              {'贊助內容'}
             </span>
           </div>
 
@@ -192,16 +206,6 @@ export default function InlineWaitingAd({ isStreaming }) {
             <span className="text-[10px] text-slate-500 font-mono">
               {adStatus === 'loaded' ? '贊助支持' : '生成中…'}
             </span>
-            <button
-              onClick={handleClose}
-              className="text-slate-500 hover:text-slate-300 p-0.5 rounded transition cursor-pointer"
-              title="關閉"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
           </div>
         </div>
 
@@ -210,11 +214,11 @@ export default function InlineWaitingAd({ isStreaming }) {
           <div
             ref={adSlotRef}
             className="rounded-xl overflow-hidden bg-black/20"
-            style={{ minHeight: adStatus === 'loaded' ? 'auto' : `${reservedHeight || 90}px` }}
+            style={{ minHeight: `${reservedHeight || INITIAL_PLACEHOLDER_HEIGHT}px` }}
           >
             <AdSenseSlot
               slotKey="floating"
-              minHeight={reservedHeight || 90}
+              minHeight={reservedHeight || INITIAL_PLACEHOLDER_HEIGHT}
               onStateChange={handleAdSenseState}
             />
           </div>
@@ -222,7 +226,7 @@ export default function InlineWaitingAd({ isStreaming }) {
 
         {/* C. 狀態資訊區 */}
         <div className="px-3 pb-2 flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-800/40 pt-1.5">
-          <span>回覆最終完成後自動收起</span>
+          <span>{'回覆完成後自動收起'}</span>
           <span className="inline-block w-1.5 h-2.5 bg-emerald-400/80 animate-pulse rounded-full" />
         </div>
       </div>

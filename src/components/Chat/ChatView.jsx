@@ -503,53 +503,48 @@ export default function ChatView({
                   return true;
                 })
                 .map((msg, idx, arr) => (
-                  <React.Fragment key={msg.id || idx}>
-                    {/* 生成等待廣告：插在前一則泡泡與生成中助理泡泡之間（inline，不懸浮）。
-                        不帶 data-msg-id，不會變成右側位置標籤的刻度。 */}
-                    {isStreaming && idx === arr.length - 1 && (
-                      <InlineWaitingAd isStreaming={isStreaming} />
-                    )}
-                    <div
-                      data-msg-id={msg.id || `msg-${idx}`}
-                      data-msg-role={msg.role}
-                      data-msg-index={idx}
-                      className="chat-message-anchor"
-                      style={{ overflowAnchor: 'auto' }}
-                    >
-                      <MessageBubble
-                        message={msg}
-                        isLast={idx === arr.length - 1}
-                        isStreaming={isStreaming}
-                        isReasoningActive={isReasoningActive}
-                        liveStatus={idx === arr.length - 1 ? liveStatus : null}
-                        onRegenerate={onRegenerate}
-                        onDelete={onDeleteMessage}
-                        onEdit={onEditMessage}
-                        onSelectOption={(opt) => {
-                          const val = opt.label || opt.value;
-                          if (val) {
-                            // 填入選項文字並保留使用者在對話框繼續輸入文字（不自動送出）
-                            setInput(prev => {
-                              const trimmed = (prev || '').trim();
-                              if (!trimmed) return val + ' ';
-                              return trimmed + '\n' + val + ' ';
-                            });
-                            // 自動 focus 至輸入框末端，方便使用者接著補充內容一起送出
-                            setTimeout(() => {
-                              const textarea = document.querySelector('textarea');
-                              if (textarea) {
-                                textarea.focus();
-                                const len = textarea.value.length;
-                                textarea.setSelectionRange(len, len);
-                              }
-                            }, 50);
-                          }
-                        }}
-                      />
-                    </div>
-                  </React.Fragment>
+                  <div
+                    key={msg.id || idx}
+                    data-msg-id={msg.id || `msg-${idx}`}
+                    data-msg-role={msg.role}
+                    data-msg-index={idx}
+                    className="chat-message-anchor"
+                    style={{ overflowAnchor: 'auto' }}
+                  >
+                    <MessageBubble
+                      message={msg}
+                      isLast={idx === arr.length - 1}
+                      isStreaming={isStreaming}
+                      isReasoningActive={isReasoningActive}
+                      liveStatus={idx === arr.length - 1 ? liveStatus : null}
+                      onRegenerate={onRegenerate}
+                      onDelete={onDeleteMessage}
+                      onEdit={onEditMessage}
+                      onSelectOption={(opt) => {
+                        const val = opt.label || opt.value;
+                        if (val) {
+                          // 填入選項文字並保留使用者在對話框繼續輸入文字（不自動送出）
+                          setInput(prev => {
+                            const trimmed = (prev || '').trim();
+                            if (!trimmed) return val + ' ';
+                            return trimmed + '\n' + val + ' ';
+                          });
+                          // 自動 focus 至輸入框末端，方便使用者接著補充內容一起送出
+                          setTimeout(() => {
+                            const textarea = document.querySelector('textarea');
+                            if (textarea) {
+                              textarea.focus();
+                              const len = textarea.value.length;
+                              textarea.setSelectionRange(len, len);
+                            }
+                          }, 50);
+                        }
+                      }}
+                    />
+                  </div>
                 ))
             )}
+            <InlineWaitingAd isStreaming={isStreaming} />
             <div ref={messagesEndRef} className="h-6 w-full shrink-0" style={{ overflowAnchor: 'none' }} />
           </div>
         </main>
