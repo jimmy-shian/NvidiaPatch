@@ -253,7 +253,7 @@ export default function App() {
         contextStats={chat.contextStats}
         compressionToast={chat.compressionToast}
         onCompressContext={chat.compressContext}
-        onSend={() => chat.sendMessage()}
+        onSend={(customText) => chat.sendMessage(customText)}
         onStop={chat.stopGeneration}
         onRegenerate={chat.regenerate}
         onDeleteMessage={chat.deleteMessage}

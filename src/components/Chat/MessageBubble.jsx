@@ -4,7 +4,7 @@ import { Copy, Check, Trash2, Edit3, RotateCw, Bot, User, AlertTriangle, X, Load
 import MarkdownRenderer from '../shared/MarkdownRenderer';
 import ThinkingBlock from './ThinkingBlock';
 import OptionsBlock from './OptionsBlock';
-import { parseOptionsBlocks } from '../../core/utils/optionsParser';
+import { parseOptionsBlocks, stripOptionsBlocks } from '../../core/utils/optionsParser';
 import { formatToolProgressSummary, extractCleanQuery } from '../../core/utils/toolDisplayHelper';
 
 import { shareCardAsImage } from '../../core/utils/cardShare';
@@ -19,7 +19,8 @@ export default function MessageBubble({
   onRegenerate,
   onDelete,
   onEdit,
-  onSelectOption
+  onSelectOption,
+  currentInput = undefined
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -55,7 +56,8 @@ export default function MessageBubble({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(message.content || '');
+      const cleanText = stripOptionsBlocks(message.content || '');
+      await navigator.clipboard.writeText(cleanText);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -735,6 +737,7 @@ export default function MessageBubble({
                           title={blk.title}
                           options={blk.options}
                           onSelectOption={onSelectOption}
+                          currentInput={currentInput}
                         />
                       );
                     }

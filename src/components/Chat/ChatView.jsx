@@ -18,6 +18,7 @@ import {
   evaluateScrollSnap,
   evaluateIdleSnap
 } from './scrollSnapLogic';
+import { toggleOptionInInput } from '../../core/utils/optionsParser';
 import { formatTokenNumber } from '../../core/context/modelLimits';
 
 export default function ChatView({
@@ -327,11 +328,12 @@ export default function ChatView({
   }, []);
 
   // Wrap send to immediately re-enable auto follow
-  const handleSendWrapped = useCallback(() => {
+  const handleSendWrapped = useCallback((customText = null) => {
+    const safeCustomText = typeof customText === 'string' ? customText : null;
     autoFollowRef.current = true;
     isProgrammaticScrollRef.current = false;
     setIsNearBottom(true);
-    onSend();
+    onSend(safeCustomText);
   }, [onSend]);
 
   const shortModelName = currentModelId
@@ -524,25 +526,26 @@ export default function ChatView({
                       onRegenerate={onRegenerate}
                       onDelete={onDeleteMessage}
                       onEdit={onEditMessage}
+                      currentInput={input}
                       onSelectOption={(opt) => {
-                        const val = opt.label || opt.value;
-                        if (val) {
-                          // 填入選項文字並保留使用者在對話框繼續輸入文字（不自動送出）
-                          setInput(prev => {
-                            const trimmed = (prev || '').trim();
-                            if (!trimmed) return val + ' ';
-                            return trimmed + '\n' + val + ' ';
-                          });
-                          // 自動 focus 至輸入框末端，方便使用者接著補充內容一起送出
-                          setTimeout(() => {
-                            const textarea = document.querySelector('textarea');
-                            if (textarea) {
-                              textarea.focus();
-                              const len = textarea.value.length;
-                              textarea.setSelectionRange(len, len);
-                            }
-                          }, 50);
-                        }
+                        const val = opt?.label || opt?.value;
+                        if (!val) return;
+                        let toggleOutcome = { added: false, hasRequirement: false };
+                        setInput(prev => {
+                          toggleOutcome = toggleOptionInInput(prev, opt);
+                          return toggleOutcome.nextInput;
+                        });
+                        setTimeout(() => {
+                          if (!toggleOutcome.added) return;
+                          const textarea = document.querySelector('textarea');
+                          if (textarea) {
+                            textarea.focus();
+                            const len = toggleOutcome.hasRequirement
+                              ? Math.max(0, textarea.value.length - 1)
+                              : textarea.value.length;
+                            textarea.setSelectionRange(len, len);
+                          }
+                        }, 50);
                       }}
                     />
                   </div>

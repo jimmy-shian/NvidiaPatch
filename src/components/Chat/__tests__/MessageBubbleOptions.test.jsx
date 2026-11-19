@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import MessageBubble from '../MessageBubble';
+import OptionsBlock from '../OptionsBlock';
 import InlineWaitingAd from '../InlineWaitingAd';
 
 // Mock react-i18next
@@ -75,4 +76,48 @@ describe('MessageBubble Options Rendering', () => {
     expect(html).not.toContain('關閉');
   });
 
+  it('omits requirement badge completely when requirement is "無" or "無需補充"', () => {
+    const message = {
+      id: 'test_msg_no_req',
+      role: 'assistant',
+      content: `請選擇方向：
+<options title="下一步">
+  <option label="直接解析" desc="無需額外資料" requirement="無" />
+  <option label="補充生辰" requirement="國曆出生年月日" />
+</options>`
+    };
+
+    const html = renderToString(
+      React.createElement(MessageBubble, {
+        message,
+        isLast: true,
+        isStreaming: false
+      })
+    );
+
+    expect(html).toContain('直接解析');
+    expect(html).toContain('補充生辰');
+    expect(html).toContain('需補充：');
+    expect(html).toContain('國曆出生年月日');
+    expect(html).not.toContain('需補充：無');
+  });
+
+  it('reflects multi-selected options from currentInput in OptionsBlock', () => {
+    const html = renderToString(
+      React.createElement(OptionsBlock, {
+        title: '多選測試',
+        options: [
+          { id: 'opt_1', label: '事業運', desc: '', requirement: '' },
+          { id: 'opt_2', label: '感情運', desc: '', requirement: '對象關係' },
+          { id: 'opt_3', label: '財運', desc: '', requirement: '' }
+        ],
+        currentInput: '事業運\n感情運（對象關係：伴侶）'
+      })
+    );
+
+    const pressedMatches = html.match(/aria-pressed="true"/g) || [];
+    const unpressedMatches = html.match(/aria-pressed="false"/g) || [];
+    expect(pressedMatches).toHaveLength(2);
+    expect(unpressedMatches).toHaveLength(1);
+  });
 });
