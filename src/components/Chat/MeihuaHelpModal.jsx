@@ -48,26 +48,26 @@ export default function MeihuaHelpModal({ isOpen, onClose }) {
           <div className="space-y-2">
             <h4 className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
               <Layers size={14} />
-              <span>{t('meihua.helpModal.methodsTitle', '一、起卦方式支援')}</span>
+              <span>{t('meihua.helpModal.methodsTitle', '一、起卦方式')}</span>
             </h4>
             <div className="space-y-2">
               <div className="p-3 bg-slate-900/80 border border-slate-800/80 rounded-2xl">
                 <div className="flex items-center gap-1.5 font-semibold text-white mb-1">
                   <Clock size={13} className="text-amber-400 shrink-0" />
-                  <span>{t('meihua.helpModal.timeCastingTitle', '1. 當前時間起卦 (內建預設)')}</span>
+                  <span>{t('meihua.helpModal.timeCastingTitle', '1. 時間起卦（預設）')}</span>
                 </div>
                 <p className="text-slate-400 text-[11px]">
-                  {t('meihua.helpModal.timeCastingDesc', '系統自動以提問當下的公曆與農曆時辰干支（年月日時數值）進行確定性排盤，內建時空背景與精確時間刻度，毋須手動輸入時間，最適合即時事態占問。')}
+                  {t('meihua.helpModal.timeCastingDesc', '依提問當下農曆年月日時自動排盤，無需手動輸入時間。')}
                 </p>
               </div>
 
               <div className="p-3 bg-slate-900/80 border border-slate-800/80 rounded-2xl">
                 <div className="flex items-center gap-1.5 font-semibold text-white mb-1">
                   <Dices size={13} className="text-rose-400 shrink-0" />
-                  <span>{t('meihua.helpModal.randomCastingTitle', '2. 隨機靈動數起卦')}</span>
+                  <span>{t('meihua.helpModal.randomCastingTitle', '2. 隨機數字起卦')}</span>
                 </div>
                 <p className="text-slate-400 text-[11px]">
-                  {t('meihua.helpModal.randomCastingDesc', '點擊「🎲 隨機數字起卦」將生成三組 1~999 靈動數（分別代表上卦、下卦與動爻），捕捉當下心念靈機契機，數值獨立包裹不影響後續對話。')}
+                  {t('meihua.helpModal.randomCastingDesc', '點擊「🎲 隨機數字起卦」產生三組數字，對應上卦、下卦與動爻。')}
                 </p>
               </div>
 
@@ -77,7 +77,7 @@ export default function MeihuaHelpModal({ isOpen, onClose }) {
                   <span>{t('meihua.helpModal.customNumbersTitle', '3. 自訂數字起卦')}</span>
                 </div>
                 <p className="text-slate-400 text-[11px]">
-                  {t('meihua.helpModal.customNumbersDesc', '亦可於問題中直接附帶 2 組數字（如「6, 8」以兩數之和求動爻）或 3 組數字（第三數為動爻），系統自動解析為先天八卦排盤。')}
+                  {t('meihua.helpModal.customNumbersDesc', '於問題中輸入 2 或 3 組數字（如「6, 8」），系統自動解析排盤。')}
                 </p>
               </div>
             </div>
@@ -87,24 +87,24 @@ export default function MeihuaHelpModal({ isOpen, onClose }) {
           <div className="space-y-2">
             <h4 className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
               <GitCompare size={14} />
-              <span>{t('meihua.helpModal.structureTitle', '二、卦象結構與排盤層次')}</span>
+              <span>{t('meihua.helpModal.structureTitle', '二、卦象結構')}</span>
             </h4>
             <div className="grid grid-cols-2 gap-2 text-[11px]">
               <div className="p-2.5 bg-slate-900/80 border border-slate-800/80 rounded-xl">
-                <div className="font-semibold text-emerald-300 mb-0.5">本卦（主卦）</div>
-                <div className="text-slate-400">代表事態當前現狀與基本盤結構。</div>
+                <div className="font-semibold text-emerald-300 mb-0.5">{t('meihua.helpModal.primaryTitle', '本卦')}</div>
+                <div className="text-slate-400">{t('meihua.helpModal.primaryDesc', '當前現狀與基本盤。')}</div>
               </div>
               <div className="p-2.5 bg-slate-900/80 border border-slate-800/80 rounded-xl">
-                <div className="font-semibold text-amber-300 mb-0.5">動爻</div>
-                <div className="text-slate-400">事態變化的關鍵觸發點與轉折樞紐。</div>
+                <div className="font-semibold text-amber-300 mb-0.5">{t('meihua.helpModal.movingTitle', '動爻')}</div>
+                <div className="text-slate-400">{t('meihua.helpModal.movingDesc', '變化觸發點與關鍵轉折。')}</div>
               </div>
               <div className="p-2.5 bg-slate-900/80 border border-slate-800/80 rounded-xl">
-                <div className="font-semibold text-purple-300 mb-0.5">互卦</div>
-                <div className="text-slate-400">事態推進的中間過程、隱藏因素與內部運作。</div>
+                <div className="font-semibold text-purple-300 mb-0.5">{t('meihua.helpModal.mutualTitle', '互卦')}</div>
+                <div className="text-slate-400">{t('meihua.helpModal.mutualDesc', '中間過程與內部變化。')}</div>
               </div>
               <div className="p-2.5 bg-slate-900/80 border border-slate-800/80 rounded-xl">
-                <div className="font-semibold text-sky-300 mb-0.5">變卦</div>
-                <div className="text-slate-400">事態最終發展趨勢與後續結果走向。</div>
+                <div className="font-semibold text-sky-300 mb-0.5">{t('meihua.helpModal.changedTitle', '變卦')}</div>
+                <div className="text-slate-400">{t('meihua.helpModal.changedDesc', '最終趨勢與結果走向。')}</div>
               </div>
             </div>
           </div>
@@ -113,31 +113,31 @@ export default function MeihuaHelpModal({ isOpen, onClose }) {
           <div className="space-y-2">
             <h4 className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
               <Sparkles size={14} />
-              <span>{t('meihua.helpModal.tiYongTitle', '三、體用生剋與吉凶判讀')}</span>
+              <span>{t('meihua.helpModal.tiYongTitle', '三、體用生剋')}</span>
             </h4>
             <p className="text-[11px] text-slate-400">
-              {t('meihua.helpModal.tiYongConcept', '體卦（不動卦）代表占者主體或事物本質；用卦（動爻所在卦）代表外在環境與事態變數。')}
+              {t('meihua.helpModal.tiYongConcept', '體卦代表自己或主體（不動卦）；用卦代表外在環境與事物（動爻所在卦）。')}
             </p>
             <div className="space-y-1.5 text-[11px]">
-              <div className="flex items-center justify-between p-2 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300">
-                <span className="font-bold">用生體（大吉）</span>
-                <span className="text-emerald-400">外部助力豐沛，事半功倍，得貴人相助</span>
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300">
+                <span className="font-bold shrink-0">{t('meihua.helpModal.yongGeneratesTi', '用生體（大吉）')}</span>
+                <span className="text-emerald-400 text-right">{t('meihua.helpModal.yongGeneratesTiDesc', '得外力相助，事半功倍')}</span>
               </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-emerald-950/20 border border-emerald-800/30 text-emerald-200">
-                <span className="font-bold">體用比和（吉）</span>
-                <span className="text-emerald-300">同氣相求，事態和順，同心協力</span>
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-emerald-950/20 border border-emerald-800/30 text-emerald-200">
+                <span className="font-bold shrink-0">{t('meihua.helpModal.biHe', '體用比和（吉）')}</span>
+                <span className="text-emerald-300 text-right">{t('meihua.helpModal.biHeDesc', '內外契合，順遂可成')}</span>
               </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-amber-950/30 border border-amber-800/40 text-amber-300">
-                <span className="font-bold">體生用（耗泄）</span>
-                <span className="text-amber-400">多勞少得，需付出心力成本，雖有成但耗神</span>
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-amber-950/30 border border-amber-800/40 text-amber-300">
+                <span className="font-bold shrink-0">{t('meihua.helpModal.tiGeneratesYong', '體生用（耗泄）')}</span>
+                <span className="text-amber-400 text-right">{t('meihua.helpModal.tiGeneratesYongDesc', '付出較多，多勞少得')}</span>
               </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-amber-950/20 border border-amber-800/30 text-amber-200">
-                <span className="font-bold">體剋用（小吉）</span>
-                <span className="text-amber-300">事需力爭，經由自身努力可克服困難獲勝</span>
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-amber-950/20 border border-amber-800/30 text-amber-200">
+                <span className="font-bold shrink-0">{t('meihua.helpModal.tiControlsYong', '體剋用（小吉）')}</span>
+                <span className="text-amber-300 text-right">{t('meihua.helpModal.tiControlsYongDesc', '需主動克服，努力可成')}</span>
               </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-300">
-                <span className="font-bold">用剋體（凶咎）</span>
-                <span className="text-rose-400">外在壓力阻礙大，受挫或不利，宜退守謹慎</span>
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-300">
+                <span className="font-bold shrink-0">{t('meihua.helpModal.yongControlsTi', '用剋體（凶）')}</span>
+                <span className="text-rose-400 text-right">{t('meihua.helpModal.yongControlsTiDesc', '外在阻力大，宜保守謹慎')}</span>
               </div>
             </div>
           </div>

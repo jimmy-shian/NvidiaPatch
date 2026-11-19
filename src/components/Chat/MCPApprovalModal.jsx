@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ShieldAlert, Plug, Play, Check, X, AlertTriangle } from 'lucide-react';
 import { GlobalApprovalController } from '../../core/mcp/policies/MCPApprovalController';
 
 export default function MCPApprovalModal() {
+  const { t } = useTranslation();
   const [request, setRequest] = useState(null);
 
   useEffect(() => {
@@ -37,9 +39,9 @@ export default function MCPApprovalModal() {
           </div>
           <div>
             <h3 className="font-bold text-white text-sm">
-              {type === 'connection' ? 'MCP 伺服器連線授權確認' : 'MCP 工具執行授權確認'}
+              {type === 'connection' ? t('mcpApproval.connectionTitle', 'MCP 連線授權') : t('mcpApproval.toolTitle', 'MCP 工具執行授權')}
             </h3>
-            <span className="text-[11px] text-amber-400 font-medium">安全審批檢查</span>
+            <span className="text-[11px] text-amber-400 font-medium">{t('mcpApproval.securityCheck', '安全確認')}</span>
           </div>
         </div>
 
@@ -49,10 +51,10 @@ export default function MCPApprovalModal() {
             <>
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500">端點 URL:</span>
+                  <span className="text-[11px] text-slate-500">{t('mcpApproval.endpointUrl', '端點 URL:')}</span>
                   {payload.isPrivateNetwork && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-950/80 text-amber-300 border border-amber-800/80">
-                      區域網路 / 自訂端點 (LAN)
+                      {t('mcpApproval.lanBadge', '區域網路端點')}
                     </span>
                   )}
                 </div>
@@ -60,24 +62,24 @@ export default function MCPApprovalModal() {
               </div>
               {payload.reason && (
                 <div>
-                  <span className="text-[11px] text-slate-500">連線目的:</span>
+                  <span className="text-[11px] text-slate-500">{t('mcpApproval.purpose', '連線目的:')}</span>
                   <p className="text-slate-300 text-xs">{payload.reason}</p>
                 </div>
               )}
               {payload.isPrivateNetwork && (
                 <p className="text-[11px] text-slate-400 leading-relaxed pt-1 border-t border-slate-800">
-                  此端點為同網域或本機私有端點（如 192.168.x.x 或 HTTP 服務），授權後將以系統全域權限信任並允許連線。
+                  {t('mcpApproval.lanNotice', '此為本機或區域網路端點，授權後將允許連線。')}
                 </p>
               )}
             </>
           ) : (
             <>
               <div className="flex justify-between items-center">
-                <span className="text-[11px] text-slate-500">伺服器:</span>
+                <span className="text-[11px] text-slate-500">{t('mcpApproval.server', '伺服器:')}</span>
                 <span className="text-white font-semibold">{payload.serverName}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-[11px] text-slate-500">工具名稱:</span>
+                <span className="text-[11px] text-slate-500">{t('mcpApproval.toolName', '工具名稱:')}</span>
                 <span className="font-mono text-emerald-400">{payload.toolName}</span>
               </div>
               {payload.description && (
@@ -85,7 +87,7 @@ export default function MCPApprovalModal() {
               )}
               {payload.args && Object.keys(payload.args).length > 0 && (
                 <div className="pt-1">
-                  <span className="text-[10px] text-slate-500">呼叫參數:</span>
+                  <span className="text-[10px] text-slate-500">{t('mcpApproval.args', '參數:')}</span>
                   <pre className="mt-1 p-2 bg-slate-950 rounded-xl text-[10px] font-mono text-slate-400 overflow-x-auto">
                     {JSON.stringify(payload.args, null, 2)}
                   </pre>
@@ -102,14 +104,14 @@ export default function MCPApprovalModal() {
             className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40"
           >
             <Check size={14} />
-            <span>允許 (系統全域永久信任)</span>
+            <span>{t('mcpApproval.allowAlways', '永久允許')}</span>
           </button>
 
           <button
             onClick={() => handleDecision(true, 'chat_session')}
             className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-xs transition-colors"
           >
-            僅此對話中允許
+            {t('mcpApproval.allowSession', '僅此對話允許')}
           </button>
 
           <button
@@ -117,7 +119,7 @@ export default function MCPApprovalModal() {
             className="w-full py-2 bg-transparent hover:bg-rose-950/30 text-rose-400 font-medium rounded-xl text-xs transition-colors flex items-center justify-center gap-1"
           >
             <X size={14} />
-            <span>拒絕</span>
+            <span>{t('mcpApproval.deny', '拒絕')}</span>
           </button>
         </div>
       </div>

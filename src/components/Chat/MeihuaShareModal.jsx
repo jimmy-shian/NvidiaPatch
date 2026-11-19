@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { X, Share2, Check, Sliders, Image as ImageIcon } from 'lucide-react';
 import { shareMeihuaCardAsImage } from '../../core/utils/cardShare';
 
@@ -9,6 +10,7 @@ export default function MeihuaShareModal({
   calc = {},
   know = {}
 }) {
+  const { t } = useTranslation();
   const [selectedWidth, setSelectedWidth] = useState(640);
   const [customWidth, setCustomWidth] = useState('640');
   const [isExporting, setIsExporting] = useState(false);
@@ -16,7 +18,7 @@ export default function MeihuaShareModal({
 
   if (!isOpen) return null;
 
-  const hexName = calc?.primary?.hexagram?.fullName || '梅花易數';
+  const hexName = calc?.primary?.hexagram?.fullName || t('meihua.titleShort', '梅花易數');
 
   const handleWidthChange = (w) => {
     setSelectedWidth(w);
@@ -43,7 +45,7 @@ export default function MeihuaShareModal({
         calc,
         know,
         width: Math.min(Math.max(targetWidth, 360), 2400),
-        title: `${hexName} · 梅花排盤`,
+        title: `${hexName} · ${t('meihua.card.title', '梅花排盤')}`,
         fileName: `meihua-${Date.now()}.png`
       });
       setExportSuccess(true);
@@ -73,20 +75,20 @@ export default function MeihuaShareModal({
             <span className="text-xl">🌸</span>
             <div>
               <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
-                <span>梅花排盤分享</span>
+                <span>{t('meihua.share.title', '分享排盤卡片')}</span>
                 <span className="px-1.5 py-0.2 rounded text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/40 font-mono">
                   PNG
                 </span>
               </h3>
               <p className="text-[11px] text-slate-400">
-                匯出高解析度梅花排盤卡片
+                {t('meihua.share.subtitle', '匯出高解析度 PNG')}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-            title="關閉"
+            title={t('app.close', '關閉')}
           >
             <X size={18} />
           </button>
@@ -99,7 +101,7 @@ export default function MeihuaShareModal({
             <div className="flex items-center justify-between">
               <span className="font-semibold text-slate-200 flex items-center gap-1.5">
                 <Sliders size={14} className="text-rose-400" />
-                <span>畫布寬度 (Width)</span>
+                <span>{t('meihua.share.canvasWidth', '畫布寬度')}</span>
               </span>
               <div className="flex items-center gap-1 font-mono text-[11px]">
                 <input
@@ -115,9 +117,9 @@ export default function MeihuaShareModal({
             {/* Quick Presets */}
             <div className="grid grid-cols-3 gap-2 pt-1">
               {[
-                { label: '標準 (640px)', width: 640, desc: '通訊軟體' },
-                { label: '寬版 (800px)', width: 800, desc: '社群動態' },
-                { label: '超清 (1080px)', width: 1080, desc: '高解析度' }
+                { label: t('meihua.share.presetStandard', '標準 (640px)'), width: 640, desc: t('meihua.share.presetStandardDesc', '通訊軟體') },
+                { label: t('meihua.share.presetWide', '寬版 (800px)'), width: 800, desc: t('meihua.share.presetWideDesc', '社群動態') },
+                { label: t('meihua.share.presetHd', '超清 (1080px)'), width: 1080, desc: t('meihua.share.presetHdDesc', '高解析度') }
               ].map(preset => (
                 <button
                   key={preset.width}
@@ -144,7 +146,7 @@ export default function MeihuaShareModal({
             onClick={onClose}
             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer"
           >
-            取消
+            {t('app.cancel', '取消')}
           </button>
           <button
             type="button"
@@ -155,14 +157,14 @@ export default function MeihuaShareModal({
             {exportSuccess ? (
               <>
                 <Check size={14} className="text-emerald-300" />
-                <span>已完成分享 / 匯出！</span>
+                <span>{t('meihua.share.exported', '已匯出！')}</span>
               </>
             ) : isExporting ? (
-              <span>正在生成圖片…</span>
+              <span>{t('meihua.share.generating', '生成圖片中…')}</span>
             ) : (
               <>
                 <Share2 size={14} />
-                <span>匯出並分享圖片</span>
+                <span>{t('meihua.share.exportBtn', '匯出並分享')}</span>
               </>
             )}
           </button>

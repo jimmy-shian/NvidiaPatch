@@ -44,30 +44,30 @@ export default function ThinkingBlock({
           setUserToggled(true);
           setExpanded(prev => !prev);
         }}
-        className="w-full flex items-center justify-between px-3.5 py-2.5 text-left hover:bg-slate-900/60 transition-colors"
+        className="w-full flex items-center justify-between gap-2 px-2.5 py-2 text-left hover:bg-slate-900/60 transition-colors"
       >
-        <div className="flex items-center gap-2 text-xs font-semibold">
-          <Brain size={14} className={isThinkingNow ? "text-emerald-400" : "text-slate-400"} />
+        <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1 text-xs font-semibold min-w-0 flex-1">
+          <Brain size={14} className={`shrink-0 ${isThinkingNow ? "text-emerald-400" : "text-slate-400"}`} />
           {isThinkingNow ? (
-            <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-              <Loader2 size={12} className="animate-spin text-emerald-400" />
-              <span>正在分析問題脈絡與邏輯推理中…</span>
+            <span className="flex items-center gap-1.5 text-emerald-400 font-medium min-w-0">
+              <Loader2 size={12} className="animate-spin text-emerald-400 shrink-0" />
+              <span className="whitespace-nowrap">{t('chat.thinkingActive', '思考中…')}</span>
             </span>
           ) : (
-            <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <span>已完成思考分析</span>
+            <span className="text-slate-300 font-medium flex items-center flex-wrap gap-1.5 min-w-0">
+              <span className="whitespace-nowrap shrink-0">{t('chat.thinkingDone', '已完成思考')}</span>
               {thinkingCharCount > 0 && (
-                <span className="text-[10px] font-mono text-emerald-400/90 bg-emerald-950/60 border border-emerald-800/40 px-1.5 py-0.2 rounded-md">
-                  {thinkingCharCount} 字
+                <span className="text-[10px] font-mono text-emerald-400/90 bg-emerald-950/60 border border-emerald-800/40 px-1.5 py-0.5 rounded-md whitespace-nowrap shrink-0">
+                  {t('chat.thinkingChars', `${thinkingCharCount} 字`, { count: thinkingCharCount })}
                 </span>
               )}
-              <Sparkles size={11} className="text-emerald-400/80" />
+              <Sparkles size={11} className="text-emerald-400/80 shrink-0 hidden sm:inline" />
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 text-[11px] text-slate-400">
-          <span>{expanded ? '收合' : '展開記錄'}</span>
-          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <div className="flex items-center gap-1 text-[11px] text-slate-400 whitespace-nowrap shrink-0">
+          <span>{expanded ? t('chat.collapse', '收合') : t('chat.expand', '展開')}</span>
+          {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
         </div>
       </button>
 
@@ -86,7 +86,7 @@ export default function ThinkingBlock({
             </div>
           ) : (
             <div className="flex items-center gap-2 text-slate-400 py-1 text-[11px]">
-              <span>正在分析問題脈絡與邏輯構思中…</span>
+              <span>{t('chat.thinkingActive', '思考中…')}</span>
             </div>
           )}
         </div>

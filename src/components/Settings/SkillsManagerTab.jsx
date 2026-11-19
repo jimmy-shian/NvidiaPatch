@@ -145,7 +145,8 @@ export default function SkillsManagerTab({
       await onReorderSkills(orderedIds);
     }
     const movedName = getSkillDisplayNameZh(moved);
-    setReorderFeedback(`已將「${movedName}」順序調整至第 ${toIndex + 1} 位`);
+    const pos = toIndex + 1;
+    setReorderFeedback(t('settings.skills.reorderedToast', `「${movedName}」已移至第 ${pos} 位`, { name: movedName, pos }));
     setTimeout(() => setReorderFeedback(null), 1500);
   };
 
@@ -209,22 +210,22 @@ export default function SkillsManagerTab({
 
   return (
     <div className="space-y-4 text-xs">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="min-w-0">
           <h4 className="text-sm font-bold text-white mb-0.5">{t('settings.skills.title', '技能設定')}</h4>
           <p className="text-slate-400 text-[11px]">{t('settings.skills.subtitle', '管理對話中啟用的專業技能模組')}</p>
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5 shrink-0">
           <button
             onClick={() => setShowImportModal(true)}
-            className="flex items-center gap-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors"
+            className="flex items-center gap-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors shrink-0 whitespace-nowrap"
           >
             <Upload size={12} />
             <span>{t('settings.skills.import', '匯入')}</span>
           </button>
           <button
             onClick={handleStartCreate}
-            className="flex items-center gap-1 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
+            className="flex items-center gap-1 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors shrink-0 whitespace-nowrap"
           >
             <Plus size={13} />
             <span>{t('settings.skills.create', '新建技能')}</span>
@@ -244,10 +245,11 @@ export default function SkillsManagerTab({
       <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl space-y-1 text-slate-300">
         <div className="flex items-center gap-1.5 font-semibold text-white">
           <ArrowUpDown size={13} className="text-emerald-400" />
-          <span>顯示排序設定 (長按或拖曳調整)</span>
+          <span>{t('settings.skills.orderTitle', '排序設定')}</span>
         </div>
         <p className="text-[11px] text-slate-400 leading-relaxed">
-          長按或拖曳左側 <GripVertical size={11} className="inline text-slate-400" /> 圖示可調整排列順序。排序前 4 項將優先直接顯示於對話選單首頁。梅花易數已獨立為專屬對話模式，不在此處排序。
+          <GripVertical size={11} className="inline text-slate-400 mr-1" />
+          {t('settings.skills.orderDesc', '拖曳圖示調整順序，前 4 項顯示為優先技能。')}
         </p>
       </div>
 
@@ -287,7 +289,7 @@ export default function SkillsManagerTab({
                       onTouchStart={(e) => handleTouchStart(index, e)}
                       onTouchEnd={handleTouchEnd}
                       className="cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 p-0.5 rounded touch-none"
-                      title="長按或拖曳調整順序"
+                      title={t('settings.skills.dragHint', '拖曳調整順序')}
                     >
                       <GripVertical size={15} />
                     </div>
@@ -312,7 +314,7 @@ export default function SkillsManagerTab({
                       <span className="font-bold text-white text-xs sm:text-sm">{displayNameZh}</span>
                       {index < 4 && (
                         <span className="px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-sans font-medium">
-                          優先顯示
+                          {t('settings.skills.priorityTag', '優先')}
                         </span>
                       )}
                       {skill.isBuiltin && !skill.isOverridden && (
@@ -362,7 +364,7 @@ export default function SkillsManagerTab({
                     <button
                       onClick={() => setConfirmingSkillId(prev => prev === skill.id ? null : skill.id)}
                       className="p-1.5 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 transition-colors"
-                      title={t('settings.skills.restore', '還原為內建預設手冊')}
+                      title={t('settings.skills.restore', '還原預設')}
                     >
                       <RotateCcw size={14} />
                     </button>
@@ -383,19 +385,19 @@ export default function SkillsManagerTab({
               {/* Full-width confirmation bar below card header */}
               {confirmingSkillId === skill.id && skill.isOverridden && (
                 <div className="mt-1 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2 bg-amber-950/50 border border-amber-500/40 rounded-lg px-2.5 py-1.5 animate-fade-in">
-                  <span className="text-[11px] text-amber-300 font-medium">還原？</span>
+                  <span className="text-[11px] text-amber-300 font-medium">{t('settings.skills.confirmRestore', '還原？')}</span>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       onClick={() => handleConfirmAction(skill.id, 'restore')}
                       className="px-2 py-0.5 rounded bg-amber-500 text-black text-[11px] font-bold hover:bg-amber-400"
                     >
-                      確定
+                      {t('app.confirm', '確定')}
                     </button>
                     <button
                       onClick={() => setConfirmingSkillId(null)}
                       className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white text-[11px]"
                     >
-                      取消
+                      {t('app.cancel', '取消')}
                     </button>
                   </div>
                 </div>
@@ -403,19 +405,19 @@ export default function SkillsManagerTab({
 
               {confirmingSkillId === skill.id && skill.isCustom && !skill.isBuiltin && (
                 <div className="mt-1 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2 bg-rose-950/60 border border-rose-500/40 rounded-lg px-2.5 py-1.5 animate-fade-in">
-                  <span className="text-[11px] text-rose-300 font-medium">確定刪除？</span>
+                  <span className="text-[11px] text-rose-300 font-medium">{t('app.confirmDeleteShort', '確定刪除？')}</span>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       onClick={() => handleConfirmAction(skill.id, 'delete')}
                       className="px-2 py-0.5 rounded bg-rose-600 text-white text-[11px] font-bold hover:bg-rose-500"
                     >
-                      確定
+                      {t('app.confirm', '確定')}
                     </button>
                     <button
                       onClick={() => setConfirmingSkillId(null)}
                       className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white text-[11px]"
                     >
-                      取消
+                      {t('app.cancel', '取消')}
                     </button>
                   </div>
                 </div>
@@ -431,7 +433,7 @@ export default function SkillsManagerTab({
           <div className="w-full max-w-md bg-[#111827] border border-slate-700 rounded-2xl p-4 flex flex-col gap-3 shadow-2xl max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <h4 className="font-bold text-white text-sm">
-                {isCreating ? t('settings.skills.create', '新建技能') : `${t('settings.skills.edit', '編輯技能')}: ${editingSkill.nameZh || editingSkill.name}`}
+                {isCreating ? t('settings.skills.create', '新增技能') : `${t('settings.skills.edit', '編輯技能')}: ${editingSkill.nameZh || editingSkill.name}`}
               </h4>
               <button onClick={() => setEditingSkill(null)} className="text-slate-400 hover:text-white">
                 <X size={16} />
@@ -442,12 +444,12 @@ export default function SkillsManagerTab({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div className="space-y-1">
                 <label className="text-slate-300 font-semibold flex items-center gap-1">
-                  <span>中文名稱</span>
-                  <span className="text-[10px] text-emerald-400 font-normal">（優先顯示）</span>
+                  <span>{t('settings.skills.nameZh', '中文名稱')}</span>
+                  <span className="text-[10px] text-emerald-400 font-normal">{t('settings.skills.nameZhHint', '（優先顯示）')}</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="例如：每日運勢大師"
+                  placeholder={t('settings.skills.nameZhPlaceholder', '例如：每日運勢大師')}
                   value={editingSkill.nameZh || ''}
                   onChange={e => setEditingSkill({ ...editingSkill, nameZh: e.target.value })}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none"
@@ -456,12 +458,12 @@ export default function SkillsManagerTab({
 
               <div className="space-y-1">
                 <label className="text-slate-300 font-semibold flex items-center gap-1">
-                  <span>英文 ID / 名稱</span>
-                  <span className="text-[10px] text-slate-400 font-normal">（換行小字）</span>
+                  <span>{t('settings.skills.nameEn', '英文 ID')}</span>
+                  <span className="text-[10px] text-slate-400 font-normal">{t('settings.skills.nameEnHint', '（識別碼）')}</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="例如：daily-fortune-master"
+                  placeholder={t('settings.skills.nameEnPlaceholder', '例如：daily-fortune-master')}
                   value={editingSkill.nameEn || editingSkill.id || ''}
                   onChange={e => setEditingSkill({ ...editingSkill, nameEn: e.target.value, id: e.target.value })}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none font-mono text-xs"
@@ -474,7 +476,7 @@ export default function SkillsManagerTab({
               <label className="text-slate-300 font-semibold">{t('settings.skills.skillDescription', '技能說明')}</label>
               <input
                 type="text"
-                placeholder="簡短描述這項技能的用途與專長"
+                placeholder={t('settings.skills.skillDescPlaceholder', '簡述此技能的用途')}
                 value={editingSkill.description || ''}
                 onChange={e => setEditingSkill({ ...editingSkill, description: e.target.value })}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none"
@@ -483,12 +485,12 @@ export default function SkillsManagerTab({
 
             {/* Prompt / Markdown Content */}
             <div className="space-y-1">
-              <label className="text-slate-300 font-semibold">{t('settings.skills.skillContent', '技能手冊內容 (Markdown / Prompt)')}</label>
+              <label className="text-slate-300 font-semibold">{t('settings.skills.skillContent', '系統提示詞 (Markdown)')}</label>
               <textarea
                 rows={8}
                 value={editingSkill.rawContent || editingSkill.instructions || ''}
                 onChange={e => setEditingSkill({ ...editingSkill, rawContent: e.target.value, instructions: e.target.value })}
-                placeholder="輸入技能系統提示詞或操作準則..."
+                placeholder={t('settings.skills.skillContentPlaceholder', '輸入系統提示詞...')}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white font-mono text-[11px] outline-none resize-none"
               />
             </div>
@@ -523,7 +525,7 @@ export default function SkillsManagerTab({
             </div>
 
             <div>
-              <label className="block text-slate-300 font-semibold mb-1">上傳 .md 檔案</label>
+              <label className="block text-slate-300 font-semibold mb-1">{t('settings.skills.uploadMd', '上傳 .md 檔案')}</label>
               <input
                 type="file"
                 accept=".md,.txt"
@@ -532,10 +534,10 @@ export default function SkillsManagerTab({
               />
             </div>
 
-            <div className="text-center text-slate-500 text-[11px]">或</div>
+            <div className="text-center text-slate-500 text-[11px]">{t('settings.skills.or', '或')}</div>
 
             <div className="space-y-1">
-              <label className="text-slate-300 font-semibold">貼上 Markdown 內容</label>
+              <label className="text-slate-300 font-semibold">{t('settings.skills.pasteMd', '貼上 Markdown 內容')}</label>
               <textarea
                 rows={6}
                 value={importText}

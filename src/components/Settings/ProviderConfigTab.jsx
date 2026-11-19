@@ -119,18 +119,19 @@ export default function ProviderConfigTab({
     try {
       const res = await onSyncModels(currentProviderId);
       if (res && res.success) {
+        const count = res.count || availableModels.length;
         setTestResult({
           success: true,
-          message: `同步成功！已獲取 ${res.count || availableModels.length} 個可用模型`
+          message: t('settings.providers.syncSuccessCount', `已同步 ${count} 個模型`, { count })
         });
       } else if (res && !res.success) {
         setTestResult({
           success: false,
-          message: res.message || '未能同步模型清單'
+          message: res.message || t('settings.providers.syncFailed', '同步失敗')
         });
       }
     } catch (err) {
-      setTestResult({ success: false, message: err.message || '連線錯誤' });
+      setTestResult({ success: false, message: err.message || t('settings.providers.connectionError', '連線錯誤') });
     } finally {
       setSyncing(false);
     }
@@ -145,16 +146,16 @@ export default function ProviderConfigTab({
   return (
     <div className="space-y-4 text-xs">
       <div>
-        <h4 className="text-sm font-bold text-white mb-0.5">模型供應商 (Provider) 與金鑰設定</h4>
+        <h4 className="text-sm font-bold text-white mb-0.5">{t('settings.providers.title', '模型與金鑰設定')}</h4>
         <p className="text-slate-400 text-[11px] flex items-center gap-1">
           <ShieldCheck size={12} className="text-emerald-400 shrink-0" />
-          <span>BYOK 自備金鑰模式，敏感金鑰使用 AES-GCM 本機加密安全保存。</span>
+          <span>{t('settings.providers.subtitle', '自備金鑰（BYOK），本機加密保存。')}</span>
         </p>
       </div>
 
       {/* 1. Custom Provider Dropdown with Click-Outside Ref */}
       <div ref={providerDropdownRef} className="space-y-1.5 relative">
-        <label className="block text-slate-300 font-semibold">目前 Provider</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.providers.currentProvider', '供應商')}</label>
         <div className="relative">
           <button
             type="button"
@@ -171,7 +172,7 @@ export default function ProviderConfigTab({
               </span>
               {currentProviderId === 'nvidia' && (
                 <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-medium shrink-0">
-                  預設推薦
+                  {t('settings.providers.recommendedDefault', '推薦')}
                 </span>
               )}
             </div>
@@ -198,7 +199,7 @@ export default function ProviderConfigTab({
                       <span className="text-white font-medium truncate">{label}</span>
                       {p.id === 'nvidia' && (
                         <span className="text-[10px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1 rounded">
-                          推薦
+                          {t('settings.providers.recommended', '推薦')}
                         </span>
                       )}
                     </div>
@@ -213,14 +214,14 @@ export default function ProviderConfigTab({
 
       {/* 2. Endpoint URL (Freely editable) */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">API Endpoint 端點網址</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.providers.endpoint', 'API 端點')}</label>
         <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 focus-within:border-emerald-500">
           <Server size={14} className="text-slate-500 shrink-0" />
           <input
             type="text"
             value={activeConfig.baseUrl || ''}
             onChange={e => handleFieldChange('baseUrl', e.target.value)}
-            placeholder="例如：https://integrate.api.nvidia.com/v1"
+            placeholder={t('settings.providers.endpointPlaceholder', '例如：https://integrate.api.nvidia.com/v1')}
             className="w-full bg-transparent text-white outline-none font-mono text-[11px]"
           />
         </div>
@@ -228,14 +229,14 @@ export default function ProviderConfigTab({
 
       {/* 3. API Key */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">API 金鑰 (API Key)</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.providers.apiKey', 'API Key')}</label>
         <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 focus-within:border-emerald-500">
           <Key size={14} className="text-slate-500 shrink-0" />
           <input
             type={showKey ? "text" : "password"}
             value={activeConfig.apiKey || ''}
             onChange={e => handleFieldChange('apiKey', e.target.value)}
-            placeholder={currentProviderId === 'nvidia' ? '輸入 nvapi-...' : '輸入 API 金鑰 (sk-...)'}
+            placeholder={currentProviderId === 'nvidia' ? t('settings.providers.apiKeyPlaceholderNvidia', '輸入 nvapi-...') : t('settings.providers.apiKeyPlaceholder', '輸入 API Key (sk-...)')}
             className="w-full bg-transparent text-white outline-none font-mono text-[11px]"
           />
           <button
@@ -251,7 +252,7 @@ export default function ProviderConfigTab({
       {/* 4. Default Model Selection Mode (選單 / 自訂) with Click-Outside Ref */}
       <div ref={modelDropdownRef} className="space-y-2 pt-1 relative">
         <div className="flex items-center justify-between">
-          <label className="block text-slate-300 font-semibold">預設模型</label>
+          <label className="block text-slate-300 font-semibold">{t('settings.providers.defaultModel', '預設模型')}</label>
           <div className="flex items-center gap-3 text-xs bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
             <label className="flex items-center gap-1 cursor-pointer text-slate-300">
               <input
@@ -262,7 +263,7 @@ export default function ProviderConfigTab({
                 onChange={() => setModelMode('select')}
                 className="accent-emerald-500"
               />
-              <span>選單</span>
+              <span>{t('settings.providers.modeSelect', '選單')}</span>
             </label>
             <label className="flex items-center gap-1 cursor-pointer text-slate-300">
               <input
@@ -273,7 +274,7 @@ export default function ProviderConfigTab({
                 onChange={() => setModelMode('custom')}
                 className="accent-emerald-500"
               />
-              <span>自訂</span>
+              <span>{t('settings.providers.modeCustom', '自訂')}</span>
             </label>
           </div>
         </div>
@@ -285,7 +286,7 @@ export default function ProviderConfigTab({
               type="text"
               value={activeConfig.defaultModel || ''}
               onChange={e => handleFieldChange('defaultModel', e.target.value)}
-              placeholder="例如：nvidia/llama-3.1-nemotron-120b-instruct"
+              placeholder={t('settings.providers.customModelPlaceholder', '例如：nvidia/llama-3.1-nemotron-120b-instruct')}
               className="w-full bg-transparent text-white outline-none font-mono text-[11px]"
             />
           </div>
@@ -294,17 +295,17 @@ export default function ProviderConfigTab({
             {isLoadingModels ? (
               <div className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-slate-400 text-xs flex items-center gap-2">
                 <RefreshCw size={12} className="animate-spin text-emerald-400" />
-                <span>載入中…</span>
+                <span>{t('app.loading', '載入中…')}</span>
               </div>
             ) : modelsError ? (
               <div className="w-full bg-rose-950/40 border border-rose-800 rounded-xl px-3.5 py-2.5 text-xs text-rose-300 flex items-center justify-between">
-                <span>模型資料載入失敗</span>
-                <button type="button" onClick={handleSync} className="text-emerald-400 underline text-[11px]">重試</button>
+                <span>{t('settings.providers.loadModelsFailed', '模型資料載入失敗')}</span>
+                <button type="button" onClick={handleSync} className="text-emerald-400 underline text-[11px]">{t('app.retry', '重試')}</button>
               </div>
             ) : availableModels.length === 0 ? (
               <div className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-400 flex items-center justify-between">
-                <span>沒有可用模型</span>
-                <button type="button" onClick={handleSync} className="text-emerald-400 underline text-[11px]">同步模型</button>
+                <span>{t('settings.providers.noModels', '沒有可用模型')}</span>
+                <button type="button" onClick={handleSync} className="text-emerald-400 underline text-[11px]">{t('settings.providers.syncModels', '同步模型')}</button>
               </div>
             ) : (
               <>
@@ -319,7 +320,7 @@ export default function ProviderConfigTab({
                 >
                   <div className="flex flex-col min-w-0 pr-2">
                     <span className="font-semibold text-white text-xs truncate">
-                      {selectedModelLabel || '請選擇預設模型'}
+                      {selectedModelLabel || t('settings.providers.selectDefaultModel', '選擇預設模型')}
                     </span>
                     {selectedModelId && (
                       <span className="text-[10px] text-slate-400 font-mono truncate">
@@ -338,7 +339,7 @@ export default function ProviderConfigTab({
                       <Search size={12} className="text-slate-400 shrink-0" />
                       <input
                         type="text"
-                        placeholder="搜尋模型名稱或 ID..."
+                        placeholder={t('settings.providers.searchModelPlaceholder', '搜尋模型名稱或 ID...')}
                         value={modelSearchQuery}
                         onChange={e => setModelSearchQuery(e.target.value)}
                         className="bg-transparent text-white outline-none w-full text-xs placeholder-slate-500"
@@ -350,7 +351,7 @@ export default function ProviderConfigTab({
                     <div className="flex-1 overflow-y-auto space-y-1 max-h-48 pr-1">
                       {filteredModels.length === 0 ? (
                         <div className="py-4 text-center text-slate-500 text-xs">
-                          無相符模型
+                          {t('settings.providers.noMatchingModels', '無相符模型')}
                         </div>
                       ) : (
                         filteredModels.map(m => {
@@ -394,7 +395,7 @@ export default function ProviderConfigTab({
           className="flex-1 min-w-0 min-h-[42px] px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700 active:scale-95 text-center leading-tight"
         >
           <RefreshCw size={13} className={testing ? "animate-spin shrink-0" : "shrink-0"} />
-          <span className="truncate">{testing ? '測試中…' : '測試連線'}</span>
+          <span className="truncate">{testing ? t('settings.providers.testing', '測試中…') : t('settings.providers.testConnection', '測試連線')}</span>
         </button>
 
         <button
@@ -404,7 +405,7 @@ export default function ProviderConfigTab({
           className="flex-1 min-w-0 min-h-[42px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-emerald-950/40 active:scale-95 text-center leading-tight"
         >
           <RefreshCw size={13} className={syncing ? "animate-spin shrink-0" : "shrink-0"} />
-          <span className="truncate">{syncing ? '同步中…' : '同步模型列表'}</span>
+          <span className="truncate">{syncing ? t('settings.providers.syncing', '同步中…') : t('settings.providers.syncModels', '同步模型')}</span>
         </button>
       </div>
 

@@ -4,6 +4,8 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 
 import zhTW from './locales/zh-TW.json';
 import enUS from './locales/en-US.json';
+import ja from './locales/ja.json';
+import ko from './locales/ko.json';
 
 i18n
   .use(LanguageDetector)
@@ -13,7 +15,11 @@ i18n
       'zh-TW': { translation: zhTW },
       'zh': { translation: zhTW },
       'en': { translation: enUS },
-      'en-US': { translation: enUS }
+      'en-US': { translation: enUS },
+      'ja': { translation: ja },
+      'ja-JP': { translation: ja },
+      'ko': { translation: ko },
+      'ko-KR': { translation: ko }
     },
     fallbackLng: 'zh-TW',
     interpolation: {

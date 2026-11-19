@@ -153,7 +153,7 @@ export default function SettingsModal({
             }`}
           >
             <Plug size={14} />
-            <span>MCP 工具</span>
+            <span>{t('settings.tabs.mcp', 'MCP 工具')}</span>
           </button>
 
           <button
@@ -166,7 +166,7 @@ export default function SettingsModal({
             }`}
           >
             <Cloud size={14} />
-            <span>搜尋代理</span>
+            <span>{t('settings.tabs.searchProxy', '搜尋代理')}</span>
           </button>
 
           <button
@@ -254,11 +254,11 @@ export default function SettingsModal({
               </div>
 
               <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl space-y-2">
-                <h5 className="font-bold text-white text-xs">隱私與本機優先原則 (Local-First):</h5>
+                <h5 className="font-bold text-white text-xs">{t('settings.about.privacyTitle', '本機優先與隱私')}</h5>
                 <ul className="list-disc list-inside text-slate-400 space-y-1 text-[11px] leading-relaxed">
-                  <li>完全不依賴外部登入帳號系統。</li>
-                  <li>對話紀錄、個人 Context、Skills 僅保存在裝置本地。</li>
-                  <li>API Key 使用 Android Keystore 安全加密保存，絕不上傳第三方。</li>
+                  <li>{t('settings.about.privacy1', '免帳號登入。')}</li>
+                  <li>{t('settings.about.privacy2', '對話、背景與技能僅存於本機。')}</li>
+                  <li>{t('settings.about.privacy3', 'API Key 由本機安全加密保存。')}</li>
                 </ul>
               </div>
             </div>

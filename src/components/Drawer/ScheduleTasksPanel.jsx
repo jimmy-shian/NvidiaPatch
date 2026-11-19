@@ -92,8 +92,8 @@ export default function ScheduleTasksPanel({
 
   const handleOpenNew = () => {
     setEditingTask('new');
-    setName('晨間每日運勢');
-    setPrompt('根據我的生肖與干支，分析今日吉凶、值神與出行注意事項。');
+    setName(t('schedule.defaultTaskName', '晨間每日運勢'));
+    setPrompt(t('schedule.defaultTaskPrompt', '分析今日吉凶與出行建議。'));
     setTime('07:30');
     setRepeat('daily');
     setSelectedSkills(['daily-fortune']);
@@ -152,7 +152,7 @@ export default function ScheduleTasksPanel({
   };
 
   const formatNextRun = (timestamp) => {
-    if (!timestamp) return '未排程';
+    if (!timestamp) return t('schedule.unscheduled', '未排程');
     const d = new Date(timestamp);
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -164,30 +164,30 @@ export default function ScheduleTasksPanel({
   const isNew = editingTask === 'new';
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto px-3 py-2 space-y-3 text-xs">
-      <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-        <div className="flex items-center gap-1.5 text-slate-300 font-semibold">
-          <Clock size={14} className="text-amber-400" />
-          <span>每日排程任務</span>
+    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto px-3.5 py-2.5 space-y-3 text-xs">
+      <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-800">
+        <div className="flex items-center gap-1.5 text-slate-300 font-semibold whitespace-nowrap shrink-0">
+          <Clock size={14} className="text-amber-400 shrink-0" />
+          <span>{t('schedule.title', '排程任務')}</span>
         </div>
         <button
           type="button"
           onClick={handleOpenNew}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-md transition-all active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
         >
-          <Plus size={13} />
-          <span>新增任務</span>
+          <Plus size={13} className="shrink-0" />
+          <span>{t('schedule.addTask', '新增任務')}</span>
         </button>
       </div>
 
       {/* Task List */}
       <div className="space-y-2">
         {tasks.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 space-y-1.5">
+          <div className="text-center py-8 px-2 text-slate-500 space-y-2">
             <Clock size={28} className="mx-auto text-slate-600 mb-1 animate-pulse" />
-            <p className="font-medium text-slate-400">目前尚無排程任務</p>
-            <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
-              點擊上方「新增任務」，設定每天早晨或特定時間自動詢問 AI 並推播結果。
+            <p className="font-semibold text-slate-300 text-xs">{t('schedule.emptyTitle', '尚無排程任務')}</p>
+            <p className="text-xs text-slate-400 leading-relaxed text-pretty mx-auto">
+              {t('schedule.emptyDesc', '設定時間自動執行 AI 分析並推播通知。')}
             </p>
           </div>
         ) : (
@@ -203,7 +203,7 @@ export default function ScheduleTasksPanel({
                 >
                   <div className="flex items-center gap-1.5 text-rose-300 font-semibold">
                     <Trash2 size={14} className="shrink-0 text-rose-400" />
-                    <span className="truncate">確定刪除「{task.name}」？</span>
+                    <span className="truncate">{t('schedule.confirmDeleteTask', `確定刪除「${task.name}」？`, { name: task.name })}</span>
                   </div>
                   <div className="flex justify-end gap-2 pt-1">
                     <button
@@ -211,7 +211,7 @@ export default function ScheduleTasksPanel({
                       onClick={() => setDeletingTaskId(null)}
                       className="px-3 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
                     >
-                      取消
+                      {t('app.cancel', '取消')}
                     </button>
                     <button
                       type="button"
@@ -221,7 +221,7 @@ export default function ScheduleTasksPanel({
                       }}
                       className="px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold shadow-md transition-colors"
                     >
-                      確定刪除
+                      {t('app.delete', '刪除')}
                     </button>
                   </div>
                 </div>
@@ -252,7 +252,7 @@ export default function ScheduleTasksPanel({
                   <div
                     className="flex-1 min-w-0 cursor-pointer group"
                     onClick={() => handleOpenEdit(task)}
-                    title="點擊編輯此任務"
+                    title={t('schedule.editTaskHint', '編輯任務')}
                   >
                     <span className="font-semibold text-slate-200 break-words block group-hover:text-emerald-300 transition-colors">
                       {task.name}
@@ -266,7 +266,7 @@ export default function ScheduleTasksPanel({
                       onClick={(e) => handleManualRun(task, e)}
                       disabled={isTaskRunning || !task.enabled}
                       className="p-1.5 text-slate-400 hover:text-emerald-300 rounded-lg hover:bg-emerald-950/40 transition-colors disabled:opacity-40"
-                      title="立即執行一次"
+                      title={t('schedule.runNowHint', '立即執行')}
                     >
                       {isTaskRunning ? (
                         <Loader2 size={13} className="animate-spin text-emerald-400" />
@@ -282,7 +282,7 @@ export default function ScheduleTasksPanel({
                       className={`w-8 h-4.5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
                         task.enabled ? 'bg-emerald-600 justify-end' : 'bg-slate-700 justify-start'
                       }`}
-                      title={task.enabled ? "點擊停用此排程" : "點擊啟用此排程"}
+                      title={task.enabled ? t('schedule.disableHint', '停用排程') : t('schedule.enableHint', '啟用排程')}
                     >
                       <div className="w-3.5 h-3.5 rounded-full bg-white shadow-sm" />
                     </button>
@@ -292,7 +292,7 @@ export default function ScheduleTasksPanel({
                       type="button"
                       onClick={() => setDeletingTaskId(task.id)}
                       className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 transition-colors"
-                      title="刪除排程"
+                      title={t('schedule.deleteHint', '刪除排程')}
                     >
                       <Trash2 size={13} />
                     </button>
@@ -305,7 +305,11 @@ export default function ScheduleTasksPanel({
                       ⏰ {task.time}
                     </span>
                     <span className="text-slate-400">
-{task.repeat === 'daily' ? '每天' : task.repeat === 'once' ? '僅一次' : '工作日'} · 下次: {formatNextRun(task.nextRunAt)}
+                      {task.repeat === 'daily'
+                        ? t('schedule.repeatDailyShort', '每天')
+                        : task.repeat === 'once'
+                          ? t('schedule.repeatOnceShort', '單次')
+                          : t('schedule.repeatWorkdaysShort', '工作日')} · {t('schedule.nextRun', '下次')}: {formatNextRun(task.nextRunAt)}
                     </span>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -437,10 +441,10 @@ export default function ScheduleTasksPanel({
       <div className="p-3 rounded-2xl bg-amber-950/20 border border-amber-800/30 text-[11px] text-amber-300/80 space-y-1">
         <div className="flex items-center gap-1.5 font-semibold text-amber-200">
           <Sparkles size={12} className="text-amber-400" />
-          <span>背景執行與桌面小工具連動</span>
+          <span>{t('schedule.widgetNoteTitle', '背景執行與小工具')}</span>
         </div>
         <p className="leading-relaxed">
-          排程時間抵達時將自動於背景喚醒並執行分析，結果即時發送手機通知並同步至 Android 桌面小工具。
+          {t('schedule.widgetNoteDesc', '到時自動背景執行、推播通知並同步桌面小工具。')}
         </p>
       </div>
 
@@ -457,14 +461,14 @@ export default function ScheduleTasksPanel({
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h3 className="text-lg font-bold text-white font-sans tracking-wide">
-                {isNew ? '新增' : '編輯'}
+                {isNew ? t('schedule.addTask', '新增任務') : t('schedule.editTask', '編輯任務')}
               </h3>
 
               <button
                 type="button"
                 onClick={() => setEditingTask(null)}
                 className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                title="關閉彈窗"
+                title={t('app.close', '關閉')}
               >
                 <X size={18} />
               </button>
@@ -474,13 +478,13 @@ export default function ScheduleTasksPanel({
             <form onSubmit={handleSave} className="space-y-4">
               <div>
                 <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                  任務名稱
+                  {t('schedule.taskNameLabel', '任務名稱')}
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={e => setName(e.target.value)}
-                  placeholder="例如: 每日晨間運勢、下班覆盤分析..."
+                  placeholder={t('schedule.taskNamePlaceholder', '例如：每日晨間運勢')}
                   className="w-full bg-black/60 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-emerald-500 transition-colors shadow-inner"
                   required
                   autoFocus
@@ -489,12 +493,12 @@ export default function ScheduleTasksPanel({
 
               <div>
                 <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                  提示詞描述 (Prompt - 時間到時將自動向 AI 發送)
+                  {t('schedule.promptLabel', '執行提示詞 (Prompt)')}
                 </label>
                 <textarea
                   value={prompt}
                   onChange={e => setPrompt(e.target.value)}
-                  placeholder="請在此輸入要發送給 AI 的完整問題或分析要求..."
+                  placeholder={t('schedule.promptPlaceholder', '輸入自動發送給 AI 的指令...')}
                   rows={3}
                   className="w-full bg-black/60 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-emerald-500 transition-colors shadow-inner resize-none leading-relaxed"
                   required
@@ -504,7 +508,7 @@ export default function ScheduleTasksPanel({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                    觸發時間 (24小時制)
+                    {t('schedule.timeLabel', '執行時間')}
                   </label>
                   <input
                     type="time"
@@ -516,16 +520,16 @@ export default function ScheduleTasksPanel({
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                    重複頻率
+                    {t('schedule.repeatLabel', '重複頻率')}
                   </label>
                   <select
                     value={repeat}
                     onChange={e => setRepeat(e.target.value)}
                     className="w-full bg-black/60 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500 transition-colors"
                   >
-                    <option value="daily">每天執行一次</option>
-                    <option value="weekly:1,2,3,4,5">工作日 (週一至五)</option>
-                    <option value="once">僅執行一次 (執行後自動關閉)</option>
+                    <option value="daily">{t('schedule.repeatDaily', '每天')}</option>
+                    <option value="weekly:1,2,3,4,5">{t('schedule.repeatWorkdays', '工作日 (週一至五)')}</option>
+                    <option value="once">{t('schedule.repeatOnce', '僅執行一次')}</option>
                   </select>
                 </div>
               </div>
@@ -533,7 +537,7 @@ export default function ScheduleTasksPanel({
               {/* Bound Skills Selection */}
               <div>
                 <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                  綁定專業技能 (可複選)
+                  {t('schedule.bindSkillsLabel', '綁定技能（可複選）')}
                 </label>
                 <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 bg-black/40 rounded-xl border border-slate-800">
                   {skills.filter(s => s.id !== 'meihua').map(s => {
@@ -601,7 +605,7 @@ export default function ScheduleTasksPanel({
                     className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/40 text-xs font-semibold transition-colors flex items-center gap-1.5"
                   >
                     <Play size={13} />
-                    <span>立即測試</span>
+                    <span>{t('schedule.testRunNow', '立即測試')}</span>
                   </button>
                 )}
 
@@ -611,7 +615,7 @@ export default function ScheduleTasksPanel({
                     onClick={() => setEditingTask(null)}
                     className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium transition-colors"
                   >
-                    取消
+                    {t('app.cancel', '取消')}
                   </button>
                   <button
                     type="submit"
@@ -621,12 +625,12 @@ export default function ScheduleTasksPanel({
                     {isSaving ? (
                       <>
                         <Loader2 size={13} className="animate-spin" />
-                        <span>儲存中…</span>
+                        <span>{t('schedule.saving', '儲存中…')}</span>
                       </>
                     ) : (
                       <>
                         <Check size={14} />
-                        <span>{isNew ? '確認新增' : '儲存'}</span>
+                        <span>{isNew ? t('schedule.confirmAdd', '確認新增') : t('app.save', '儲存')}</span>
                       </>
                     )}
                   </button>

@@ -219,19 +219,19 @@ export default function ChatInput({
       {!hideSkillsSelector && selectableSkills.length > 0 && (
         <div ref={skillsContainerRef} className="mb-2 relative">
           {/* Collapsed Toggle Bar */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setIsSkillsMenuOpen(prev => !prev)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border whitespace-nowrap shrink-0 ${
                 selectedCount > 0
                   ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
                   : 'bg-slate-900/80 border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Sparkles size={13} className={selectedCount > 0 ? "text-emerald-400" : "text-amber-400"} />
-              <span>{`技能（已選擇 ${selectedCount}）`}</span>
-              {isSkillsMenuOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              <Sparkles size={13} className={`shrink-0 ${selectedCount > 0 ? "text-emerald-400" : "text-amber-400"}`} />
+              <span>{t('chat.skillsSelected', `技能（已選擇 ${selectedCount}）`, { count: selectedCount })}</span>
+              {isSkillsMenuOpen ? <ChevronUp size={13} className="shrink-0" /> : <ChevronDown size={13} className="shrink-0" />}
             </button>
 
             {/* Clear selection if any */}
@@ -241,10 +241,10 @@ export default function ChatInput({
                 onClick={() => {
                   validSelectedIds.forEach(id => onToggleSkill(id));
                 }}
-                className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors px-1"
-                title="清除所有勾選技能"
+                className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors px-1.5 py-1 whitespace-nowrap shrink-0"
+                title={t('chat.clearSelectedSkillsHint', '清除所有勾選技能')}
               >
-                {`清除勾選 (${selectedCount})`}
+                {t('chat.clearSelectedSkills', `清除勾選 (${selectedCount})`, { count: selectedCount })}
               </button>
             )}
           </div>
@@ -254,8 +254,8 @@ export default function ChatInput({
             <div className="absolute left-0 right-0 bottom-full mb-2 p-2.5 rounded-2xl bg-[#111827] border border-slate-700 shadow-2xl max-h-[48vh] overflow-y-auto space-y-1.5 animate-fade-in z-30">
               <div className="text-[11px] text-slate-400 px-1 pb-1 font-medium border-b border-slate-800/80 mb-1 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-200">所有技能清單</span>
-                  <span className="text-[10px] text-slate-500">（依設定優先度排序）</span>
+                  <span className="font-semibold text-slate-200">{t('chat.allSkillsList', '所有技能')}</span>
+                  <span className="text-[10px] text-slate-500">{t('chat.priorityOrderHint', '（依優先順序）')}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   {selectedCount > 0 && (
@@ -266,7 +266,7 @@ export default function ChatInput({
                       }}
                       className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
                     >
-                      清除全部
+                      {t('chat.clearAll', '清除全部')}
                     </button>
                   )}
                   <button
@@ -302,7 +302,7 @@ export default function ChatInput({
                             <span className="truncate">{displayName}</span>
                             {isPriority && (
                               <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-normal">
-                                優先
+                                {t('chat.priorityBadge', '優先')}
                               </span>
                             )}
                           </div>
@@ -343,7 +343,7 @@ export default function ChatInput({
                 type="button"
                 onClick={() => onRemoveImage?.(idx)}
                 className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-slate-900/90 hover:bg-rose-600 text-slate-300 hover:text-white border border-slate-700 shadow-sm transition-colors"
-                title="移除圖片"
+                title={t('chat.removeImage', '移除圖片')}
               >
                 <X size={12} />
               </button>
@@ -355,7 +355,7 @@ export default function ChatInput({
               onClick={onClearImages}
               className="text-[11px] text-slate-400 hover:text-rose-400 px-2 py-1 shrink-0 transition-colors ml-auto"
             >
-              清除全部 ({attachedImages.length})
+              {t('chat.clearAllImages', `清除全部 (${attachedImages.length})`, { count: attachedImages.length })}
             </button>
           )}
         </div>
@@ -379,7 +379,7 @@ export default function ChatInput({
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isStreaming || isProcessingImage}
           className="p-2 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 active:scale-95 transition-all shrink-0 mb-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
-          title="選擇或上傳圖片（亦可直接剪貼簿貼上圖片）"
+          title={t('chat.uploadImageHint', '上傳或貼上圖片')}
         >
           {isProcessingImage ? (
             <Loader2 size={18} className="animate-spin text-emerald-400" />
@@ -394,7 +394,7 @@ export default function ChatInput({
           onChange={handleTextareaChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={disabled ? t('chat.noModelSelected') : (attachedImages.length > 0 ? "輸入針對圖片的問題，或直接送出…" : t('chat.inputPlaceholder'))}
+          placeholder={disabled ? t('chat.noModelSelected') : (attachedImages.length > 0 ? t('chat.imageQuestionPlaceholder', '輸入圖片問題，或直接送出…') : t('chat.inputPlaceholder'))}
           disabled={disabled}
           rows={1}
           className="flex-1 bg-transparent text-slate-100 placeholder-slate-500 text-sm px-2 sm:px-3 py-1.5 resize-none outline-none max-h-[120px]"
@@ -407,7 +407,7 @@ export default function ChatInput({
                 type="button"
                 onClick={onSend}
                 className="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-md shadow-emerald-950/40 transition-transform active:scale-95 shrink-0"
-                title="即時插入送出（於當前階段完成時自動接續）"
+                title={t('chat.sendQueuedHint', '插入排隊訊息')}
               >
                 <Send size={16} />
               </button>

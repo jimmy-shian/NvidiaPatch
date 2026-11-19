@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import AdSenseSlot from '../Common/AdSenseSlot';
 import { isNativeApp } from '../../lib/adsense';
 import {
@@ -29,6 +30,7 @@ const AD_CLOSE_GRACE_MS = 800;
  * - 獨立狀態，不干擾對話捲動
  */
 export default function InlineWaitingAd({ isStreaming }) {
+  const { t } = useTranslation();
   const isBypassed = typeof window !== 'undefined' && localStorage.getItem('yesolve_ad_bypass') === 'true';
   const [adStatus, setAdStatus] = useState(() => (isStreaming && !isBypassed ? 'loading' : 'idle')); // idle | loading | loaded | manual_closed
   const [shouldRender, setShouldRender] = useState(() => Boolean(isStreaming && !isBypassed));
@@ -198,13 +200,13 @@ export default function InlineWaitingAd({ isStreaming }) {
             <span className="text-slate-300 font-semibold">NvidiaPatch AI</span>
             <span className="text-slate-600">·</span>
             <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono text-[9px] uppercase tracking-wider">
-              {'贊助內容'}
+              {t('ads.sponsored', '贊助內容')}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-slate-500 font-mono">
-              {adStatus === 'loaded' ? '贊助支持' : '生成中…'}
+              {adStatus === 'loaded' ? t('ads.sponsorSupport', '贊助支持') : t('ads.generating', '生成中…')}
             </span>
           </div>
         </div>
@@ -226,7 +228,7 @@ export default function InlineWaitingAd({ isStreaming }) {
 
         {/* C. 狀態資訊區 */}
         <div className="px-3 pb-2 flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-800/40 pt-1.5">
-          <span>{'回覆完成後自動收起'}</span>
+          <span>{t('ads.autoCollapseHint', '回覆完成後自動收起')}</span>
           <span className="inline-block w-1.5 h-2.5 bg-emerald-400/80 animate-pulse rounded-full" />
         </div>
       </div>

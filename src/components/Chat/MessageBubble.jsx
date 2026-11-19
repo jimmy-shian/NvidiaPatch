@@ -133,11 +133,13 @@ export default function MessageBubble({
   if (!isUser) {
     if (isStreaming && isLast) {
       const sec = Math.max(0.1, (liveElapsedMs / 1000)).toFixed(1);
-      durationText = `處理中 ${sec}s`;
+      durationText = t('chat.processingTime', `處理中 ${sec}s`, { sec });
     } else if (message.durationMs !== undefined && message.durationMs !== null) {
-      durationText = `回應耗時 ${(message.durationMs / 1000).toFixed(1)}s`;
+      const sec = (message.durationMs / 1000).toFixed(1);
+      durationText = t('chat.responseTime', `耗時 ${sec}s`, { sec });
     } else if (message.completedAt && message.startedAt) {
-      durationText = `回應耗時 ${((message.completedAt - message.startedAt) / 1000).toFixed(1)}s`;
+      const sec = ((message.completedAt - message.startedAt) / 1000).toFixed(1);
+      durationText = t('chat.responseTime', `耗時 ${sec}s`, { sec });
     }
   }
 
@@ -147,26 +149,33 @@ export default function MessageBubble({
     const { phase, meta = {} } = liveStatus;
     switch (phase) {
       case 'thinking':
-        return '思考推理中…';
+        return t('chat.status.thinking', '思考推理中…');
       case 'searching':
-        return meta.query ? `正在搜尋相關資料: "${meta.query}"…` : '正在搜尋相關資料…';
+        return meta.query
+          ? t('chat.status.searchingQuery', `搜尋「${meta.query}」…`, { query: meta.query })
+          : t('chat.status.searching', '搜尋資料中…');
       case 'retrying_query':
         return meta.relaxedQuery
-          ? `第一次搜尋無直接結果，正在更換關鍵字重新檢索: "${meta.relaxedQuery}"…`
-          : '正在調整關鍵字重新搜尋…';
-      case 'reading':
-        if (meta.resultCount && (meta.pagesToReadCount || meta.count)) {
-          return `找到 ${meta.resultCount} 筆結果，正在閱讀其中 ${meta.pagesToReadCount || meta.count} 個來源…`;
+          ? t('chat.status.retryingQuery', `改用「${meta.relaxedQuery}」重搜…`, { query: meta.relaxedQuery })
+          : t('chat.status.retrying', '調整關鍵字重搜…');
+      case 'reading': {
+        const pagesCount = meta.pagesToReadCount || meta.count;
+        if (meta.resultCount && pagesCount) {
+          return t('chat.status.readingCount', `找到 ${meta.resultCount} 筆，閱讀 ${pagesCount} 個來源…`, {
+            resultCount: meta.resultCount,
+            count: pagesCount
+          });
         }
-        return meta.pagesToReadCount || meta.count
-          ? `正在檢索並閱讀 ${meta.pagesToReadCount || meta.count} 個來源網頁…`
-          : '正在檢索並閱讀來源網頁…';
+        return pagesCount
+          ? t('chat.status.readingPages', `閱讀 ${pagesCount} 個來源…`, { count: pagesCount })
+          : t('chat.status.reading', '閱讀來源網頁…');
+      }
       case 'using_tool':
-        return `正在調用工具: ${meta.toolName || ''}…`;
+        return t('chat.status.usingTool', `執行工具: ${meta.toolName || ''}…`, { toolName: meta.toolName || '' });
       case 'organizing':
-        return '已獲取相關資料，正在整理回答…';
+        return t('chat.status.organizing', '整理回答中…');
       case 'generating':
-        return '正在生成回覆…';
+        return t('chat.status.generating', '生成回覆中…');
       default:
         return null;
     }
@@ -188,7 +197,7 @@ export default function MessageBubble({
   // 沒有 liveStatus 時的保底文案（避免等待期間畫面完全空白）
   const fallbackStatusText =
     isStreaming && isLast && !message.content && !isReasoningNow && !hasActiveToolExecution
-      ? '等待回覆中…'
+      ? t('chat.status.waiting', '等待回覆中…')
       : null;
 
   const statusText = activeStatusText || fallbackStatusText;
@@ -218,10 +227,10 @@ export default function MessageBubble({
           >
             <div className="flex items-center gap-1.5 min-w-0">
               <Globe size={13} className="text-emerald-400 shrink-0" />
-              <span className="font-semibold text-emerald-300">搜尋工具結果:</span>
+              <span className="font-semibold text-emerald-300">{t('chat.searchToolResult', '搜尋結果:')}</span>
               <span className="text-slate-400 font-mono truncate">{queryStr || message.name || 'web_search'}</span>
               <span className="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.2 rounded shrink-0">
-                {resultsCount} 筆
+                {t('chat.resultCount', `${resultsCount} 筆`, { count: resultsCount })}
               </span>
             </div>
             {isExpanded ? <ChevronDown size={13} className="text-slate-500 shrink-0" /> : <ChevronRight size={13} className="text-slate-500 shrink-0" />}
@@ -240,7 +249,7 @@ export default function MessageBubble({
                 ))
               ) : (
                 <div className="p-2 rounded bg-black/30 text-slate-400 text-xs italic">
-                  未檢索到直接相關網頁或已由模型知識庫整合。
+                  {t('chat.noDirectWebResults', '無直接網頁結果，改由模型整合。')}
                 </div>
               )}
             </div>
@@ -253,24 +262,24 @@ export default function MessageBubble({
   return (
     <div className={`flex flex-col my-2 px-1 sm:px-2 w-full ${isUser ? 'items-end' : 'items-start'}`}>
       {/* Sender Header with Time & Elapsed Duration */}
-      <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-slate-400 select-none">
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mb-1 px-1 text-[11px] font-medium text-slate-400 select-none max-w-[94%] sm:max-w-[85%]">
         {isUser ? (
           <>
-            <span className="font-mono text-slate-500 text-[10px]">{timeStr}</span>
+            <span className="font-mono text-slate-500 text-[10px] whitespace-nowrap">{timeStr}</span>
             <span className="text-slate-600">·</span>
-            <span>您</span>
-            <User size={12} className="text-slate-400" />
+            <span className="whitespace-nowrap">{t('chat.you', '您')}</span>
+            <User size={12} className="text-slate-400 shrink-0" />
           </>
         ) : (
           <>
             <Bot size={13} className="text-emerald-400 shrink-0" />
-            <span className="text-emerald-400 font-semibold">{message.modelName || 'Assistant'}</span>
-            <span className="text-slate-600">·</span>
-            <span className="font-mono text-slate-500 text-[10px]">{timeStr}</span>
+            <span className="text-emerald-400 font-semibold break-all">{message.modelName || 'Assistant'}</span>
+            <span className="text-slate-600 shrink-0">·</span>
+            <span className="font-mono text-slate-500 text-[10px] whitespace-nowrap shrink-0">{timeStr}</span>
             {durationText && (
               <>
-                <span className="text-slate-600">·</span>
-                <span className="text-emerald-400/90 font-mono text-[10px] bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.2 rounded">
+                <span className="text-slate-600 shrink-0">·</span>
+                <span className="text-emerald-400/90 font-mono text-[10px] bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
                   {durationText}
                 </span>
               </>
@@ -347,25 +356,25 @@ export default function MessageBubble({
                           🌸
                         </div>
                         <span className="font-bold text-rose-200 text-xs shrink-0">
-                          梅花排盤
+                          {t('meihua.card.title', '梅花排盤')}
                         </span>
                         {calc?.primary?.hexagram && (
                           <span className="px-1.5 py-0.2 rounded text-[10px] bg-rose-950/90 text-rose-300 border border-rose-800/80 font-medium truncate">
-                            {calc.primary.hexagram.fullName} (動{calc.primary.movingLine}) · 【{calc.tiYong?.relation}】
+                            {calc.primary.hexagram.fullName} ({t('meihua.card.movingLineShort', `動${calc.primary.movingLine}`, { line: calc.primary.movingLine })}) · 【{calc.tiYong?.relation}】
                           </span>
                         )}
                       </div>
 
                       <div className="flex items-center gap-1 text-[10px] text-rose-300/80 shrink-0">
                         <span className="font-mono bg-rose-950/70 px-1.5 py-0.5 rounded border border-rose-800/50 text-rose-300">
-                          {calc?.method === 'time' ? '⏰ 時間' : calc?.randomNumbers ? `🎲 ${calc.randomNumbers.join(',')}` : '🔢 數字'}
+                          {calc?.method === 'time' ? t('meihua.card.methodTime', '⏰ 時間') : calc?.randomNumbers ? `🎲 ${calc.randomNumbers.join(',')}` : t('meihua.card.methodNumbers', '🔢 數字')}
                         </span>
                         <button
                           type="button"
                           onClick={handleShareCard}
                           disabled={isSharingThis}
                           className="p-1 rounded-lg text-rose-300/80 hover:text-white hover:bg-rose-900/50 transition-colors"
-                          title="匯出為圖片並分享"
+                          title={t('meihua.card.shareTitle', '匯出圖片並分享')}
                         >
                           {isSharingThis ? <Loader2 size={13} className="animate-spin text-rose-300" /> : <Share2 size={13} />}
                         </button>
@@ -378,39 +387,39 @@ export default function MessageBubble({
                         {/* 3 Hexagram cards */}
                         <div className="grid grid-cols-3 gap-1.5 text-center">
                           <div className="p-1.5 rounded-xl bg-slate-900/90 border border-rose-800/40 space-y-0.5">
-                            <div className="text-[10px] text-rose-400 font-semibold">本卦（現狀）</div>
+                            <div className="text-[10px] text-rose-400 font-semibold">{t('meihua.card.primaryLabel', '本卦（現狀）')}</div>
                             <div className="font-bold text-white text-xs">{calc.primary?.hexagram?.fullName}</div>
                             <div className="text-[10px] text-slate-400 font-mono">{calc.primary?.upper?.name}({calc.primary?.upper?.element}) / {calc.primary?.lower?.name}({calc.primary?.lower?.element})</div>
-                            <div className="text-[10px] text-amber-400 font-bold">動{calc.primary?.movingLine}爻</div>
+                            <div className="text-[10px] text-amber-400 font-bold">{t('meihua.card.movingLineFull', `動${calc.primary?.movingLine}爻`, { line: calc.primary?.movingLine })}</div>
                           </div>
 
                           <div className="p-2 rounded-xl bg-slate-900/90 border border-purple-800/40 space-y-0.5">
-                            <div className="text-[10px] text-purple-400 font-semibold">互卦（過程）</div>
+                            <div className="text-[10px] text-purple-400 font-semibold">{t('meihua.card.mutualLabel', '互卦（過程）')}</div>
                             <div className="font-bold text-white text-xs">{calc.mutual?.hexagram?.fullName}</div>
                             <div className="text-[10px] text-slate-400 font-mono">{calc.mutual?.upper?.name}({calc.mutual?.upper?.element}) / {calc.mutual?.lower?.name}({calc.mutual?.lower?.element})</div>
-                            <div className="text-[10px] text-slate-500">中段內應</div>
+                            <div className="text-[10px] text-slate-500">{t('meihua.card.mutualFooter', '中段內應')}</div>
                           </div>
 
                           <div className="p-1.5 rounded-xl bg-slate-900/90 border border-sky-800/40 space-y-0.5">
-                            <div className="text-[10px] text-sky-400 font-semibold">變卦（趨勢）</div>
+                            <div className="text-[10px] text-sky-400 font-semibold">{t('meihua.card.changedLabel', '變卦（趨勢）')}</div>
                             <div className="font-bold text-white text-xs">{calc.changed?.hexagram?.fullName}</div>
                             <div className="text-[10px] text-slate-400 font-mono">{calc.changed?.upper?.name}({calc.changed?.upper?.element}) / {calc.changed?.lower?.name}({calc.changed?.lower?.element})</div>
-                            <div className="text-[10px] text-slate-500">後續走向</div>
+                            <div className="text-[10px] text-slate-500">{t('meihua.card.changedFooter', '後續走向')}</div>
                           </div>
                         </div>
 
                         {/* Ti-Yong Dynamics */}
                         <div className="p-2 rounded-xl bg-black/40 border border-rose-800/30 space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="font-bold text-rose-300">體用五行生剋</span>
+                            <span className="font-bold text-rose-300">{t('meihua.card.tiYongTitle', '體用五行生剋')}</span>
                             <span className="px-2 py-0.5 rounded-full font-bold bg-rose-900/60 text-rose-200 border border-rose-700/60">
                               【{calc.tiYong?.relation}】
                             </span>
                           </div>
                           <div className="text-[11px] text-slate-300 flex items-center justify-between pt-0.5">
-                            <span>體卦【{know?.ti?.trigram?.name} ({know?.ti?.trigram?.element})】</span>
+                            <span>{t('meihua.card.tiLabel', '體卦')}【{know?.ti?.trigram?.name} ({know?.ti?.trigram?.element})】</span>
                             <span className="text-slate-500">vs</span>
-                            <span>用卦【{know?.yong?.trigram?.name} ({know?.yong?.trigram?.element})】</span>
+                            <span>{t('meihua.card.yongLabel', '用卦')}【{know?.yong?.trigram?.name} ({know?.yong?.trigram?.element})】</span>
                           </div>
                           {know?.relationRule && (
                             <p className="text-[10px] text-slate-400 pt-1 border-t border-slate-800">
@@ -422,22 +431,22 @@ export default function MessageBubble({
                         {/* Knowledge Citations */}
                         {know?.primaryHexagram?.judgement && (
                           <div className="p-2 rounded-xl bg-black/30 border border-slate-800 text-[10px] space-y-1">
-                            <div className="text-slate-400 font-semibold">周易經文引證：</div>
-                            <p className="text-slate-300">【卦辭】{know.primaryHexagram.judgement}</p>
+                            <div className="text-slate-400 font-semibold">{t('meihua.card.scriptureTitle', '周易經文：')}</div>
+                            <p className="text-slate-300">{t('meihua.card.judgementTag', '【卦辭】')}{know.primaryHexagram.judgement}</p>
                             {know.movingLine && (
-                              <p className="text-amber-300/90">【爻辭】{know.movingLine.name}：{know.movingLine.text}</p>
+                              <p className="text-amber-300/90">{t('meihua.card.lineTag', '【爻辭】')}{know.movingLine.name}：{know.movingLine.text}</p>
                             )}
                           </div>
                         )}
 
                         <div className="text-[10px] text-emerald-400/90 flex items-center gap-1 font-mono">
                           <Check size={12} />
-                          <span>已完成確定性數理排盤與體用生剋判定，結果已引導大模型生成。</span>
+                          <span>{t('meihua.card.verifiedNote', '已完成數理排盤與體用判定。')}</span>
                         </div>
 
                         {/* Watermark branding footer for shared card */}
                         <div className="pt-1.5 flex items-center justify-between text-[9px] text-slate-500 border-t border-rose-900/30 font-mono">
-                          <span>🌸 梅花易數排盤</span>
+                          <span>{t('meihua.card.watermark', '🌸 梅花易數排盤')}</span>
                           <span>NvidiaPatch Chat</span>
                         </div>
                       </div>
@@ -456,7 +465,8 @@ export default function MessageBubble({
                 args: te.args,
                 result: te.result,
                 index: currentSearchIndex >= 0 ? currentSearchIndex : idx,
-                totalSearchCalls: allSearchCalls.length
+                totalSearchCalls: allSearchCalls.length,
+                t
               });
 
               let parsedResult = te.result;
@@ -515,12 +525,12 @@ export default function MessageBubble({
                         <div className="p-2 rounded bg-amber-950/40 border border-amber-800/50 text-[10px] text-amber-300 space-y-1">
                           <div className="font-semibold flex items-center gap-1">
                             <AlertTriangle size={11} className="shrink-0 text-amber-400" />
-                            <span>搜尋引擎診斷與狀態：</span>
+                            <span>{t('chat.searchDiagnostics', '搜尋狀態：')}</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5 pt-0.5">
                             {parsedResult.providerErrors.map((pe, peIdx) => (
                               <span key={peIdx} className="px-1.5 py-0.5 rounded bg-slate-900/80 border border-amber-800/40 font-mono text-[9px]">
-                                {pe.provider}: {pe.errorKind === 'challenge' ? '🛡️ 被反爬挑戰(已降級)' : pe.errorKind}
+                                {pe.provider}: {pe.errorKind === 'challenge' ? t('chat.searchChallengeFallback', '🛡️ 已降級') : pe.errorKind}
                               </span>
                             ))}
                           </div>
@@ -566,7 +576,7 @@ export default function MessageBubble({
               <div className="flex items-center justify-between p-2 rounded-xl bg-gradient-to-r from-rose-950/80 to-purple-950/80 border border-rose-500/40 text-rose-200 text-xs shadow-sm">
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-rose-300 flex items-center gap-1 text-xs whitespace-nowrap">
-                    🎲 靈動數
+                    🎲 {t('meihua.seedBadge', '靈動數')}
                   </span>
                   <div className="flex items-center gap-1 font-mono">
                     {editMeihuaNumbers.map((num, i) => (
@@ -588,10 +598,10 @@ export default function MessageBubble({
                   type="button"
                   onClick={() => setEditMeihuaNumbers(null)}
                   className="text-[11px] text-rose-400 hover:text-rose-200 px-1.5 py-0.5 rounded hover:bg-rose-900/40 transition-colors flex items-center gap-0.5 shrink-0"
-                  title="移除靈動數（改為時間起卦）"
+                  title={t('meihua.removeSeed', '移除靈動數（改用時間起卦）')}
                 >
                   <X size={12} />
-                  <span>移除</span>
+                  <span>{t('app.remove', '移除')}</span>
                 </button>
               </div>
             )}
@@ -601,7 +611,7 @@ export default function MessageBubble({
               onChange={e => setDraftText(e.target.value)}
               className="w-full bg-slate-950/90 border border-slate-700 rounded-xl p-2.5 text-xs text-white resize-none outline-none focus:border-emerald-400 font-sans leading-relaxed select-text shadow-inner"
               rows={3}
-              placeholder="請輸入欲修改之問題內容…"
+              placeholder={t('chat.editPlaceholder', '編輯訊息內容…')}
               autoFocus
             />
             <div className="flex justify-end gap-2 text-xs">
@@ -610,7 +620,7 @@ export default function MessageBubble({
                 onClick={handleCancelEdit}
                 className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors text-xs font-medium"
               >
-                取消
+                {t('app.cancel', '取消')}
               </button>
               <button
                 type="button"
@@ -618,7 +628,7 @@ export default function MessageBubble({
                 disabled={!draftText.trim()}
                 className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-semibold text-white transition-colors disabled:opacity-40 text-xs shadow-sm shadow-emerald-950/30"
               >
-                儲存並送出
+                {t('chat.saveAndSend', '儲存並送出')}
               </button>
             </div>
           </div>
@@ -649,7 +659,7 @@ export default function MessageBubble({
                         key={idx}
                         className="relative group rounded-xl overflow-hidden border border-white/10 bg-black/40 cursor-pointer shadow-sm hover:opacity-90 active:scale-[0.98] transition-all max-w-[280px]"
                         onClick={() => setPreviewImageUrl(src)}
-                        title="點擊放大檢視圖片"
+                        title={t('chat.zoomImage', '放大檢視')}
                       >
                         <img
                           src={src}
@@ -674,7 +684,7 @@ export default function MessageBubble({
                 <div className="space-y-1.5 max-w-full overflow-hidden select-text selectable-text">
                   {renderImages()}
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gradient-to-r from-rose-950/80 to-purple-950/80 border border-rose-500/40 text-rose-200 text-xs shadow-sm">
-                    <span className="font-semibold text-rose-300 flex items-center gap-1">🎲 靈動數</span>
+                    <span className="font-semibold text-rose-300 flex items-center gap-1">🎲 {t('meihua.seedBadge', '靈動數')}</span>
                     <span className="px-1.5 py-0.5 rounded bg-rose-900/70 border border-rose-700/50 font-mono text-rose-100 font-bold text-[11px]">{n1}</span>
                     <span className="px-1.5 py-0.5 rounded bg-rose-900/70 border border-rose-700/50 font-mono text-rose-100 font-bold text-[11px]">{n2}</span>
                     <span className="px-1.5 py-0.5 rounded bg-rose-900/70 border border-rose-700/50 font-mono text-rose-100 font-bold text-[11px]">{n3}</span>
@@ -703,7 +713,7 @@ export default function MessageBubble({
           <div className="space-y-2 max-w-full overflow-hidden">
             <div className="flex items-center gap-1.5 text-rose-400 font-semibold text-xs">
               <AlertTriangle size={14} className="shrink-0" />
-              <span>回覆失敗</span>
+              <span>{t('chat.replyFailed', '回覆失敗')}</span>
             </div>
             <div className="text-xs text-rose-300/90 whitespace-pre-wrap break-words break-all leading-relaxed max-w-full overflow-hidden">
               {message.content}
@@ -714,7 +724,7 @@ export default function MessageBubble({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 text-rose-200 text-xs font-semibold transition-all active:scale-95 mt-2"
             >
               <RotateCw size={13} />
-              <span>重新嘗試</span>
+              <span>{t('chat.retry', '重試')}</span>
             </button>
           </div>
         ) : (
@@ -750,7 +760,7 @@ export default function MessageBubble({
               </div>
             ) : !isStreaming && message.toolExecutions && message.toolExecutions.length > 0 ? (
               <div className="text-xs text-slate-400 italic py-1">
-                已檢索上述資料並整合完成。
+                {t('chat.toolIntegrated', '已整合檢索資料。')}
               </div>
             ) : null}
           </div>
@@ -762,20 +772,20 @@ export default function MessageBubble({
         <div className="flex items-center gap-2 mt-1 px-1 text-slate-500 text-xs opacity-70 hover:opacity-100 transition-opacity">
           {isConfirmingDelete ? (
             <div className="flex items-center gap-1.5 bg-rose-950/80 border border-rose-800/80 rounded-lg px-2 py-0.5 text-[11px] text-rose-300 animate-fade-in">
-              <span>確定刪除？</span>
+              <span>{t('app.confirmDeleteShort', '確定刪除？')}</span>
               <button
                 type="button"
                 onClick={handleDeleteConfirm}
                 className="px-1.5 py-0.2 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold"
               >
-                刪除
+                {t('app.delete', '刪除')}
               </button>
               <button
                 type="button"
                 onClick={() => setIsConfirmingDelete(false)}
                 className="px-1 py-0.2 text-slate-400 hover:text-slate-200"
               >
-                取消
+                {t('app.cancel', '取消')}
               </button>
             </div>
           ) : (
@@ -784,7 +794,7 @@ export default function MessageBubble({
                 type="button"
                 onClick={handleCopy}
                 className="p-1 hover:text-slate-200 transition-colors"
-                title="複製內容"
+                title={t('chat.copy', '複製內容')}
               >
                 {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
               </button>
@@ -794,7 +804,7 @@ export default function MessageBubble({
                   type="button"
                   onClick={handleStartEdit}
                   className="p-1 hover:text-slate-200 transition-colors"
-                  title="編輯此訊息"
+                  title={t('chat.edit', '編輯訊息')}
                 >
                   <Edit3 size={12} />
                 </button>
@@ -805,7 +815,7 @@ export default function MessageBubble({
                   type="button"
                   onClick={onRegenerate}
                   className="p-1 hover:text-slate-200 transition-colors"
-                  title="重新生成回覆"
+                  title={t('chat.regenerate', '重新生成')}
                 >
                   <RotateCw size={12} />
                 </button>
@@ -816,7 +826,7 @@ export default function MessageBubble({
                   type="button"
                   onClick={() => setIsConfirmingDelete(true)}
                   className="p-1 hover:text-rose-400 transition-colors"
-                  title="刪除此訊息"
+                  title={t('app.delete', '刪除')}
                 >
                   <Trash2 size={12} />
                 </button>
@@ -837,7 +847,7 @@ export default function MessageBubble({
               type="button"
               onClick={() => setPreviewImageUrl(null)}
               className="absolute -top-10 right-0 p-2 text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors cursor-pointer"
-              title="關閉預覽"
+              title={t('app.close', '關閉')}
             >
               <X size={20} />
             </button>

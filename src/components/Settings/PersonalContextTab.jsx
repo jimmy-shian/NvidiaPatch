@@ -69,20 +69,20 @@ export default function PersonalContextTab({ contextSettings = {}, onUpdateConte
     <div className="space-y-4 text-xs">
       <div className="flex items-center justify-between">
         <div>
-          <h4 className="text-sm font-bold text-white mb-0.5">個人偏好與背景設定</h4>
-          <p className="text-slate-400 text-[11px]">設定您的稱謂、回答語言、回答風格與長期背景資料，模型將自動以此 Context 進行客製化回應。</p>
+          <h4 className="text-sm font-bold text-white mb-0.5">{t('settings.context.title', '個人背景設定')}</h4>
+          <p className="text-slate-400 text-[11px]">{t('settings.context.subtitle', '對話時自動帶入稱謂、語言與回覆風格。')}</p>
         </div>
         {showSavedFeedback && (
           <div className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-1 rounded-lg animate-fade-in shrink-0">
             <CheckCircle2 size={12} />
-            <span>已自動儲存</span>
+            <span>{t('settings.context.autoSaved', '已儲存')}</span>
           </div>
         )}
       </div>
 
       {/* User Name */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">使用者稱謂 / 暱稱</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.context.userName', '稱謂 / 暱稱')}</label>
         <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 focus-within:border-emerald-500">
           <User size={14} className="text-slate-500 shrink-0" />
           <input
@@ -90,7 +90,7 @@ export default function PersonalContextTab({ contextSettings = {}, onUpdateConte
             value={formData.userName}
             onChange={e => updateField('userName', e.target.value)}
             onBlur={handleBlur}
-            placeholder="例如：Jimmy / 提督 / 博士"
+            placeholder={t('settings.context.userNamePlaceholder', '例如：Alex')}
             className="w-full bg-transparent text-white outline-none text-xs"
           />
         </div>
@@ -98,7 +98,7 @@ export default function PersonalContextTab({ contextSettings = {}, onUpdateConte
 
       {/* Response Language (100% Custom Dropdown Picker) */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">回答語言偏好 (10 種語言 + 注音文)</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.context.responseLanguage', '回答語言')}</label>
         <div className="relative">
           <button
             type="button"
@@ -147,7 +147,7 @@ export default function PersonalContextTab({ contextSettings = {}, onUpdateConte
 
       {/* Response Style */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">回答風格</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.context.responseStyle', '回答風格')}</label>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {SUPPORTED_STYLES.map(style => (
             <button
@@ -160,8 +160,10 @@ export default function PersonalContextTab({ contextSettings = {}, onUpdateConte
                   : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
               }`}
             >
-              <span className="font-semibold text-white">{style.name}</span>
-              <span className="text-[10px] opacity-75 line-clamp-1">{style.id === 'adhd' ? '結論先行・條列精煉' : style.prompt.slice(0, 14) + '...'}</span>
+              <span className="font-semibold text-white">{t(`settings.context.styles.${style.id}.name`, style.name)}</span>
+              <span className="text-[10px] opacity-75 line-clamp-1">
+                {t(`settings.context.styles.${style.id}.desc`, style.id === 'adhd' ? '結論先行・條列精煉' : style.prompt.slice(0, 14) + '...')}
+              </span>
             </button>
           ))}
         </div>
@@ -169,26 +171,26 @@ export default function PersonalContextTab({ contextSettings = {}, onUpdateConte
 
       {/* Personal Background Context */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">個人背景資料</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.context.environment', '個人背景')}</label>
         <textarea
           rows={3}
           value={formData.personalBackground}
           onChange={e => updateField('personalBackground', e.target.value)}
           onBlur={handleBlur}
-          placeholder="例如：我是生醫資訊領域研究員 / 專注於全端系統架構，日常偏好以專業工程視角切入分析..."
+          placeholder={t('settings.context.environmentPlaceholder', '例如：全端工程師、使用 Windows 11 / React 18...')}
           className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white outline-none focus:border-emerald-500 resize-none text-[11px] leading-relaxed"
         />
       </div>
 
       {/* Custom instructions */}
       <div className="space-y-1.5">
-        <label className="block text-slate-300 font-semibold">自定義長期指令與原則 (Persona / Guidelines)</label>
+        <label className="block text-slate-300 font-semibold">{t('settings.context.instructions', '自訂長期指令')}</label>
         <textarea
           rows={3}
           value={formData.customInstructions}
           onChange={e => updateField('customInstructions', e.target.value)}
           onBlur={handleBlur}
-          placeholder="例如：回答盡量使用繁體中文、遇代碼範例請加上詳細註解、避免主觀揣測..."
+          placeholder={t('settings.context.instructionsPlaceholder', '例如：程式碼附註解、避免主觀推測...')}
           className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white outline-none focus:border-emerald-500 resize-none text-[11px] leading-relaxed"
         />
       </div>

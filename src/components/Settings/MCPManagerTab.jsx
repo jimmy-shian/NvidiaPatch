@@ -57,9 +57,9 @@ export default function MCPManagerTab({
   }, []);
 
   const AUTH_OPTIONS = [
-    { id: 'none', label: '公開端點 (無認證)', desc: '無需 Token' },
-    { id: 'bearer', label: 'Bearer Token', desc: 'Keystore 安全儲存' },
-    { id: 'apiKey', label: 'API Key Header', desc: '自訂 Header 金鑰' }
+    { id: 'none', label: t('settings.mcp.authNone', '無認證'), desc: t('settings.mcp.authNoneDesc', '公開端點') },
+    { id: 'bearer', label: t('settings.mcp.authBearer', 'Bearer Token'), desc: t('settings.mcp.authBearerDesc', '本機加密儲存') },
+    { id: 'apiKey', label: t('settings.mcp.authApiKey', 'API Key Header'), desc: t('settings.mcp.authApiKeyDesc', '自訂 Header') }
   ];
 
   const currentAuthOption = AUTH_OPTIONS.find(o => o.id === authType) || AUTH_OPTIONS[0];
@@ -81,9 +81,10 @@ export default function MCPManagerTab({
       });
 
       if (res.success) {
+        const count = res.tools?.length || 0;
         setStatusMessage({
           type: 'success',
-          text: `成功連線並掛載 ${res.tools?.length || 0} 個工具！`
+          text: t('settings.mcp.connectSuccess', `已連線，掛載 ${count} 個工具`, { count })
         });
         setUrl('');
         setName('');
@@ -92,13 +93,13 @@ export default function MCPManagerTab({
       } else {
         setStatusMessage({
           type: 'error',
-          text: res.error || '連線失敗，請檢查 URL 與端點可達性。'
+          text: res.error || t('settings.mcp.connectFailed', '連線失敗，請檢查網址')
         });
       }
     } catch (err) {
       setStatusMessage({
         type: 'error',
-        text: err.message || '連線時發生未預期錯誤'
+        text: err.message || t('settings.mcp.connectError', '連線錯誤')
       });
     } finally {
       setIsLoading(false);
@@ -113,13 +114,13 @@ export default function MCPManagerTab({
         if (res.driftDetected) {
           setStatusMessage({
             type: 'warning',
-            text: '遠端工具定義已變更，原有工具授權已自動重置，需重新確認。'
+            text: t('settings.mcp.driftWarning', '遠端工具已變更，請重新授權。')
           });
         }
       } else {
         setStatusMessage({
           type: 'error',
-          text: res.error || '同步工具清單失敗'
+          text: res.error || t('settings.mcp.syncFailed', '同步工具失敗')
         });
       }
     } finally {
@@ -172,9 +173,9 @@ export default function MCPManagerTab({
           <Plug size={18} />
         </div>
         <div className="space-y-1">
-          <h4 className="font-bold text-white text-sm">Model Context Protocol (MCP)</h4>
+          <h4 className="font-bold text-white text-sm">{t('settings.mcp.title', 'MCP 擴充工具')}</h4>
           <p className="text-slate-400 text-[11px] leading-relaxed">
-            透過標準 MCP 協議動態擴充 LLM 工具能力。支援 Modern 2026-07-28 無狀態 Streamable HTTP 與 Legacy 相容模式，所有 Token 均由本機硬體 Keystore 安全保存。
+            {t('settings.mcp.subtitle', '連接遠端 MCP 伺服器擴充工具，憑證於本機加密保存。')}
           </p>
         </div>
       </div>
@@ -201,7 +202,7 @@ export default function MCPManagerTab({
       {/* Action Toolbar */}
       <div className="flex items-center justify-between gap-2">
         <span className="font-semibold text-slate-300 text-xs whitespace-nowrap shrink-0">
-          已安裝伺服器 ({mcpServers.length})
+          {t('settings.mcp.installedCount', `已安裝 (${mcpServers.length})`, { count: mcpServers.length })}
         </span>
         {!isAdding && (
           <button
@@ -209,7 +210,7 @@ export default function MCPManagerTab({
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl text-xs transition-colors shadow-sm whitespace-nowrap shrink-0"
           >
             <Plus size={14} className="shrink-0" />
-            <span>新增 MCP 伺服器</span>
+            <span>{t('settings.mcp.addServer', '新增伺服器')}</span>
           </button>
         )}
       </div>
@@ -220,19 +221,19 @@ export default function MCPManagerTab({
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <span className="font-bold text-white text-xs flex items-center gap-1.5">
               <Plug size={14} className="text-emerald-400" />
-              連線至新 MCP 端點
+              {t('settings.mcp.connectNewTitle', '新增 MCP 端點')}
             </span>
             <button
               type="button"
               onClick={() => setIsAdding(false)}
               className="text-slate-400 hover:text-white text-xs"
             >
-              取消
+              {t('app.cancel', '取消')}
             </button>
           </div>
 
           <div className="space-y-1">
-            <label className="text-[11px] font-semibold text-slate-400">端點 URL (Streamable HTTP / HTTPS)</label>
+            <label className="text-[11px] font-semibold text-slate-400">{t('settings.mcp.endpointUrl', '端點網址 (HTTP/HTTPS)')}</label>
             <input
               type="url"
               required
@@ -245,18 +246,18 @@ export default function MCPManagerTab({
 
           <div className="space-y-2.5">
             <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-400">自訂顯示名稱 (選填)</label>
+              <label className="text-[11px] font-semibold text-slate-400">{t('settings.mcp.customName', '顯示名稱（選填）')}</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={'例如: Tower Check'}
+                placeholder={t('settings.mcp.customNamePlaceholder', '例如：Tower Check')}
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500"
               />
             </div>
 
             <div className="space-y-1 relative" ref={authDropdownRef}>
-              <label className="text-[11px] font-semibold text-slate-400">認證方式</label>
+              <label className="text-[11px] font-semibold text-slate-400">{t('settings.mcp.authMethod', '認證方式')}</label>
               <button
                 type="button"
                 onClick={() => setIsAuthDropdownOpen(prev => !prev)}
@@ -301,13 +302,13 @@ export default function MCPManagerTab({
             <div className="space-y-1">
               <label className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
                 <Key size={12} className="text-amber-400" />
-                憑證金鑰 (儲存於 Android Keystore，不寫入普通資料庫)
+                {t('settings.mcp.secretTokenLabel', '憑證金鑰（本機加密）')}
               </label>
               <input
                 type="password"
                 value={secretToken}
                 onChange={(e) => setSecretToken(e.target.value)}
-                placeholder={'輸入 Token 或 API Key...'}
+                placeholder={t('settings.mcp.secretTokenPlaceholder', '輸入 Token 或 API Key...')}
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
               />
             </div>
@@ -322,7 +323,7 @@ export default function MCPManagerTab({
               className="mt-0.5 rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0 shrink-0"
             />
             <label htmlFor="allowPrivateNetwork" className="text-[11px] text-slate-400 leading-tight">
-              允許連線本機/區域網路測試端點 (開發者選項)
+              {t('settings.mcp.allowPrivateNetwork', '允許連線區域網路 / 本機端點')}
             </label>
           </div>
 
@@ -335,12 +336,12 @@ export default function MCPManagerTab({
               {isLoading ? (
                 <>
                   <Loader2 size={14} className="animate-spin" />
-                  <span>探測與協商中...</span>
+                  <span>{t('settings.mcp.connecting', '連線中…')}</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 size={14} />
-                  <span>測試並儲存連線</span>
+                  <span>{t('settings.mcp.testAndSave', '測試並儲存')}</span>
                 </>
               )}
             </button>
@@ -351,14 +352,14 @@ export default function MCPManagerTab({
       {/* Quick Presets Card */}
       {mcpServers.length === 0 && !isAdding && (
         <div className="p-4 bg-slate-900/40 border border-dashed border-slate-800 rounded-2xl space-y-2 text-center py-6">
-          <p className="text-slate-400 text-xs">尚未安裝任何 MCP 伺服器。</p>
+          <p className="text-slate-400 text-xs">{t('settings.mcp.emptyServers', '尚無 MCP 伺服器')}</p>
           <div className="pt-1">
             <button
               onClick={() => fillQuickPreset('https://botsz-tower-check-mcp.hf.space/mcp', 'Tower Check (HF)')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-xl text-xs font-medium border border-emerald-500/20 transition-all"
             >
               <Sparkles size={12} />
-              <span>快速填入範例：Tower Check MCP (HuggingFace)</span>
+              <span>{t('settings.mcp.quickPreset', '帶入範例：Tower Check MCP')}</span>
             </button>
           </div>
         </div>
@@ -389,7 +390,7 @@ export default function MCPManagerTab({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-bold text-white text-xs sm:text-sm break-words">
-                          {server.displayName || 'MCP 伺服器'}
+                          {server.displayName || t('settings.mcp.defaultServerName', 'MCP 伺服器')}
                         </span>
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-slate-800 text-emerald-400 border border-slate-700 shrink-0">
                           {server.protocolVersion || '2026-07-28'}
@@ -405,7 +406,7 @@ export default function MCPManagerTab({
                     className={`w-9 h-5 rounded-full transition-colors relative shrink-0 mt-0.5 ${
                       server.enabled ? 'bg-emerald-500' : 'bg-slate-700'
                     }`}
-                    title={server.enabled ? '停用伺服器' : '啟用伺服器'}
+                    title={server.enabled ? t('settings.mcp.disableServer', '停用伺服器') : t('settings.mcp.enableServer', '啟用伺服器')}
                   >
                     <div
                       className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${
@@ -428,7 +429,7 @@ export default function MCPManagerTab({
                     type="button"
                     onClick={() => handleCopyEndpoint(server.id, server.canonicalEndpoint || server.endpoint)}
                     className="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-md transition-colors shrink-0"
-                    title={'複製連結'}
+                    title={t('settings.mcp.copyUrl', '複製連結')}
                   >
                     {copiedId === server.id ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
                   </button>
@@ -437,7 +438,7 @@ export default function MCPManagerTab({
                 {/* Row 3: Wrapped Action Controls Bar */}
                 <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2 flex-wrap">
                   <span className="text-[11px] text-slate-400 shrink-0">
-                    掛載工具清單 ({tools.length} 個)
+                    {t('settings.mcp.mountedToolsCount', `可用工具 (${tools.length})`, { count: tools.length })}
                   </span>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {/* Sync Button */}
@@ -445,22 +446,22 @@ export default function MCPManagerTab({
                       type="button"
                       onClick={() => handleSync(server.id)}
                       disabled={isSyncing}
-                      title={'重新同步工具清單'}
+                      title={t('settings.mcp.resyncTools', '同步工具')}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap"
                     >
                       <RefreshCw size={12} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
-                      <span>同步</span>
+                      <span>{t('settings.mcp.resyncShort', '同步')}</span>
                     </button>
 
                     {/* Delete Button */}
                     <button
                       type="button"
                       onClick={() => onDeleteServer(server.id)}
-                      title={'刪除伺服器'}
+                      title={t('settings.mcp.deleteServer', '刪除伺服器')}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-950/50 text-slate-300 hover:text-rose-400 text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap"
                     >
                       <Trash2 size={12} />
-                      <span>刪除</span>
+                      <span>{t('app.delete', '刪除')}</span>
                     </button>
 
                     {/* Expand Tools Accordion */}
@@ -468,9 +469,9 @@ export default function MCPManagerTab({
                       type="button"
                       onClick={() => toggleExpand(server.id)}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap"
-                      title={'檢視詳情'}
+                      title={t('settings.mcp.viewDetails', '檢視詳情')}
                     >
-                      <span>{isExpanded ? '收合' : '詳情'}</span>
+                      <span>{isExpanded ? t('chat.collapse', '收合') : t('settings.mcp.detailsShort', '詳情')}</span>
                       {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                     </button>
                   </div>
@@ -483,7 +484,7 @@ export default function MCPManagerTab({
                   {/* Full Endpoint Inspection & 1-Click Copy Card */}
                   <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] font-semibold text-slate-400">端點連結</span>
+                      <span className="text-[10px] font-semibold text-slate-400">{t('settings.mcp.endpointLinkLabel', '端點連結')}</span>
                       <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
@@ -495,7 +496,7 @@ export default function MCPManagerTab({
                           }`}
                         >
                           {copiedId === server.id ? <Check size={11} /> : <Copy size={11} />}
-                          <span>{copiedId === server.id ? '已複製' : '複製'}</span>
+                          <span>{copiedId === server.id ? t('chat.copied', '已複製') : t('chat.copyShort', '複製')}</span>
                         </button>
                         {(server.canonicalEndpoint || server.endpoint) && (
                           <a
@@ -503,7 +504,7 @@ export default function MCPManagerTab({
                             target="_blank"
                             rel="noopener noreferrer"
                             className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition-colors"
-                            title={'外部開啟'}
+                            title={t('settings.mcp.openBrowser', '外部開啟')}
                           >
                             <ExternalLink size={11} />
                           </a>
@@ -516,19 +517,19 @@ export default function MCPManagerTab({
                   </div>
 
                   <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
-                    <span>掛載工具清單 ({tools.length} 個)</span>
+                    <span>{t('settings.mcp.mountedToolsCount', `可用工具 (${tools.length})`, { count: tools.length })}</span>
                     <span className="text-[10px] text-slate-500 font-mono select-text selectable-text">
                       ID: {server.id}
                     </span>
                   </div>
 
                   {tools.length === 0 ? (
-                    <p className="text-slate-500 text-[11px] italic py-1">無可用工具</p>
+                    <p className="text-slate-500 text-[11px] italic py-1">{t('settings.mcp.noTools', '無可用工具')}</p>
                   ) : (
                     <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                       {tools.map((tool) => {
                         const paramsText = tool.inputSchema?.properties
-                          ? (Object.keys(tool.inputSchema.properties).join(', ') || '無')
+                          ? (Object.keys(tool.inputSchema.properties).join(', ') || t('settings.mcp.none', '無'))
                           : '';
                         return (
                           <div
@@ -550,7 +551,7 @@ export default function MCPManagerTab({
                             )}
                             {tool.inputSchema?.properties && (
                               <div className="text-[10px] text-slate-500 font-mono pt-0.5">
-                                參數: {paramsText}
+                                {t('settings.mcp.paramsLabel', `參數: ${paramsText}`, { params: paramsText })}
                               </div>
                             )}
                           </div>

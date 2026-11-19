@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, ChevronRight, Sparkles, FileText } from 'lucide-react';
 import { isMeaningfulRequirement, isOptionInInput } from '../../core/utils/optionsParser';
 
@@ -13,6 +14,7 @@ export default function OptionsBlock({
   onSelectOption,
   currentInput = undefined
 }) {
+  const { t } = useTranslation();
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   if (!options || options.length === 0) return null;
@@ -44,10 +46,10 @@ export default function OptionsBlock({
           <Sparkles size={10} />
         </div>
         <span className="font-semibold text-xs text-emerald-300 truncate">
-          {title || '可選項目'}
+          {title || t('chat.options.defaultTitle', '可選項目')}
         </span>
         <span className="ml-auto text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800/50 px-1.5 py-0.2 rounded-full shrink-0">
-          {`${options.length} 個選項`}
+          {t('chat.options.count', `${options.length} 個選項`, { count: options.length })}
         </span>
       </div>
 
@@ -97,7 +99,7 @@ export default function OptionsBlock({
                     {showRequirement && (
                       <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded bg-amber-950/40 border border-amber-600/30 text-[10px] text-amber-300/90 max-w-full leading-tight">
                         <FileText size={9} className="shrink-0 text-amber-400" />
-                        <span className="truncate">{'需補充：'}{opt.requirement}</span>
+                        <span className="truncate">{t('chat.options.requirementPrefix', '需補充：')}{opt.requirement}</span>
                       </span>
                     )}
                   </div>

@@ -37,13 +37,13 @@ export default function HistoryDrawer({
 
   const filtered = conversations.filter(c =>
     !isScheduleConversation(c) &&
-    (c.title || '新對話').toLowerCase().includes(searchQuery.toLowerCase())
+    (c.title || t('app.newChat', '新對話')).toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const startRename = (conv, e) => {
     e.stopPropagation();
     setEditingConvId(conv.id);
-    setEditTitleText(conv.title || '新對話');
+    setEditTitleText(conv.title || t('app.newChat', '新對話'));
   };
 
   const saveRename = (convId, e) => {
@@ -84,7 +84,7 @@ export default function HistoryDrawer({
       />
 
       {/* Drawer panel */}
-      <div className="relative w-4/5 max-w-xs bg-[#0e1420] border-r border-slate-800/90 h-full flex flex-col z-10 shadow-2xl safe-area-top safe-area-bottom">
+      <div className="relative w-[86%] max-w-[330px] bg-[#0e1420] border-r border-slate-800/90 h-full flex flex-col z-10 shadow-2xl safe-area-top safe-area-bottom">
         {/* Header */}
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -115,7 +115,7 @@ export default function HistoryDrawer({
             }`}
           >
             <MessageSquare size={13} />
-            <span>對話歷史</span>
+            <span>{t('drawer.chatHistory', '對話歷史')}</span>
           </button>
           <button
             type="button"
@@ -127,7 +127,7 @@ export default function HistoryDrawer({
             }`}
           >
             <Clock size={13} className={drawerTab === 'schedule' ? "text-amber-400" : ""} />
-            <span>任務排程</span>
+            <span>{t('drawer.scheduleTasks', '任務排程')}</span>
           </button>
         </div>
 
@@ -204,20 +204,20 @@ export default function HistoryDrawer({
                   >
                     <div className="flex items-center gap-1 text-rose-300 text-[11px] font-semibold">
                       <AlertTriangle size={13} />
-                      <span className="truncate">確定刪除此對話？</span>
+                      <span className="truncate">{t('app.confirmDelete', '確定要刪除此對話嗎？')}</span>
                     </div>
                     <div className="flex justify-end gap-1.5 pt-0.5">
                       <button
                         onClick={cancelDelete}
                         className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px]"
                       >
-                        取消
+                        {t('app.cancel', '取消')}
                       </button>
                       <button
                         onClick={(e) => executeDelete(conv.id, e)}
                         className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold text-[11px]"
                       >
-                        確定刪除
+                        {t('app.delete', '刪除')}
                       </button>
                     </div>
                   </div>
@@ -248,7 +248,7 @@ export default function HistoryDrawer({
                         onClick={cancelRename}
                         className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
                       >
-                        取消
+                        {t('app.cancel', '取消')}
                       </button>
                       <button
                         type="button"
@@ -256,7 +256,7 @@ export default function HistoryDrawer({
                         disabled={!editTitleText.trim()}
                         className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors disabled:opacity-40"
                       >
-                        確認
+                        {t('app.confirm', '確認')}
                       </button>
                     </div>
                   </div>
@@ -271,7 +271,7 @@ export default function HistoryDrawer({
               if (cleanTitle.includes('<meihua-numbers')) {
                 cleanTitle = cleanTitle.replace(/<meihua-numbers[^>]*>.*?<\/meihua-numbers>/gi, '').replace(/<meihua-numbers[^>]*\/>/gi, '').trim();
               }
-              const displayTitle = cleanTitle || (isMeihua ? '梅花易數占卜' : '新對話');
+              const displayTitle = cleanTitle || (isMeihua ? t('meihua.defaultTitle', '梅花易數占卜') : t('app.newChat', '新對話'));
 
               return (
                 <div
@@ -302,14 +302,14 @@ export default function HistoryDrawer({
                     <button
                       onClick={(e) => startRename(conv, e)}
                       className="p-1 text-slate-500 hover:text-slate-200 opacity-60 hover:opacity-100 transition-opacity"
-                      title="重新命名"
+                      title={t('drawer.rename', '重新命名')}
                     >
                       <Edit2 size={12} />
                     </button>
                     <button
                       onClick={(e) => confirmDelete(conv.id, e)}
                       className="p-1 text-slate-500 hover:text-rose-400 opacity-60 hover:opacity-100 transition-opacity"
-                      title="刪除"
+                      title={t('app.delete', '刪除')}
                     >
                       <Trash2 size={12} />
                     </button>

@@ -36,8 +36,10 @@ export function formatToolProgressSummary({
   args,
   result,
   index = 0,
-  totalSearchCalls = 1
+  totalSearchCalls = 1,
+  t = null
 }) {
+  const tr = (key, fallback, opts) => (typeof t === 'function' ? t(key, fallback, opts) : fallback);
   const isExecuting = status === 'executing' || status === 'calling';
   const cleanQuery = extractCleanQuery(args);
 
@@ -67,9 +69,11 @@ export function formatToolProgressSummary({
   if (toolName === 'web_search') {
     if (isExecuting) {
       return {
-        title: cleanQuery ? `正在搜尋相關資料` : '正在搜尋與問題相關的資料…',
+        title: cleanQuery
+          ? tr('chat.toolSummary.searching', '正在搜尋相關資料')
+          : tr('chat.toolSummary.searchingFallback', '正在搜尋資料…'),
         detail: cleanQuery ? `"${cleanQuery}"` : null,
-        badge: '搜尋中',
+        badge: tr('chat.toolSummary.searchingBadge', '搜尋中'),
         isExecuting: true,
         isCloud: isCloudSearch,
         resultCount: 0
@@ -78,9 +82,9 @@ export function formatToolProgressSummary({
 
     if (hasFailed) {
       return {
-        title: '搜尋未取得直接結果，已切換備用方案',
+        title: tr('chat.toolSummary.searchFallbackTitle', '搜尋無直接結果，改用備用來源'),
         detail: cleanQuery ? `"${cleanQuery}"` : null,
-        badge: '已切換',
+        badge: tr('chat.toolSummary.switchedBadge', '已切換'),
         isExecuting: false,
         isCloud: isCloudSearch,
         resultCount: 0
@@ -88,22 +92,24 @@ export function formatToolProgressSummary({
     }
 
     // Completed
-    const batchPrefix = totalSearchCalls > 1 ? `第 ${index + 1} 輪` : '';
+    const batchPrefix = totalSearchCalls > 1
+      ? tr('chat.toolSummary.roundPrefix', `第 ${index + 1} 輪：`, { round: index + 1 })
+      : '';
     let summaryTitle = '';
     if (isCloudSearch) {
       summaryTitle = resultCount > 0
-        ? `${batchPrefix ? batchPrefix + '：' : ''}雲端搜尋完成，取得 ${resultCount} 筆結果`
-        : `${batchPrefix ? batchPrefix + '：' : ''}雲端搜尋完成，無直接結果`;
+        ? tr('chat.toolSummary.cloudDoneWithCount', `${batchPrefix}雲端搜尋完成，${resultCount} 筆結果`, { prefix: batchPrefix, count: resultCount })
+        : tr('chat.toolSummary.cloudDoneNoResult', `${batchPrefix}雲端搜尋完成，無結果`, { prefix: batchPrefix });
     } else {
       summaryTitle = resultCount > 0
-        ? `${batchPrefix ? batchPrefix + '：' : ''}已整理 ${resultCount} 筆候選資料`
-        : `${batchPrefix ? batchPrefix + '：' : ''}搜尋完成，知識庫整合中`;
+        ? tr('chat.toolSummary.localDoneWithCount', `${batchPrefix}搜尋完成，${resultCount} 筆結果`, { prefix: batchPrefix, count: resultCount })
+        : tr('chat.toolSummary.localDoneNoResult', `${batchPrefix}搜尋完成，由模型整合`, { prefix: batchPrefix });
     }
 
     return {
       title: summaryTitle,
       detail: cleanQuery ? `"${cleanQuery}"` : null,
-      badge: isCloudSearch ? 'Cloud' : (resultCount > 0 ? `${resultCount} 筆` : null),
+      badge: isCloudSearch ? 'Cloud' : (resultCount > 0 ? tr('chat.toolSummary.resultBadge', `${resultCount} 筆`, { count: resultCount }) : null),
       isExecuting: false,
       isCloud: isCloudSearch,
       resultCount
@@ -118,9 +124,9 @@ export function formatToolProgressSummary({
 
     if (isExecuting) {
       return {
-        title: `正在執行 MCP 工具 [${rawName}]…`,
+        title: tr('chat.toolSummary.mcpExecuting', `執行 MCP 工具 [${rawName}]…`, { name: rawName }),
         detail: cleanQuery ? `"${cleanQuery}"` : null,
-        badge: '執行中',
+        badge: tr('chat.toolSummary.executingBadge', '執行中'),
         isExecuting: true,
         isCloud: false,
         resultCount: 0
@@ -128,9 +134,9 @@ export function formatToolProgressSummary({
     }
 
     return {
-      title: `MCP 工具 [${rawName}] 執行完成`,
+      title: tr('chat.toolSummary.mcpDone', `MCP 工具 [${rawName}] 完成`, { name: rawName }),
       detail: cleanQuery ? `"${cleanQuery}"` : null,
-      badge: hasFailed ? '失敗' : '完成',
+      badge: hasFailed ? tr('chat.toolSummary.failedBadge', '失敗') : tr('chat.toolSummary.doneBadge', '完成'),
       isExecuting: false,
       isCloud: false,
       resultCount
@@ -139,9 +145,11 @@ export function formatToolProgressSummary({
 
   // 3. General Fallback
   return {
-    title: isExecuting ? `正在執行 [${toolName}]…` : `已完成工具呼叫 [${toolName}]`,
+    title: isExecuting
+      ? tr('chat.toolSummary.genericExecuting', `執行工具 [${toolName}]…`, { name: toolName })
+      : tr('chat.toolSummary.genericDone', `工具 [${toolName}] 完成`, { name: toolName }),
     detail: cleanQuery ? `"${cleanQuery}"` : null,
-    badge: isExecuting ? '執行中' : '完成',
+    badge: isExecuting ? tr('chat.toolSummary.executingBadge', '執行中') : tr('chat.toolSummary.doneBadge', '完成'),
     isExecuting,
     isCloud: false,
     resultCount

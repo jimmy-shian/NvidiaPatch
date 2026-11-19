@@ -361,10 +361,10 @@ export default function ChatView({
   return (
     <div className="flex flex-col h-full w-full bg-[#0b0f17] text-slate-100 overflow-hidden relative">
       {/* Top App Header */}
-      <header className="flex items-center justify-between px-3 py-2 bg-[#0e1420]/95 border-b border-slate-800/80 backdrop-blur-md z-10 safe-area-top">
+      <header className="flex items-center justify-between gap-2 px-3 py-2 bg-[#0e1420]/95 border-b border-slate-800/80 backdrop-blur-md z-10 safe-area-top">
         <button
           onClick={onOpenDrawer}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
           title={t('app.history')}
         >
           <Menu size={19} />
@@ -373,7 +373,7 @@ export default function ChatView({
         {/* Model Selector Trigger */}
         <button
           onClick={onOpenModelSelector}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700/70 transition-all max-w-[55%] active:scale-95 shadow-sm"
+          className="flex-1 min-w-0 max-w-[72%] sm:max-w-sm mx-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700/70 transition-all active:scale-95 shadow-sm"
         >
           <Bot size={14} className="text-emerald-400 shrink-0" />
           <span className="text-xs font-semibold text-slate-200 truncate">{shortModelName}</span>
@@ -382,7 +382,7 @@ export default function ChatView({
 
         <button
           onClick={onOpenSettings}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
           title={t('app.settings')}
         >
           <Settings size={19} />
@@ -408,17 +408,17 @@ export default function ChatView({
             {isCompressing ? (
               <span className="flex items-center gap-1 text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1.5 py-0.2 rounded-md font-sans text-[10px] animate-pulse">
                 <Loader2 size={10} className="animate-spin" />
-                <span>壓縮中…</span>
+                <span>{t('chat.compressing', '壓縮中…')}</span>
               </span>
             ) : isOverThreshold ? (
               <span className="flex items-center gap-1 text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.2 rounded-md font-sans text-[10px]">
                 <AlertCircle size={10} />
-                <span>達 80% 上限</span>
+                <span>{t('chat.limit80', '達 80% 上限')}</span>
               </span>
             ) : isNearLimit ? (
               <span className="flex items-center gap-1 text-amber-400 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.2 rounded-md font-sans text-[10px]">
                 <AlertCircle size={10} />
-                <span>接近壓縮門檻</span>
+                <span>{t('chat.nearLimit', '接近壓縮門檻')}</span>
               </span>
             ) : null}
           </div>
@@ -430,14 +430,14 @@ export default function ChatView({
               onClick={onCompressContext}
               disabled={isCompressing || isStreaming}
               className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-[11px] disabled:opacity-40 active:scale-95 border border-slate-700/60 shrink-0 whitespace-nowrap"
-              title="手動將歷史對話壓縮為結構化摘要"
+              title={t('chat.compressHint', '將歷史對話壓縮為摘要')}
             >
               {isCompressing ? (
                 <Loader2 size={11} className="animate-spin text-emerald-400 shrink-0" />
               ) : (
                 <Minimize2 size={11} className="text-emerald-400 shrink-0" />
               )}
-              <span className="hidden sm:inline">壓縮上下文</span>
+              <span className="hidden sm:inline">{t('chat.compressContext', '壓縮上下文')}</span>
             </button>
           )}
         </div>
@@ -475,7 +475,7 @@ export default function ChatView({
                     <div>
                       <h3 className="font-bold text-white text-base">{t('meihua.welcome', '🌸 梅花易數占卜')}</h3>
                       <p className="text-xs text-slate-400 mt-1.5 max-w-xs leading-relaxed">
-                        {t('meihua.welcomeDesc', '請描述您欲占問之事，並選擇起卦方式')}
+                        {t('meihua.welcomeDesc', '描述占問事項並選擇起卦方式')}
                       </p>
                     </div>
                   </>
@@ -485,9 +485,9 @@ export default function ChatView({
                       <Bot size={28} />
                     </div>
                     <div>
-                      <h3 className="font-bold text-white text-base">NvidiaPatch Chat</h3>
+                      <h3 className="font-bold text-white text-base">{t('settings.about.title', 'NvidiaPatch Chat')}</h3>
                       <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
-                        支援本機技能與即時網路搜尋。請輸入訊息開始對話。
+                        {t('chat.welcomeDesc', '輸入訊息開始對話。')}
                       </p>
                     </div>
                   </>
@@ -579,7 +579,7 @@ export default function ChatView({
             type="button"
             onClick={scrollToBottom}
             className="absolute right-3 bottom-3 z-20 p-2.5 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-950/60 hover:bg-emerald-400 active:scale-95 transition-all animate-fade-in flex items-center justify-center"
-            title="回到底部"
+            title={t('chat.scrollToBottom', '回到底部')}
           >
             <ArrowDown size={16} />
           </button>

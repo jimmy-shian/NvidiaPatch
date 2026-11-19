@@ -1,5 +1,6 @@
 import adResetConfig from '../../../ad-reset-config.json';
 import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Bot } from 'lucide-react';
 import { showNativeAdInSlot, hideNativeAdInSlot, syncNativeAdInSlot } from '../../lib/startup-ad';
 import AdSenseSlot from './AdSenseSlot';
@@ -18,6 +19,7 @@ const SPLASH_AD_MIN_HEIGHT = 240;
  * - 符合 Google AdMob Native Advanced 尺寸比例規範（寬度 >= 240dp、媒體區 >= 140dp）
  */
 export default function SplashAd({ onFinish, appName = 'NvidiaPatch AI' }) {
+  const { t } = useTranslation();
   if (typeof window !== 'undefined' && adResetConfig.token && localStorage.getItem('yesolve_ad_bypass_reset_token') !== adResetConfig.token) {
     localStorage.setItem('yesolve_ad_bypass', 'false');
     localStorage.setItem('yesolve_ad_bypass_reset_token', adResetConfig.token);
@@ -151,11 +153,11 @@ export default function SplashAd({ onFinish, appName = 'NvidiaPatch AI' }) {
                 AD
               </span>
               <span className="text-[11px] font-medium text-slate-400">
-                {'贊助內容'}
+                {t('ads.sponsored', '贊助內容')}
               </span>
             </div>
             <span className="text-[11px] text-slate-500 font-mono">
-              {`${countdown} 秒後進入`}
+              {t('ads.autoEnterIn', `${countdown} 秒後進入`, { count: countdown })}
             </span>
           </div>
 
@@ -182,7 +184,7 @@ export default function SplashAd({ onFinish, appName = 'NvidiaPatch AI' }) {
         </div>
         <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono tracking-wider">
           <span>YESOLVE STUDIO</span>
-          <span>{'準備對話環境…'}</span>
+          <span>{t('ads.preparingEnv', '準備對話環境…')}</span>
         </div>
       </footer>
     </div>

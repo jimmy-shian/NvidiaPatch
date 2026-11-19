@@ -2,18 +2,19 @@ import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, RefreshCw, Check, Cpu, AlertCircle, CheckCircle2, Star, Layers } from 'lucide-react';
 
-export function groupModelsByFamily(models = []) {
+export function groupModelsByFamily(models = [], t = null) {
+  const tr = (key, fallback) => (typeof t === 'function' ? t(key, fallback) : fallback);
   const groups = {
-    nemotron: { key: 'nemotron', title: 'NVIDIA Nemotron 系列', icon: '⚡', models: [] },
-    deepseek: { key: 'deepseek', title: 'DeepSeek 系列', icon: '🧠', models: [] },
-    minimax: { key: 'minimax', title: 'MiniMax 系列', icon: '🔮', models: [] },
-    openai: { key: 'openai', title: 'OpenAI / GPT 系列', icon: '🤖', models: [] },
-    claude: { key: 'claude', title: 'Claude 系列', icon: '🎭', models: [] },
-    gemini: { key: 'gemini', title: 'Google Gemini / Gemma 系列', icon: '✨', models: [] },
-    llama: { key: 'llama', title: 'Meta Llama 系列', icon: '🦙', models: [] },
-    qwen: { key: 'qwen', title: 'Qwen 通義千問系列', icon: '🌐', models: [] },
-    mistral: { key: 'mistral', title: 'Mistral 系列', icon: '🌪️', models: [] },
-    other: { key: 'other', title: '其他模型 (Other Models)', icon: '📦', models: [] }
+    nemotron: { key: 'nemotron', title: tr('chat.modelSelector.families.nemotron', 'NVIDIA Nemotron 系列'), icon: '⚡', models: [] },
+    deepseek: { key: 'deepseek', title: tr('chat.modelSelector.families.deepseek', 'DeepSeek 系列'), icon: '🧠', models: [] },
+    minimax: { key: 'minimax', title: tr('chat.modelSelector.families.minimax', 'MiniMax 系列'), icon: '🔮', models: [] },
+    openai: { key: 'openai', title: tr('chat.modelSelector.families.openai', 'OpenAI / GPT 系列'), icon: '🤖', models: [] },
+    claude: { key: 'claude', title: tr('chat.modelSelector.families.claude', 'Claude 系列'), icon: '🎭', models: [] },
+    gemini: { key: 'gemini', title: tr('chat.modelSelector.families.gemini', 'Google Gemini / Gemma 系列'), icon: '✨', models: [] },
+    llama: { key: 'llama', title: tr('chat.modelSelector.families.llama', 'Meta Llama 系列'), icon: '🦙', models: [] },
+    qwen: { key: 'qwen', title: tr('chat.modelSelector.families.qwen', 'Qwen 通義千問系列'), icon: '🌐', models: [] },
+    mistral: { key: 'mistral', title: tr('chat.modelSelector.families.mistral', 'Mistral 系列'), icon: '🌪️', models: [] },
+    other: { key: 'other', title: tr('chat.modelSelector.families.other', '其他模型'), icon: '📦', models: [] }
   };
 
   for (const m of models) {
@@ -75,8 +76,8 @@ export default function ModelSelectorModal({
   }, [availableModels, filterQuery]);
 
   const modelGroups = useMemo(() => {
-    return groupModelsByFamily(filteredModels);
-  }, [filteredModels]);
+    return groupModelsByFamily(filteredModels, t);
+  }, [filteredModels, t]);
 
   if (!isOpen) return null;
 
@@ -93,12 +94,13 @@ export default function ModelSelectorModal({
     try {
       const res = await onSyncModels();
       if (res && res.success) {
-        setSyncStatus({ type: 'success', message: `同步成功！已獲取 ${res.count || availableModels.length} 個模型` });
+        const count = res.count || availableModels.length;
+        setSyncStatus({ type: 'success', message: t('settings.providers.syncSuccessCount', `已同步 ${count} 個模型`, { count }) });
       } else if (res && !res.success) {
-        setSyncStatus({ type: 'error', message: res.message || '同步失敗' });
+        setSyncStatus({ type: 'error', message: res.message || t('settings.providers.syncFailed', '同步失敗') });
       }
     } catch (err) {
-      setSyncStatus({ type: 'error', message: err.message || '連線錯誤' });
+      setSyncStatus({ type: 'error', message: err.message || t('settings.providers.connectionError', '連線錯誤') });
     }
   };
 
@@ -136,7 +138,7 @@ export default function ModelSelectorModal({
           <div className="flex items-center gap-2">
             <input
               type="text"
-              placeholder="搜尋模型名稱或 ID..."
+              placeholder={t('settings.providers.searchModelPlaceholder', '搜尋模型名稱或 ID...')}
               value={filterQuery}
               onChange={e => setFilterQuery(e.target.value)}
               className="flex-1 min-w-0 bg-black/40 border border-slate-700/80 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500"
@@ -148,7 +150,7 @@ export default function ModelSelectorModal({
               className="shrink-0 h-9 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-emerald-400 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5 border border-slate-700"
             >
               <RefreshCw size={13} className={isSyncing ? "animate-spin text-emerald-400 shrink-0" : "shrink-0"} />
-              <span className="whitespace-nowrap">{isSyncing ? '同步中…' : '同步模型'}</span>
+              <span className="whitespace-nowrap">{isSyncing ? t('settings.providers.syncing', '同步中…') : t('settings.providers.syncModels', '同步模型')}</span>
             </button>
           </div>
 
@@ -156,7 +158,7 @@ export default function ModelSelectorModal({
           <form onSubmit={handleCustomSubmit} className="flex gap-2">
             <input
               type="text"
-              placeholder="或手動輸入 Model ID (如 nvidia/...)"
+              placeholder={t('chat.modelSelector.customPlaceholder', '手動輸入 Model ID (如 nvidia/...)')}
               value={customInput}
               onChange={e => setCustomInput(e.target.value)}
               className="flex-1 min-w-0 bg-black/40 border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-emerald-500 font-mono"
@@ -166,7 +168,7 @@ export default function ModelSelectorModal({
               disabled={!customInput.trim()}
               className="shrink-0 px-3.5 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-semibold hover:bg-emerald-400 disabled:opacity-40"
             >
-              套用
+              {t('chat.modelSelector.apply', '套用')}
             </button>
           </form>
         </div>
@@ -178,7 +180,7 @@ export default function ModelSelectorModal({
             <div>
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 uppercase tracking-wider px-1 mb-1.5">
                 <Star size={12} className="fill-emerald-400" />
-                <span>目前使用中模型 (Current Active Model)</span>
+                <span>{t('chat.modelSelector.activeModel', '目前使用中')}</span>
               </div>
               <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/50 text-emerald-300 shadow-sm flex items-center justify-between">
                 <div className="flex flex-col min-w-0 pr-2">
@@ -189,7 +191,7 @@ export default function ModelSelectorModal({
                 </div>
                 <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold shrink-0">
                   <Check size={12} />
-                  <span>使用中</span>
+                  <span>{t('chat.modelSelector.inUse', '使用中')}</span>
                 </div>
               </div>
             </div>
@@ -199,7 +201,7 @@ export default function ModelSelectorModal({
           {modelGroups.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center text-slate-500 text-xs gap-2">
               <AlertCircle size={24} className="text-slate-600" />
-              <span>查無相符模型。可點擊上方「同步模型」或手動輸入 ID。</span>
+              <span>{t('chat.modelSelector.noMatch', '無相符模型，請嘗試同步或手動輸入 ID。')}</span>
             </div>
           ) : (
             modelGroups.map(group => (

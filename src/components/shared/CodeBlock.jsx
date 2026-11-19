@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, Copy } from 'lucide-react';
 
 export default function CodeBlock({ language, value }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -21,10 +23,10 @@ export default function CodeBlock({ language, value }) {
         <button
           onClick={handleCopy}
           className="flex items-center gap-1 hover:text-white transition-colors py-0.5 px-1.5 rounded hover:bg-slate-700"
-          title="Copy code"
+          title={t('chat.copyCode', '複製程式碼')}
         >
           {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-          <span>{copied ? 'Copied' : 'Copy'}</span>
+          <span>{copied ? t('chat.copied', '已複製') : t('chat.copyShort', '複製')}</span>
         </button>
       </div>
       <pre className="p-3 overflow-x-auto font-mono text-slate-200 text-xs leading-relaxed">

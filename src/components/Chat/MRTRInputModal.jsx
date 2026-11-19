@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { HelpCircle, Send, X } from 'lucide-react';
 import { GlobalInteractionCoordinator } from '../../core/mcp/MCPInteractionCoordinator';
 
 export default function MRTRInputModal() {
+  const { t } = useTranslation();
   const [interaction, setInteraction] = useState(null);
   const [formData, setFormData] = useState({});
 
@@ -54,7 +56,7 @@ export default function MRTRInputModal() {
               <HelpCircle size={20} />
             </div>
             <div>
-              <h3 className="font-bold text-white text-sm">MCP 工具需要補充參數</h3>
+              <h3 className="font-bold text-white text-sm">{t('mrtr.title', '補充工具參數')}</h3>
               <span className="text-[11px] text-slate-400">{serverName} &bull; {toolName}</span>
             </div>
           </div>
@@ -70,7 +72,7 @@ export default function MRTRInputModal() {
         <form onSubmit={handleSubmit} className="space-y-3">
           {inputRequests.map((req, idx) => {
             const fieldName = req.name || `field_${idx}`;
-            const label = req.label || req.name || `參數 ${idx + 1}`;
+            const label = req.label || req.name || t('mrtr.paramDefault', `參數 ${idx + 1}`, { index: idx + 1 });
             const isOptions = Array.isArray(req.options) && req.options.length > 0;
 
             return (
@@ -100,7 +102,7 @@ export default function MRTRInputModal() {
                     required={req.required !== false}
                     value={formData[fieldName] || ''}
                     onChange={(e) => handleChange(fieldName, e.target.value)}
-                    placeholder={req.placeholder || '請輸入...'}
+                    placeholder={req.placeholder || t('mrtr.inputPlaceholder', '請輸入...')}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
                 )}
@@ -114,14 +116,14 @@ export default function MRTRInputModal() {
               onClick={handleCancel}
               className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-xs transition-colors"
             >
-              取消
+              {t('app.cancel', '取消')}
             </button>
             <button
               type="submit"
               className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5"
             >
               <Send size={12} />
-              <span>送出並繼續</span>
+              <span>{t('mrtr.submit', '送出')}</span>
             </button>
           </div>
         </form>
