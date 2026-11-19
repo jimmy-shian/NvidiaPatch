@@ -10,10 +10,15 @@ import {
   CONTEXT_EXPAND_DISTANCE,
   nextContextBarCollapsed
 } from './contextBarLogic';
+import {
+  SNAP_ANCHOR_OFFSET,
+  createInitialSnapState,
+  startNewScrollGesture,
+  completeSnapAnimation,
+  evaluateScrollSnap,
+  evaluateIdleSnap
+} from './scrollSnapLogic';
 import { formatTokenNumber } from '../../core/context/modelLimits';
-
-// Scroll-rail marker offset (matches .chat-message-anchor scroll-margin-top)
-const SCROLL_MARKER_OFFSET = 14;
 
 export default function ChatView({
   conversation,
@@ -56,107 +61,44 @@ export default function ChatView({
   const touchStartXRef = useRef(null);
   const isProgrammaticScrollRef = useRef(false);
   const rafPendingRef = useRef(false);
-  const markerNodesRef = useRef([]);
-  const markerRafRef = useRef(0);
   const lastScrollTopRef = useRef(0);
+  const snapStateRef = useRef(createInitialSnapState());
+  const snapSettleTimerRef = useRef(null);
+  const idleSnapTimerRef = useRef(null);
+  const lastWheelTimeRef = useRef(0);
+  const isStreamingRef = useRef(isStreaming);
+  isStreamingRef.current = isStreaming;
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [contextBarCollapsed, setContextBarCollapsed] = useState(false);
   // Context 列本體與高度追蹤：收合／展開會改變訊息視窗高度，必須做捲動補償
   const contextBarRef = useRef(null);
   const contextBarHeightRef = useRef(null);
   const lastConvIdRef = useRef(conversation?.id);
-  const [scrollTicks, setScrollTicks] = useState([]);
-  const [activeTickId, setActiveTickId] = useState(null);
 
-  // Highlight the marker matching the message currently at the top of the viewport
-  const updateActiveMarker = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const nodes = markerNodesRef.current;
-    let activeId = null;
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
-      if (!node) continue;
-      if (node.offsetTop - el.scrollTop <= SCROLL_MARKER_OFFSET + 6) {
-        activeId = node.getAttribute('data-msg-id');
-      } else {
-        break;
-      }
+  const clearSnapTimers = useCallback(() => {
+    if (snapSettleTimerRef.current) {
+      clearTimeout(snapSettleTimerRef.current);
+      snapSettleTimerRef.current = null;
     }
-    setActiveTickId((prev) => (prev === activeId ? prev : activeId));
+    if (idleSnapTimerRef.current) {
+      clearTimeout(idleSnapTimerRef.current);
+      idleSnapTimerRef.current = null;
+    }
   }, []);
 
-  const scheduleActiveMarkerUpdate = useCallback(() => {
-    if (markerRafRef.current) return;
-    markerRafRef.current = requestAnimationFrame(() => {
-      markerRafRef.current = 0;
-      updateActiveMarker();
-    });
-  }, [updateActiveMarker]);
-
-  // Compute scroll-rail markers: every message becomes a dash positioned by its scroll offset
-  const computeScrollMarkers = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const nodes = Array.from(el.querySelectorAll('[data-msg-id]'));
-    markerNodesRef.current = nodes;
-    const range = el.scrollHeight - el.clientHeight;
-    if (range <= 8 || nodes.length < 2) {
-      setScrollTicks((prev) => (prev.length === 0 ? prev : []));
-      updateActiveMarker();
-      return;
-    }
-    const next = nodes.map((node) => ({
-      id: node.getAttribute('data-msg-id'),
-      role: node.getAttribute('data-msg-role') || 'assistant',
-      index: Number(node.getAttribute('data-msg-index') || 0),
-      top: node.offsetTop,
-      pct: Math.max(0, Math.min(1, (node.offsetTop - SCROLL_MARKER_OFFSET) / range))
-    }));
-    setScrollTicks((prev) => {
-      if (
-        prev.length === next.length &&
-        prev.every((tick, i) => tick.id === next[i].id && Math.abs(tick.pct - next[i].pct) < 0.002)
-      ) {
-        return prev;
-      }
-      return next;
-    });
-    updateActiveMarker();
-  }, [updateActiveMarker]);
-
-  // Keep markers aligned with content growth (streaming) and viewport resizing
   useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return undefined;
-    let raf = 0;
-    const schedule = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        computeScrollMarkers();
-      });
-    };
-    let observer = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(schedule);
-      observer.observe(el);
-      const content = el.firstElementChild;
-      if (content) observer.observe(content);
-    }
-    window.addEventListener('resize', schedule);
-    computeScrollMarkers();
     return () => {
-      if (observer) observer.disconnect();
-      window.removeEventListener('resize', schedule);
-      if (raf) cancelAnimationFrame(raf);
+      clearSnapTimers();
     };
-  }, [computeScrollMarkers, messages.length, conversation?.id]);
+  }, [clearSnapTimers]);
 
-  // Reset the collapsed context bar when switching conversations
+  // Reset the collapsed context bar and snap state when switching conversations
   useEffect(() => {
     setContextBarCollapsed(false);
-  }, [conversation?.id]);
+    clearSnapTimers();
+    snapStateRef.current = createInitialSnapState();
+    lastScrollTopRef.current = 0;
+  }, [conversation?.id, clearSnapTimers]);
 
   // Context bar collapse/expand resizes the message viewport by the bar height.
   // Compensate scrollTop with the same delta (in the same frame, before paint) so the
@@ -179,30 +121,61 @@ export default function ChatView({
     lastScrollTopRef.current = scroller.scrollTop;
   }, [contextBarCollapsed, conversation?.id]);
 
+  const collectSnapAnchors = useCallback((scroller) => {
+    if (!scroller) return [];
+    const nodes = scroller.querySelectorAll('.chat-message-anchor');
+    const anchors = [];
+    nodes.forEach((node, idx) => {
+      anchors.push({
+        id: node.getAttribute('data-msg-id') || `msg-${idx}`,
+        offsetTop: node.offsetTop,
+        targetTop: Math.max(0, node.offsetTop - SNAP_ANCHOR_OFFSET)
+      });
+    });
+    return anchors;
+  }, []);
+
+  const triggerSnapToTarget = useCallback((scroller, snapTarget) => {
+    if (!scroller || !snapTarget) return;
+    if (snapSettleTimerRef.current) {
+      clearTimeout(snapSettleTimerRef.current);
+      snapSettleTimerRef.current = null;
+    }
+    scroller.scrollTo({ top: snapTarget.targetTop, behavior: 'smooth' });
+    snapSettleTimerRef.current = setTimeout(() => {
+      snapSettleTimerRef.current = null;
+      snapStateRef.current = completeSnapAnimation(snapStateRef.current);
+    }, 220);
+  }, []);
+
   // Monitor user scroll position & update auto-follow
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+
+    if (idleSnapTimerRef.current) {
+      clearTimeout(idleSnapTimerRef.current);
+      idleSnapTimerRef.current = null;
+    }
 
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nearBottom = distanceFromBottom <= 35;
     setIsNearBottom(nearBottom);
 
     const prevScrollTop = lastScrollTopRef.current;
-    lastScrollTopRef.current = el.scrollTop;
+    const currScrollTop = el.scrollTop;
+    lastScrollTopRef.current = currScrollTop;
 
     // Collapse the context token bar while browsing history, restore it near the latest
-    // message. Programmatic scrolls (marker jumps / scroll-to-bottom) never toggle here:
+    // message. Programmatic scrolls (scroll-to-bottom) never toggle here:
     // the layout compensation writes scrollTop and would cancel the running smooth scroll.
     setContextBarCollapsed((prev) => nextContextBarCollapsed({
       collapsed: prev,
-      scrollTop: el.scrollTop,
+      scrollTop: currScrollTop,
       prevScrollTop,
       distanceFromBottom,
       isProgrammatic: isProgrammaticScrollRef.current
     }));
-
-    scheduleActiveMarkerUpdate();
 
     if (isProgrammaticScrollRef.current) {
       if (distanceFromBottom <= 15) {
@@ -219,15 +192,36 @@ export default function ChatView({
     } else if (distanceFromBottom > 35) {
       autoFollowRef.current = false;
     }
-  }, [scheduleActiveMarkerUpdate]);
+
+    // Evaluate snap state machine (unlocks when leaving release zone, snaps when crossing/entering trigger zone)
+    const anchors = collectSnapAnchors(el);
+    const { nextState, snapTarget } = evaluateScrollSnap({
+      state: snapStateRef.current,
+      prevScrollTop,
+      currScrollTop,
+      distanceFromBottom,
+      anchors,
+      isStreaming: isStreamingRef.current,
+      isProgrammatic: isProgrammaticScrollRef.current,
+      isTouchActive: touchStartYRef.current !== null
+    });
+    snapStateRef.current = nextState;
+
+    if (snapTarget) {
+      triggerSnapToTarget(el, snapTarget);
+    }
+  }, [collectSnapAnchors, triggerSnapToTarget]);
 
   // Gesture handling: Touch start
   const handleTouchStart = useCallback((e) => {
+    clearSnapTimers();
+    const el = scrollContainerRef.current;
+    snapStateRef.current = startNewScrollGesture(snapStateRef.current, el ? el.scrollTop : 0);
     if (e.touches && e.touches[0]) {
       touchStartYRef.current = e.touches[0].clientY;
       touchStartXRef.current = e.touches[0].clientX;
     }
-  }, []);
+  }, [clearSnapTimers]);
 
   // Gesture handling: Touch move (detect upward scroll gesture or horizontal table swipe)
   const handleTouchMove = useCallback((e) => {
@@ -248,10 +242,40 @@ export default function ChatView({
   const handleTouchEnd = useCallback(() => {
     touchStartYRef.current = null;
     touchStartXRef.current = null;
-  }, []);
+    // Fallback for slow drag stopping inside trigger zone with no inertia scroll frames
+    if (idleSnapTimerRef.current) {
+      clearTimeout(idleSnapTimerRef.current);
+    }
+    idleSnapTimerRef.current = setTimeout(() => {
+      idleSnapTimerRef.current = null;
+      const el = scrollContainerRef.current;
+      if (!el || touchStartYRef.current !== null) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const anchors = collectSnapAnchors(el);
+      const { nextState, snapTarget } = evaluateIdleSnap({
+        state: snapStateRef.current,
+        currScrollTop: el.scrollTop,
+        distanceFromBottom,
+        anchors,
+        isStreaming: isStreamingRef.current,
+        isProgrammatic: isProgrammaticScrollRef.current
+      });
+      snapStateRef.current = nextState;
+      if (snapTarget) {
+        triggerSnapToTarget(el, snapTarget);
+      }
+    }, 80);
+  }, [collectSnapAnchors, triggerSnapToTarget]);
 
-  // Wheel handling: Detect wheeling up
+  // Wheel handling: Detect wheeling up & track wheel gesture boundary
   const handleWheel = useCallback((e) => {
+    const now = Date.now();
+    if (now - lastWheelTimeRef.current > 180) {
+      const el = scrollContainerRef.current;
+      snapStateRef.current = startNewScrollGesture(snapStateRef.current, el ? el.scrollTop : 0);
+    }
+    lastWheelTimeRef.current = now;
+
     if (e.deltaY < 0) { // Scrolling up to read history
       autoFollowRef.current = false;
       setIsNearBottom(false);
@@ -284,6 +308,8 @@ export default function ChatView({
   const scrollToBottom = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    clearSnapTimers();
+    snapStateRef.current = createInitialSnapState();
     isProgrammaticScrollRef.current = true;
     setIsNearBottom(true);
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
@@ -307,28 +333,6 @@ export default function ChatView({
     setIsNearBottom(true);
     onSend();
   }, [onSend]);
-
-  // Jump to a message by clicking its marker on the scroll rail
-  const scrollToMessage = useCallback((top) => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    autoFollowRef.current = false;
-    isProgrammaticScrollRef.current = true;
-    setIsNearBottom(false);
-    el.scrollTo({ top: Math.max(0, top - SCROLL_MARKER_OFFSET), behavior: 'smooth' });
-    window.setTimeout(() => {
-      isProgrammaticScrollRef.current = false;
-      const current = scrollContainerRef.current;
-      // Resume auto-follow when the jump target is (nearly) the latest message
-      if (current && current.scrollHeight - current.scrollTop - current.clientHeight <= 35) {
-        autoFollowRef.current = true;
-        setIsNearBottom(true);
-        if (current.scrollHeight - current.scrollTop - current.clientHeight <= CONTEXT_EXPAND_DISTANCE) {
-          setContextBarCollapsed(false);
-        }
-      }
-    }, 450);
-  }, []);
 
   const shortModelName = currentModelId
     ? (currentModelId.includes('/') ? currentModelId.split('/').pop() : currentModelId)
@@ -566,66 +570,18 @@ export default function ChatView({
           </button>
         )}
 
-        {/* Scroll rail: 集中在畫面中間右側（垂直置中，圖 2 風格） */}
-        {scrollTicks.length > 1 && (
-          <div
-            className="absolute right-2 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-1.5 py-2.5 px-1.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-800/80 shadow-2xl select-none"
-            role="group"
-            aria-label={t('chat.scrollMarkers', '對話捲軸位置標記')}
+        {/* Floating Scroll to Bottom Button (scoped inside message viewport so it never overlaps bottom skills bar) */}
+        {!isNearBottom && messages.length > 0 && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="absolute right-3 bottom-3 z-20 p-2.5 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-950/60 hover:bg-emerald-400 active:scale-95 transition-all animate-fade-in flex items-center justify-center"
+            title="回到底部"
           >
-            {scrollTicks.map((tick, tIdx) => {
-              const isActive = tick.id === activeTickId;
-              const isUserTurn = tick.role === 'user';
-              return (
-                <div key={tick.id} className="relative flex items-center justify-end">
-                  {/* 圖 2 風格：當前作用中浮出的輪次卡片 */}
-                  {isActive && (
-                    <div className="absolute right-7 px-2.5 py-1 rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl text-[11px] text-slate-200 font-medium whitespace-nowrap flex items-center gap-1.5 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
-                      <span className={isUserTurn ? 'text-emerald-400 font-semibold' : 'text-slate-300 font-semibold'}>
-                        {isUserTurn ? '您' : 'AI'}
-                      </span>
-                      <span className="text-slate-500 font-mono text-[10px]">
-                        {tIdx + 1} of {scrollTicks.length}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* 圓點指示按鈕 */}
-                  <button
-                    type="button"
-                    onClick={() => scrollToMessage(tick.top)}
-                    title={t('chat.jumpToMessage', { index: tick.index + 1 })}
-                    aria-label={t('chat.jumpToMessage', { index: tick.index + 1 })}
-                    className="p-1 rounded-full flex items-center justify-center transition-all cursor-pointer hover:scale-125"
-                  >
-                    <span
-                      className={`block rounded-full transition-all duration-200 ${
-                        isActive
-                          ? 'w-2.5 h-2.5 bg-white shadow-md shadow-white/60 ring-2 ring-emerald-400/80 scale-110'
-                          : isUserTurn
-                            ? 'w-2 h-2 bg-emerald-400/50 hover:bg-emerald-300'
-                            : 'w-2 h-2 bg-slate-500/40 hover:bg-slate-300'
-                      }`}
-                    />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+            <ArrowDown size={16} />
+          </button>
         )}
       </div>
-
-      {/* Floating Scroll to Bottom Button */}
-      {!isNearBottom && messages.length > 0 && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className="absolute right-4 bottom-20 z-20 p-2.5 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-950/60 hover:bg-emerald-400 active:scale-95 transition-all animate-fade-in flex items-center justify-center"
-          title="回到底部"
-        >
-          <ArrowDown size={16} />
-        </button>
-      )}
 
       {/* Bottom Sticky Chat Input */}
       {conversationType === 'meihua' && (

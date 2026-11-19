@@ -46,48 +46,22 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  /* Chat Scroll Container with Hover/Active Expansion & Damping */
+  /* Chat Scroll Container (hidden scrollbar to prevent layout width jitter) */
   .chat-scroll-container {
     overflow-y: auto;
     overflow-x: hidden;
-    scrollbar-gutter: stable;
     overflow-anchor: auto;
-    scroll-snap-type: y proximity;
-    scroll-behavior: smooth;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
 
   .chat-scroll-container::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
-    transition: width 0.2s ease;
-  }
-
-  .chat-scroll-container:hover::-webkit-scrollbar,
-  .chat-scroll-container:active::-webkit-scrollbar {
-    width: 10px;
-  }
-
-  .chat-scroll-container::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .chat-scroll-container::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.4);
-    border-radius: 6px;
-    border: 1px solid transparent;
-    background-clip: padding-box;
-    transition: background-color 0.2s ease, width 0.2s ease;
-  }
-
-  .chat-scroll-container::-webkit-scrollbar-thumb:hover,
-  .chat-scroll-container::-webkit-scrollbar-thumb:active {
-    background: rgba(16, 185, 129, 0.75);
-    width: 10px;
+    display: none;
+    width: 0;
+    height: 0;
   }
 
   .chat-message-anchor {
-    scroll-snap-align: start;
-    scroll-snap-stop: normal;
     scroll-margin-top: 14px;
     scroll-margin-bottom: 14px;
   }
